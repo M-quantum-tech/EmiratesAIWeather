@@ -2,10 +2,5 @@
   "version": 2,
   "builds": [
     { "src": "package.json", "use": "@vercel/next" }
-  ],
-  "routes": [
-    { "handle": "filesystem" },
-    { "src": "/api/(.*)", "dest": "/api/$1" },
-    { "src": "/(.*)", "dest": "/" }
   ]
 }
