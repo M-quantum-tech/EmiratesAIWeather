@@ -41,16 +41,17 @@ const NCM_LINKS = [
   { label: "Satellite HD Global", href: "https://ghaith.ncm.gov.ae/?lang=en#satellite-hd-global", icon: Satellite },
 ] as const
 
-// Al Bahar-style precipitation intensity scale (light → extreme). Matches the
-// RainViewer "Rainbow @ SELEX-SI" colour scheme (index 7) used for the radar tiles.
+// NCM Al Bahar-style reflectivity scale (light → extreme): green for moderate rain,
+// red for heavy, magenta/white for violent cores. Matches the RainViewer "NEXRAD
+// Level III" colour scheme (index 6) used for the radar tiles.
 const RADAR_SCALE = [
-  { c: "#37c6ff", label: "Light" },
-  { c: "#22e06a", label: "" },
-  { c: "#0aa03c", label: "Moderate" },
-  { c: "#e6e12b", label: "" },
-  { c: "#f5a623", label: "Heavy" },
-  { c: "#e8442a", label: "" },
-  { c: "#b01d8f", label: "Violent" },
+  { c: "#04e9e7", label: "Light" },
+  { c: "#0300f4", label: "" },
+  { c: "#02fd02", label: "Moderate" },
+  { c: "#fdf802", label: "" },
+  { c: "#fd9500", label: "Heavy" },
+  { c: "#fd0000", label: "" },
+  { c: "#f800fd", label: "Violent" },
 ] as const
 
 const CLOUD_SCALE = [
@@ -92,6 +93,7 @@ export function NcmSources() {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<any>(null)
   const overlayRef = useRef<any>(null)
+  const basemapRef = useRef<any>(null)
   const windLayerRef = useRef<any>(null)
   const warnLayerRef = useRef<any>(null)
   const geoRef = useRef<any>(null)
@@ -124,7 +126,7 @@ export function NcmSources() {
   const frameUrl = (f: Frame) => {
     const host = maps?.host ?? "https://tilecache.rainviewer.com"
     return layer === "radar"
-      ? `${host}${f.path}/512/{z}/{x}/{y}/7/1_1.png`
+      ? `${host}${f.path}/512/{z}/{x}/{y}/6/1_1.png`
       : `${host}${f.path}/512/{z}/{x}/{y}/0/0_0.png`
   }
 
@@ -232,7 +234,9 @@ export function NcmSources() {
         scrollWheelZoom: true,
       })
       map.zoomControl.setPosition("bottomright")
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", { maxZoom: 12 }).addTo(map)
+      basemapRef.current = L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+        maxZoom: 12,
+      }).addTo(map)
       mapRef.current = map
       if (!cancelled) setMapReady(true)
       setTimeout(() => map.invalidateSize(), 250)
@@ -276,7 +280,7 @@ export function NcmSources() {
       overlayRef.current.setUrl(url)
     } else {
       overlayRef.current = L.tileLayer(url, {
-        opacity: layer === "radar" ? 0.85 : 0.62,
+        opacity: layer === "radar" ? 0.92 : 0.7,
         maxZoom: 12,
         zIndex: 400,
       }).addTo(map)
@@ -286,11 +290,16 @@ export function NcmSources() {
   }, [idx, frames, layer])
 
   // Reset the tile overlay when switching layers so scheme/opacity swaps cleanly.
+  // Also fade the dark basemap on radar/clouds so the navy container tint shows
+  // through as NCM Al Bahar-style blue-grey water (never a bleak-black empty map).
   useEffect(() => {
     const map = mapRef.current
     if (map && overlayRef.current) {
       map.removeLayer(overlayRef.current)
       overlayRef.current = null
+    }
+    if (basemapRef.current) {
+      basemapRef.current.setOpacity(layer === "radar" || layer === "satellite" ? 0.4 : 1)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layer])
@@ -437,8 +446,9 @@ export function NcmSources() {
       {/* Big live map */}
       <div className="relative">
         <div
-          ref={containerRef}
-          className="h-[80vh] min-h-[620px] w-full bg-panel"
+        ref={containerRef}
+        className="h-[80vh] min-h-[620px] w-full"
+        style={{ backgroundColor: "#3a4a63" }}
           role="img"
           aria-label={
             isWarnings
