@@ -1,0 +1,6 @@
+User-agent: *
+Disallow: /api/
+Allow: /
+
+# Sitemap location
+Sitemap: https://www.emiratesaiweather.com/sitemap.xml
