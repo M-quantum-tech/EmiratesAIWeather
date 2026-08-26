@@ -62,7 +62,7 @@ export default function RootLayout({
     <html lang="en" className={`bg-background ${geistSans.variable} ${geistMono.variable}`}>
       <body className="font-sans antialiased">
         {children}
-        {process.env.NODE_ENV === 'production' && <Analytics />}
+        <Analytics />
         {adsenseClient ? (
           <Script
             id="google-adsense"
