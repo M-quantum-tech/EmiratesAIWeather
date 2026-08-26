@@ -4,11 +4,12 @@ import { useEffect, useRef, useState } from "react"
 import "leaflet/dist/leaflet.css"
 import { AlertTriangle, ArrowUpRight, CloudSun, Pause, Play, Radar, Satellite, Wind } from "lucide-react"
 import { Panel } from "@/components/station/panel"
+import { fetchWindField, type VelocityData } from "@/lib/wind-field"
 import { cn } from "@/lib/utils"
 
 type Frame = { time: number; path: string }
 type Maps = { host: string; radar: Frame[]; satellite: Frame[] }
-type Layer = "radar" | "satellite"
+type Layer = "wind" | "radar" | "satellite"
 
 // Official UAE National Center of Meteorology (Ghaith / Al Bahar) portals. These
 // government viewers block embedding, so they remain reference links below the live map.
@@ -39,20 +40,33 @@ const CLOUD_SCALE = [
   { c: "#d6dce6", label: "High / cold top" },
 ] as const
 
+// Wind-speed palette for the animated COSMO-style field (calm → gale).
+const WIND_COLORS = ["#3288bd", "#66c2a5", "#abdda4", "#e6f598", "#fee08b", "#fdae61", "#f46d43", "#9e0142"]
+const WIND_SCALE = [
+  { c: "#3288bd", label: "Calm" },
+  { c: "#abdda4", label: "" },
+  { c: "#e6f598", label: "Breeze" },
+  { c: "#fdae61", label: "Strong" },
+  { c: "#9e0142", label: "Gale" },
+] as const
+
 export function NcmSources() {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<any>(null)
   const overlayRef = useRef<any>(null)
+  const velocityRef = useRef<any>(null)
   const leafletRef = useRef<any>(null)
-  const framesRef = useRef<Frame[]>([])
 
   const [maps, setMaps] = useState<Maps | null>(null)
-  const [layer, setLayer] = useState<Layer>("radar")
+  const [layer, setLayer] = useState<Layer>("wind")
   const [idx, setIdx] = useState(0)
   const [playing, setPlaying] = useState(true)
   const [stamp, setStamp] = useState("")
+  const [velocityReady, setVelocityReady] = useState(false)
+  const [windData, setWindData] = useState<VelocityData | null>(null)
+  const [windStamp, setWindStamp] = useState("")
 
-  const frames = layer === "radar" ? (maps?.radar ?? []) : (maps?.satellite ?? [])
+  const frames = layer === "radar" ? (maps?.radar ?? []) : layer === "satellite" ? (maps?.satellite ?? []) : []
 
   const frameUrl = (f: Frame) => {
     const host = maps?.host ?? "https://tilecache.rainviewer.com"
@@ -88,12 +102,43 @@ export function NcmSources() {
     }
   }, [])
 
+  // Load and refresh the live UAE wind field every 10 minutes (COSMO-style layer).
+  useEffect(() => {
+    const controller = new AbortController()
+    async function load() {
+      try {
+        const data = await fetchWindField(controller.signal)
+        if (data) {
+          setWindData(data)
+          setWindStamp(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))
+        }
+      } catch (err) {
+        if ((err as any)?.name !== "AbortError")
+          console.log("[v0] wind field failed:", err instanceof Error ? err.message : err)
+      }
+    }
+    load()
+    const id = setInterval(load, 10 * 60 * 1000)
+    return () => {
+      controller.abort()
+      clearInterval(id)
+    }
+  }, [])
+
   // Init the Leaflet map once, centred on the UAE like the NCM Al Bahar viewer.
   useEffect(() => {
     let cancelled = false
     async function init() {
       const L = (await import("leaflet")).default
       if (cancelled || !containerRef.current || mapRef.current) return
+      // leaflet-velocity augments a global `L`, so expose it before importing.
+      ;(window as any).L = L
+      try {
+        await import("leaflet-velocity")
+        if (!cancelled) setVelocityReady(true)
+      } catch (err) {
+        console.log("[v0] leaflet-velocity load failed:", err instanceof Error ? err.message : err)
+      }
       leafletRef.current = L
       const map = L.map(containerRef.current, {
         center: [24.2, 54.3],
@@ -116,6 +161,9 @@ export function NcmSources() {
         dashArray: "6 6",
       }).addTo(map)
       mapRef.current = map
+      // Leaflet inside a tall vh container can init before layout settles → grey/black
+      // tiles. Force a resize once the pane is measured.
+      setTimeout(() => map.invalidateSize(), 250)
     }
     init()
     return () => {
@@ -124,17 +172,48 @@ export function NcmSources() {
         mapRef.current.remove()
         mapRef.current = null
         overlayRef.current = null
+        velocityRef.current = null
       }
     }
   }, [])
 
   // Jump to newest frame whenever the frame set or layer changes.
   useEffect(() => {
-    framesRef.current = frames
     if (frames.length > 0) setIdx(frames.length - 1)
   }, [frames, layer])
 
-  // Reset the overlay when switching layers so opacity/URL scheme swaps cleanly.
+  // Manage the RainViewer tile overlay (radar / satellite only).
+  useEffect(() => {
+    const L = leafletRef.current
+    const map = mapRef.current
+    if (!L || !map) return
+
+    if (layer === "wind" || frames.length === 0) {
+      if (overlayRef.current) {
+        map.removeLayer(overlayRef.current)
+        overlayRef.current = null
+      }
+      return
+    }
+
+    const f = frames[Math.min(idx, frames.length - 1)]
+    if (!f) return
+    const url = frameUrl(f)
+    if (overlayRef.current) {
+      overlayRef.current.setUrl(url)
+    } else {
+      overlayRef.current = L.tileLayer(url, {
+        opacity: layer === "radar" ? 0.85 : 0.62,
+        maxZoom: 12,
+        zIndex: 400,
+      }).addTo(map)
+    }
+    setStamp(new Date(f.time * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idx, frames, layer])
+
+  // Reset the tile overlay when switching between radar and satellite so the
+  // colour scheme / opacity swaps cleanly.
   useEffect(() => {
     const map = mapRef.current
     if (map && overlayRef.current) {
@@ -144,45 +223,58 @@ export function NcmSources() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layer])
 
-  // Paint the overlay for the selected frame.
+  // Manage the animated wind (velocity) layer.
   useEffect(() => {
     const L = leafletRef.current
     const map = mapRef.current
-    if (!L || !map || frames.length === 0) return
-    const f = frames[Math.min(idx, frames.length - 1)]
-    if (!f) return
-    const url = frameUrl(f)
-    if (overlayRef.current) {
-      overlayRef.current.setUrl(url)
-    } else {
-      overlayRef.current = L.tileLayer(url, {
-        opacity: layer === "radar" ? 0.8 : 0.62,
-        maxZoom: 12,
-        zIndex: 400,
-      }).addTo(map)
-    }
-    setStamp(new Date(f.time * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [idx, frames, layer])
+    if (!L || !map || !velocityReady) return
 
-  // Animation timer.
+    if (layer === "wind" && windData) {
+      if (velocityRef.current) {
+        velocityRef.current.setData(windData)
+      } else if (typeof L.velocityLayer === "function") {
+        velocityRef.current = L.velocityLayer({
+          displayValues: false,
+          data: windData,
+          maxVelocity: 18,
+          velocityScale: 0.012,
+          particleAge: 90,
+          lineWidth: 1.6,
+          particleMultiplier: 1 / 200,
+          colorScale: WIND_COLORS,
+        }).addTo(map)
+      }
+    } else if (velocityRef.current) {
+      map.removeLayer(velocityRef.current)
+      velocityRef.current = null
+    }
+  }, [layer, windData, velocityReady])
+
+  // Animation timer (radar / satellite frame loop).
   useEffect(() => {
-    if (!playing || frames.length < 2) return
+    if (layer === "wind" || !playing || frames.length < 2) return
     const id = setInterval(() => setIdx((i) => (i + 1) % frames.length), 700)
     return () => clearInterval(id)
-  }, [playing, frames])
+  }, [playing, frames, layer])
 
-  const scale = layer === "radar" ? RADAR_SCALE : CLOUD_SCALE
+  const scale = layer === "radar" ? RADAR_SCALE : layer === "satellite" ? CLOUD_SCALE : WIND_SCALE
+  const legendTitle = layer === "radar" ? "Rain intensity" : layer === "satellite" ? "Cloud top" : "Wind speed"
+
+  const tabs: { id: Layer; label: string; Icon: typeof Radar }[] = [
+    { id: "wind", label: "Wind field", Icon: Wind },
+    { id: "radar", label: "Rain radar", Icon: Radar },
+    { id: "satellite", label: "Clouds / IR", Icon: CloudSun },
+  ]
 
   return (
     <Panel className="overflow-hidden p-0">
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
         <span className="flex items-center gap-2">
           <Satellite className="h-3.5 w-3.5 text-signal" aria-hidden="true" />
-          <h2 className="label-caps text-foreground/80">Live radar, clouds &amp; warnings · UAE</h2>
+          <h2 className="label-caps text-foreground/80">Live wind, radar, clouds &amp; warnings · UAE</h2>
         </span>
         <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-          NCM Al Bahar style · auto-playing
+          NCM Al Bahar style · live
         </span>
       </header>
 
@@ -190,28 +282,21 @@ export function NcmSources() {
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2">
         <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">Layer</span>
         <div className="flex overflow-hidden rounded-md border border-border">
-          <button
-            type="button"
-            onClick={() => setLayer("radar")}
-            className={cn(
-              "inline-flex items-center gap-1.5 px-3 py-1.5 font-mono text-[0.625rem] uppercase tracking-wider transition-colors",
-              layer === "radar" ? "bg-signal text-black" : "bg-card text-muted-foreground hover:bg-secondary",
-            )}
-            aria-pressed={layer === "radar"}
-          >
-            <Radar className="h-3 w-3" aria-hidden="true" /> Rain radar
-          </button>
-          <button
-            type="button"
-            onClick={() => setLayer("satellite")}
-            className={cn(
-              "inline-flex items-center gap-1.5 border-l border-border px-3 py-1.5 font-mono text-[0.625rem] uppercase tracking-wider transition-colors",
-              layer === "satellite" ? "bg-signal text-black" : "bg-card text-muted-foreground hover:bg-secondary",
-            )}
-            aria-pressed={layer === "satellite"}
-          >
-            <CloudSun className="h-3 w-3" aria-hidden="true" /> Clouds / IR
-          </button>
+          {tabs.map(({ id, label, Icon }, i) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setLayer(id)}
+              className={cn(
+                "inline-flex items-center gap-1.5 px-3 py-1.5 font-mono text-[0.625rem] uppercase tracking-wider transition-colors",
+                i > 0 && "border-l border-border",
+                layer === id ? "bg-signal text-black" : "bg-card text-muted-foreground hover:bg-secondary",
+              )}
+              aria-pressed={layer === id}
+            >
+              <Icon className="h-3 w-3" aria-hidden="true" /> {label}
+            </button>
+          ))}
         </div>
         <a
           href="https://www.ncm.gov.ae/maps-warnings?lang=en"
@@ -228,9 +313,9 @@ export function NcmSources() {
       <div className="relative">
         <div
           ref={containerRef}
-          className="h-[74vh] min-h-[600px] w-full bg-panel"
+          className="h-[80vh] min-h-[620px] w-full bg-panel"
           role="img"
-          aria-label={`Large animated ${layer === "radar" ? "precipitation radar" : "cloud / infrared satellite"} map centred on the UAE`}
+          aria-label={`Large animated ${layer === "radar" ? "precipitation radar" : layer === "satellite" ? "cloud / infrared satellite" : "surface wind"} map centred on the UAE`}
         />
 
         {/* Top-left live badge */}
@@ -239,18 +324,20 @@ export function NcmSources() {
             <>
               <Radar className="h-3.5 w-3.5 text-signal" aria-hidden="true" /> Live rain radar
             </>
-          ) : (
+          ) : layer === "satellite" ? (
             <>
               <CloudSun className="h-3.5 w-3.5 text-accent" aria-hidden="true" /> Cloud / IR satellite
+            </>
+          ) : (
+            <>
+              <Wind className="h-3.5 w-3.5 text-signal" aria-hidden="true" /> Live wind field
             </>
           )}
         </span>
 
-        {/* Intensity legend (Al Bahar precipitation scale) */}
+        {/* Intensity / speed legend */}
         <div className="absolute left-3 top-14 z-[500] rounded-md bg-black/55 px-2.5 py-2 backdrop-blur">
-          <p className="mb-1 font-mono text-[0.5625rem] uppercase tracking-wider text-white/70">
-            {layer === "radar" ? "Rain intensity" : "Cloud top"}
-          </p>
+          <p className="mb-1 font-mono text-[0.5625rem] uppercase tracking-wider text-white/70">{legendTitle}</p>
           <div className="flex h-2.5 w-40 overflow-hidden rounded-sm">
             {scale.map((s) => (
               <span key={s.c} className="flex-1" style={{ backgroundColor: s.c }} aria-hidden="true" />
@@ -265,40 +352,54 @@ export function NcmSources() {
           </div>
         </div>
 
-        {/* Nowcast marker */}
+        {/* Layer-specific corner marker */}
         {layer === "radar" && (
+          <span className="absolute right-16 top-3 z-[500] inline-flex max-w-[13rem] items-center gap-1.5 rounded-md bg-black/55 px-2 py-1 text-right font-mono text-[0.5625rem] uppercase tracking-wide text-white/80 backdrop-blur">
+            Rain paints only where detected — UAE is often dry
+          </span>
+        )}
+        {layer === "wind" && (
           <span className="absolute right-16 top-3 z-[500] inline-flex items-center gap-1.5 rounded-md bg-signal/90 px-2 py-1 font-mono text-[0.5625rem] uppercase tracking-wider text-black backdrop-blur">
-            +Forecast nowcast
+            Animated · 10 km surface wind
           </span>
         )}
 
-        {/* Playback + scrubber + timestamp overlay */}
+        {/* Bottom overlay: radar/satellite get a scrubber, wind gets a live stamp */}
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[500] flex items-center gap-3 bg-gradient-to-t from-black/80 to-transparent px-4 py-3">
-          <button
-            type="button"
-            onClick={() => setPlaying((p) => !p)}
-            className="pointer-events-auto inline-flex shrink-0 items-center gap-1.5 rounded-md border border-white/20 bg-black/55 px-3 py-1.5 font-mono text-[0.6875rem] uppercase tracking-wider text-white backdrop-blur transition-colors hover:bg-black/75"
-            aria-label={playing ? "Pause loop" : "Play loop"}
-          >
-            {playing ? <Pause className="h-3.5 w-3.5" aria-hidden="true" /> : <Play className="h-3.5 w-3.5" aria-hidden="true" />}
-            {playing ? "Playing" : "Paused"}
-          </button>
-          <input
-            type="range"
-            min={0}
-            max={Math.max(0, frames.length - 1)}
-            value={Math.min(idx, Math.max(0, frames.length - 1))}
-            onChange={(e) => {
-              setPlaying(false)
-              setIdx(Number(e.target.value))
-            }}
-            disabled={frames.length === 0}
-            aria-label={`Scrub the ${layer} time loop`}
-            className="pointer-events-auto h-1.5 flex-1 cursor-pointer accent-[var(--signal)]"
-          />
-          <span className="shrink-0 font-mono text-[0.6875rem] tabular-nums text-white/90">
-            {frames.length > 0 ? `${stamp} · ${idx + 1}/${frames.length}` : "loading…"}
-          </span>
+          {layer === "wind" ? (
+            <span className="inline-flex items-center gap-2 font-mono text-[0.6875rem] uppercase tracking-wider text-white/90">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-signal" aria-hidden="true" />
+              {windData ? `Live wind · updated ${windStamp}` : "Loading wind field…"}
+            </span>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => setPlaying((p) => !p)}
+                className="pointer-events-auto inline-flex shrink-0 items-center gap-1.5 rounded-md border border-white/20 bg-black/55 px-3 py-1.5 font-mono text-[0.6875rem] uppercase tracking-wider text-white backdrop-blur transition-colors hover:bg-black/75"
+                aria-label={playing ? "Pause loop" : "Play loop"}
+              >
+                {playing ? <Pause className="h-3.5 w-3.5" aria-hidden="true" /> : <Play className="h-3.5 w-3.5" aria-hidden="true" />}
+                {playing ? "Playing" : "Paused"}
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={Math.max(0, frames.length - 1)}
+                value={Math.min(idx, Math.max(0, frames.length - 1))}
+                onChange={(e) => {
+                  setPlaying(false)
+                  setIdx(Number(e.target.value))
+                }}
+                disabled={frames.length === 0}
+                aria-label={`Scrub the ${layer} time loop`}
+                className="pointer-events-auto h-1.5 flex-1 cursor-pointer accent-[var(--signal)]"
+              />
+              <span className="shrink-0 font-mono text-[0.6875rem] tabular-nums text-white/90">
+                {frames.length > 0 ? `${stamp} · ${idx + 1}/${frames.length}` : "loading…"}
+              </span>
+            </>
+          )}
         </div>
       </div>
 
@@ -332,7 +433,8 @@ export function NcmSources() {
       </div>
 
       <div className="border-t border-border px-4 py-2 font-mono text-[0.5625rem] text-muted-foreground">
-        Live loops © RainViewer · basemap © CARTO / OSM · official imagery &amp; warnings via NCM Al Bahar (opens in a new tab)
+        Live wind via Open-Meteo · radar &amp; cloud loops © RainViewer · basemap © CARTO / OSM · official imagery &amp;
+        warnings via NCM Al Bahar (opens in a new tab)
       </div>
     </Panel>
   )
