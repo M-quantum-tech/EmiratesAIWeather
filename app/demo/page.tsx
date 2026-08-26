@@ -1,6 +1,7 @@
 import React from "react"
 import { NcmSources } from "@/components/weather/ncm-sources"
 import { MeasureMap } from "@/components/weather/measure-map"
+import { WeatherProvider } from "@/components/weather/weather-provider"
 
 export default function DemoPage() {
   return (
@@ -10,15 +11,17 @@ export default function DemoPage() {
         <p className="mb-4 text-sm text-muted-foreground">Stacked panels for quick visual comparison — uses current Carto basemap reference (may show watermark).</p>
       </div>
 
-      <div className="mx-auto w-full max-w-[1400px] px-4">
-        {/* Big NCM-style viewer (wind/radar/clouds/warnings) */}
-        <NcmSources />
-      </div>
+      <WeatherProvider>
+        <div className="mx-auto w-full max-w-[1400px] px-4">
+          {/* Big NCM-style viewer (wind/radar/clouds/warnings) */}
+          <NcmSources />
+        </div>
 
-      <div className="mx-auto w-full max-w-[1400px] px-4">
-        {/* Measure & forecast map below for point measurement and meteograms */}
-        <MeasureMap />
-      </div>
+        <div className="mx-auto w-full max-w-[1400px] px-4">
+          {/* Measure & forecast map below for point measurement and meteograms */}
+          <MeasureMap />
+        </div>
+      </WeatherProvider>
     </div>
   )
 }
