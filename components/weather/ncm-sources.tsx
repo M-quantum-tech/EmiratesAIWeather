@@ -1,0 +1,339 @@
+"use client"
+
+import { useEffect, useRef, useState } from "react"
+import "leaflet/dist/leaflet.css"
+import { AlertTriangle, ArrowUpRight, CloudSun, Pause, Play, Radar, Satellite, Wind } from "lucide-react"
+import { Panel } from "@/components/station/panel"
+import { cn } from "@/lib/utils"
+
+type Frame = { time: number; path: string }
+type Maps = { host: string; radar: Frame[]; satellite: Frame[] }
+type Layer = "radar" | "satellite"
+
+// Official UAE National Center of Meteorology (Ghaith / Al Bahar) portals. These
+// government viewers block embedding, so they remain reference links below the live map.
+const NCM_LINKS = [
+  { label: "Radar Merge UAE", href: "https://ghaith.ncm.gov.ae/?lang=en#trajectory,radar-Merge-UAE", icon: Radar },
+  { label: "COSMO-UAE Wind", href: "https://ghaith.ncm.gov.ae/?lang=en#cosmo-uae-wind", icon: Wind },
+  { label: "Official Warnings", href: "https://www.ncm.gov.ae/maps-warnings?lang=en", icon: AlertTriangle },
+  { label: "Satellite HD Global", href: "https://ghaith.ncm.gov.ae/?lang=en#satellite-hd-global", icon: Satellite },
+] as const
+
+// Al Bahar-style precipitation intensity scale (light → extreme). Matches the
+// RainViewer "Rainbow @ SELEX-SI" colour scheme (index 7) used for the radar tiles.
+const RADAR_SCALE = [
+  { c: "#37c6ff", label: "Light" },
+  { c: "#22e06a", label: "" },
+  { c: "#0aa03c", label: "Moderate" },
+  { c: "#e6e12b", label: "" },
+  { c: "#f5a623", label: "Heavy" },
+  { c: "#e8442a", label: "" },
+  { c: "#b01d8f", label: "Violent" },
+] as const
+
+const CLOUD_SCALE = [
+  { c: "#0b1b33", label: "Clear" },
+  { c: "#2b3f5c", label: "" },
+  { c: "#5a6f8c", label: "Low cloud" },
+  { c: "#9aa8bd", label: "" },
+  { c: "#d6dce6", label: "High / cold top" },
+] as const
+
+export function NcmSources() {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const mapRef = useRef<any>(null)
+  const overlayRef = useRef<any>(null)
+  const leafletRef = useRef<any>(null)
+  const framesRef = useRef<Frame[]>([])
+
+  const [maps, setMaps] = useState<Maps | null>(null)
+  const [layer, setLayer] = useState<Layer>("radar")
+  const [idx, setIdx] = useState(0)
+  const [playing, setPlaying] = useState(true)
+  const [stamp, setStamp] = useState("")
+
+  const frames = layer === "radar" ? (maps?.radar ?? []) : (maps?.satellite ?? [])
+
+  const frameUrl = (f: Frame) => {
+    const host = maps?.host ?? "https://tilecache.rainviewer.com"
+    // Radar → colour scheme 7 (Rainbow SELEX, the Al Bahar look); Clouds/IR → scheme 0.
+    return layer === "radar"
+      ? `${host}${f.path}/512/{z}/{x}/{y}/7/1_1.png`
+      : `${host}${f.path}/512/{z}/{x}/{y}/0/0_0.png`
+  }
+
+  // Load and refresh RainViewer frame catalogue every 5 minutes.
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        const res = await fetch("https://api.rainviewer.com/public/weather-maps.json")
+        if (!res.ok) return
+        const json = await res.json()
+        const radar: Frame[] = [...(json.radar?.past ?? []), ...(json.radar?.nowcast ?? [])].map((f: any) => ({
+          time: f.time,
+          path: f.path,
+        }))
+        const satellite: Frame[] = (json.satellite?.infrared ?? []).map((f: any) => ({ time: f.time, path: f.path }))
+        if (!cancelled) setMaps({ host: json.host ?? "https://tilecache.rainviewer.com", radar, satellite })
+      } catch (err) {
+        console.log("[v0] ncm loops frames failed:", err instanceof Error ? err.message : err)
+      }
+    }
+    load()
+    const id = setInterval(load, 5 * 60 * 1000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [])
+
+  // Init the Leaflet map once, centred on the UAE like the NCM Al Bahar viewer.
+  useEffect(() => {
+    let cancelled = false
+    async function init() {
+      const L = (await import("leaflet")).default
+      if (cancelled || !containerRef.current || mapRef.current) return
+      leafletRef.current = L
+      const map = L.map(containerRef.current, {
+        center: [24.2, 54.3],
+        zoom: 7,
+        minZoom: 4,
+        maxZoom: 12,
+        zoomControl: true,
+        attributionControl: false,
+        scrollWheelZoom: true,
+      })
+      map.zoomControl.setPosition("topright")
+      L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", { maxZoom: 12 }).addTo(map)
+      // UAE focus ring so the country reads clearly like the Al Bahar map.
+      L.circle([24.2, 54.3], {
+        radius: 320000,
+        color: "var(--signal)",
+        weight: 1,
+        opacity: 0.5,
+        fill: false,
+        dashArray: "6 6",
+      }).addTo(map)
+      mapRef.current = map
+    }
+    init()
+    return () => {
+      cancelled = true
+      if (mapRef.current) {
+        mapRef.current.remove()
+        mapRef.current = null
+        overlayRef.current = null
+      }
+    }
+  }, [])
+
+  // Jump to newest frame whenever the frame set or layer changes.
+  useEffect(() => {
+    framesRef.current = frames
+    if (frames.length > 0) setIdx(frames.length - 1)
+  }, [frames, layer])
+
+  // Reset the overlay when switching layers so opacity/URL scheme swaps cleanly.
+  useEffect(() => {
+    const map = mapRef.current
+    if (map && overlayRef.current) {
+      map.removeLayer(overlayRef.current)
+      overlayRef.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layer])
+
+  // Paint the overlay for the selected frame.
+  useEffect(() => {
+    const L = leafletRef.current
+    const map = mapRef.current
+    if (!L || !map || frames.length === 0) return
+    const f = frames[Math.min(idx, frames.length - 1)]
+    if (!f) return
+    const url = frameUrl(f)
+    if (overlayRef.current) {
+      overlayRef.current.setUrl(url)
+    } else {
+      overlayRef.current = L.tileLayer(url, {
+        opacity: layer === "radar" ? 0.8 : 0.62,
+        maxZoom: 12,
+        zIndex: 400,
+      }).addTo(map)
+    }
+    setStamp(new Date(f.time * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idx, frames, layer])
+
+  // Animation timer.
+  useEffect(() => {
+    if (!playing || frames.length < 2) return
+    const id = setInterval(() => setIdx((i) => (i + 1) % frames.length), 700)
+    return () => clearInterval(id)
+  }, [playing, frames])
+
+  const scale = layer === "radar" ? RADAR_SCALE : CLOUD_SCALE
+
+  return (
+    <Panel className="overflow-hidden p-0">
+      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
+        <span className="flex items-center gap-2">
+          <Satellite className="h-3.5 w-3.5 text-signal" aria-hidden="true" />
+          <h2 className="label-caps text-foreground/80">Live radar, clouds &amp; warnings · UAE</h2>
+        </span>
+        <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+          NCM Al Bahar style · auto-playing
+        </span>
+      </header>
+
+      {/* Layer switcher (Al Bahar-style tabs) */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2">
+        <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">Layer</span>
+        <div className="flex overflow-hidden rounded-md border border-border">
+          <button
+            type="button"
+            onClick={() => setLayer("radar")}
+            className={cn(
+              "inline-flex items-center gap-1.5 px-3 py-1.5 font-mono text-[0.625rem] uppercase tracking-wider transition-colors",
+              layer === "radar" ? "bg-signal text-black" : "bg-card text-muted-foreground hover:bg-secondary",
+            )}
+            aria-pressed={layer === "radar"}
+          >
+            <Radar className="h-3 w-3" aria-hidden="true" /> Rain radar
+          </button>
+          <button
+            type="button"
+            onClick={() => setLayer("satellite")}
+            className={cn(
+              "inline-flex items-center gap-1.5 border-l border-border px-3 py-1.5 font-mono text-[0.625rem] uppercase tracking-wider transition-colors",
+              layer === "satellite" ? "bg-signal text-black" : "bg-card text-muted-foreground hover:bg-secondary",
+            )}
+            aria-pressed={layer === "satellite"}
+          >
+            <CloudSun className="h-3 w-3" aria-hidden="true" /> Clouds / IR
+          </button>
+        </div>
+        <a
+          href="https://www.ncm.gov.ae/maps-warnings?lang=en"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-alert-orange/50 bg-alert-orange/10 px-2.5 py-1.5 font-mono text-[0.625rem] uppercase tracking-wider text-alert-orange transition-colors hover:bg-alert-orange/20"
+        >
+          <AlertTriangle className="h-3 w-3" aria-hidden="true" /> NCM warnings
+          <ArrowUpRight className="h-3 w-3" aria-hidden="true" />
+        </a>
+      </div>
+
+      {/* Big live map */}
+      <div className="relative">
+        <div
+          ref={containerRef}
+          className="h-[74vh] min-h-[600px] w-full bg-panel"
+          role="img"
+          aria-label={`Large animated ${layer === "radar" ? "precipitation radar" : "cloud / infrared satellite"} map centred on the UAE`}
+        />
+
+        {/* Top-left live badge */}
+        <span className="absolute left-3 top-3 z-[500] inline-flex items-center gap-1.5 rounded-md bg-black/55 px-2.5 py-1.5 font-mono text-[0.6875rem] uppercase tracking-wider text-white backdrop-blur">
+          {layer === "radar" ? (
+            <>
+              <Radar className="h-3.5 w-3.5 text-signal" aria-hidden="true" /> Live rain radar
+            </>
+          ) : (
+            <>
+              <CloudSun className="h-3.5 w-3.5 text-accent" aria-hidden="true" /> Cloud / IR satellite
+            </>
+          )}
+        </span>
+
+        {/* Intensity legend (Al Bahar precipitation scale) */}
+        <div className="absolute left-3 top-14 z-[500] rounded-md bg-black/55 px-2.5 py-2 backdrop-blur">
+          <p className="mb-1 font-mono text-[0.5625rem] uppercase tracking-wider text-white/70">
+            {layer === "radar" ? "Rain intensity" : "Cloud top"}
+          </p>
+          <div className="flex h-2.5 w-40 overflow-hidden rounded-sm">
+            {scale.map((s) => (
+              <span key={s.c} className="flex-1" style={{ backgroundColor: s.c }} aria-hidden="true" />
+            ))}
+          </div>
+          <div className="mt-1 flex justify-between font-mono text-[0.5rem] uppercase tracking-wide text-white/70">
+            {scale
+              .filter((s) => s.label)
+              .map((s) => (
+                <span key={s.label}>{s.label}</span>
+              ))}
+          </div>
+        </div>
+
+        {/* Nowcast marker */}
+        {layer === "radar" && (
+          <span className="absolute right-16 top-3 z-[500] inline-flex items-center gap-1.5 rounded-md bg-signal/90 px-2 py-1 font-mono text-[0.5625rem] uppercase tracking-wider text-black backdrop-blur">
+            +Forecast nowcast
+          </span>
+        )}
+
+        {/* Playback + scrubber + timestamp overlay */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[500] flex items-center gap-3 bg-gradient-to-t from-black/80 to-transparent px-4 py-3">
+          <button
+            type="button"
+            onClick={() => setPlaying((p) => !p)}
+            className="pointer-events-auto inline-flex shrink-0 items-center gap-1.5 rounded-md border border-white/20 bg-black/55 px-3 py-1.5 font-mono text-[0.6875rem] uppercase tracking-wider text-white backdrop-blur transition-colors hover:bg-black/75"
+            aria-label={playing ? "Pause loop" : "Play loop"}
+          >
+            {playing ? <Pause className="h-3.5 w-3.5" aria-hidden="true" /> : <Play className="h-3.5 w-3.5" aria-hidden="true" />}
+            {playing ? "Playing" : "Paused"}
+          </button>
+          <input
+            type="range"
+            min={0}
+            max={Math.max(0, frames.length - 1)}
+            value={Math.min(idx, Math.max(0, frames.length - 1))}
+            onChange={(e) => {
+              setPlaying(false)
+              setIdx(Number(e.target.value))
+            }}
+            disabled={frames.length === 0}
+            aria-label={`Scrub the ${layer} time loop`}
+            className="pointer-events-auto h-1.5 flex-1 cursor-pointer accent-[var(--signal)]"
+          />
+          <span className="shrink-0 font-mono text-[0.6875rem] tabular-nums text-white/90">
+            {frames.length > 0 ? `${stamp} · ${idx + 1}/${frames.length}` : "loading…"}
+          </span>
+        </div>
+      </div>
+
+      {/* Official NCM reference links */}
+      <div className="border-t border-border px-4 py-3">
+        <p className="mb-2 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+          Official National Center of Meteorology views
+        </p>
+        <ul className="flex flex-wrap gap-2">
+          {NCM_LINKS.map((l) => {
+            const Icon = l.icon
+            return (
+              <li key={l.label}>
+                <a
+                  href={l.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={cn(
+                    "group inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5",
+                    "text-xs text-foreground transition-colors hover:bg-secondary",
+                  )}
+                >
+                  <Icon className="h-3.5 w-3.5 text-signal" aria-hidden="true" />
+                  {l.label}
+                  <ArrowUpRight className="h-3 w-3 text-muted-foreground transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+                </a>
+              </li>
+            )
+          })}
+        </ul>
+      </div>
+
+      <div className="border-t border-border px-4 py-2 font-mono text-[0.5625rem] text-muted-foreground">
+        Live loops © RainViewer · basemap © CARTO / OSM · official imagery &amp; warnings via NCM Al Bahar (opens in a new tab)
+      </div>
+    </Panel>
+  )
+}
