@@ -16,6 +16,7 @@ import { ChessGame } from "@/components/games/chess-game"
 import { BreathingGame } from "@/components/wellness/breathing-game"
 import { WeatherAssistant } from "@/components/ai/weather-assistant"
 import { TipsPopup } from "@/components/wellness/tips-popup"
+import { Hero } from "@/components/hero"
 
 export const metadata: Metadata = {
   title: "EmiratesAIWeather — 7-Day Forecast, EmiratesConsensus Model & Live Radar",
@@ -39,6 +40,11 @@ export default function Page() {
           <main className="min-w-0 flex-1">
             {/* Live alert */}
             <AlertBanner />
+
+            {/* Hero / landing */}
+            <section id="hero" className="mt-3 scroll-mt-6">
+              <Hero />
+            </section>
 
             {/* 1 · 7-day forecast (drives the hourly meteogram) */}
             <section id="forecast" className="mt-6 scroll-mt-6">
