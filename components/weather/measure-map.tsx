@@ -18,6 +18,8 @@ import { Panel } from "@/components/station/panel"
 import { useWeather } from "@/components/weather/weather-provider"
 import { compass, describeCode, precipUnit, tempUnit, toMetersPerSecond, weatherEmoji, type Units } from "@/lib/weather"
 import { cn } from "@/lib/utils"
+import { fetchWindFrames, type WindFrames } from "@/lib/wind-field"
+import { createWindLayer } from "@/lib/wind-layer"
 
 type Point = { lat: number; lon: number }
 type Mode = "pick" | "measure"
@@ -36,10 +38,20 @@ type ModelId = (typeof MODELS)[number]["id"]
 // Free weather map layers (RainViewer, no API key).
 const LAYERS = [
   { id: "none", label: "Base map" },
+  { id: "wind", label: "Wind field" },
   { id: "radar", label: "Rain radar" },
   { id: "clouds", label: "Clouds / IR" },
 ] as const
 type LayerId = (typeof LAYERS)[number]["id"]
+
+// Wind-speed legend (m/s) matching the Windy-style heatmap palette (calm → gale).
+const WIND_SCALE = [
+  { c: "#1a3a78", label: "Calm" },
+  { c: "#1a96be", label: "" },
+  { c: "#78c868", label: "Breeze" },
+  { c: "#f0963c", label: "Strong" },
+  { c: "#e4483a", label: "Gale" },
+] as const
 
 // Great-circle distance (Haversine) in kilometres.
 function haversineKm(a: Point, b: Point) {
@@ -308,6 +320,12 @@ export function MeasureMap() {
   const [searching, setSearching] = useState(false)
   const [searchNote, setSearchNote] = useState<string | null>(null)
 
+  // Wind layer state
+  const windLayerRef = useRef<any>(null)
+  const [windData, setWindData] = useState<WindFrames | null>(null)
+  const [windIdx, setWindIdx] = useState(0)
+  const [windPlaying, setWindPlaying] = useState(true)
+
   useEffect(() => {
     modeRef.current = mode
   }, [mode])
@@ -505,6 +523,59 @@ export function MeasureMap() {
     return () => clearInterval(id)
   }, [layer, frames, playing])
 
+  // Load and refresh the wind frames every 10 minutes (Open-Meteo grid series).
+  useEffect(() => {
+    const controller = new AbortController()
+    async function load() {
+      try {
+        const data = await fetchWindFrames(controller.signal)
+        if (data) {
+          setWindData(data)
+          setWindIdx(0)
+        }
+      } catch (err) {
+        if ((err as any)?.name !== "AbortError") console.log("[v0] wind field failed:", err instanceof Error ? err.message : err)
+      }
+    }
+    load()
+    const id = setInterval(load, 10 * 60 * 1000)
+    return () => {
+      controller.abort()
+      clearInterval(id)
+    }
+  }, [])
+
+  // Create / update the Leaflet wind canvas layer when active, swapping grids per frame.
+  useEffect(() => {
+    const L = leafletRef.current
+    const map = mapRef.current
+    if (!L || !map) return
+
+    const grid = windData?.frames?.[Math.min(windIdx, (windData?.frames?.length ?? 1) - 1)]
+
+    if (layer === "wind" && grid) {
+      if (windLayerRef.current) {
+        windLayerRef.current.setGrid(grid)
+      } else {
+        windLayerRef.current = createWindLayer(L, grid)
+        windLayerRef.current.addTo(map)
+      }
+      // Arrow step adjustment
+      // wind-layer uses fixed step; to vary density we recreate on speed change instead of mutating.
+    } else if (windLayerRef.current) {
+      map.removeLayer(windLayerRef.current)
+      windLayerRef.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layer, windData, windIdx])
+
+  // Wind forecast animation timer (speed 1x/2x).
+  useEffect(() => {
+    if (layer !== "wind" || !windPlaying || !windData || windData.frames.length < 2) return
+    const id = setInterval(() => setWindIdx((i) => (i + 1) % windData.frames.length), 900)
+    return () => clearInterval(id)
+  }, [layer, windPlaying, windData])
+
   // Free Open-Meteo geocoding search to jump the map to any place.
   const runSearch = useCallback(async () => {
     const q = query.trim()
@@ -699,6 +770,60 @@ export function MeasureMap() {
               : "—"}{" "}
             · {frameIdx + 1}/{frames.length}
           </span>
+        </div>
+      ) : null}
+
+      {/* Wind controls and legend */}
+      {layer === "wind" && windData && windData.frames.length > 0 ? (
+        <div className="border-b border-border bg-card/60 px-3 py-2">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setWindPlaying((p) => !p)}
+              aria-label={windPlaying ? "Pause wind" : "Play wind"}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 font-mono text-[0.625rem] uppercase tracking-wider text-foreground transition-colors hover:bg-secondary"
+            >
+              {windPlaying ? <Pause className="h-3 w-3" aria-hidden="true" /> : <Play className="h-3 w-3" aria-hidden="true" />}
+              {windPlaying ? "Pause" : "Play"}
+            </button>
+
+            <input
+              type="range"
+              min={0}
+              max={windData.frames.length - 1}
+              value={Math.min(windIdx, windData.frames.length - 1)}
+              onChange={(e) => {
+                const i = Number(e.target.value)
+                setWindPlaying(false)
+                setWindIdx(i)
+              }}
+              aria-label="Scrub the wind time slider"
+              className="h-1 flex-1 cursor-pointer accent-[var(--signal)]"
+            />
+
+            <span className="min-w-[92px] text-right font-mono text-[0.625rem] tabular-nums text-muted-foreground">
+              {windData.frames[Math.min(windIdx, windData.frames.length - 1)]
+                ? new Date(windData.frames[Math.min(windIdx, windData.frames.length - 1)].time * 1000).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })
+                : "—"} · {windIdx + 1}/{windData.frames.length}
+            </span>
+
+          </div>
+
+          {/* Legend */}
+          <div className="mt-2 flex items-center gap-2">
+            <div className="flex items-center gap-1 text-[0.625rem] text-muted-foreground">
+              <span className="font-mono uppercase">Wind</span>
+              <div className="ml-2 flex items-center gap-1">
+                {WIND_SCALE.map((s) => (
+                  <div key={s.c} title={s.label} style={{ background: s.c }} className="h-3 w-6 rounded-sm" />
+                ))}
+              </div>
+            </div>
+            <span className="ml-auto text-[0.625rem] text-muted-foreground">Arrows show wind direction; colours are wind speed (m/s)</span>
+          </div>
         </div>
       ) : null}
 
