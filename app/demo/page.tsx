@@ -1,6 +1,6 @@
 import React from "react"
 import { NcmSources } from "@/components/weather/ncm-sources"
-import MeasureMap from "@/components/weather/measure-map"
+import { MeasureMap } from "@/components/weather/measure-map"
 
 export default function DemoPage() {
   return (
