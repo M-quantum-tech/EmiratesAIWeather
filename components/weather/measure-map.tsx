@@ -483,6 +483,30 @@ export function MeasureMap() {
     setFrameIdx(last)
   }, [layer])
 
+  // Listen for time sync events from other panels and align frame index when possible
+  useEffect(() => {
+    function onSync(e: any) {
+      try {
+        const t = e?.detail?.time
+        if (!t || frames.length === 0) return
+        // find nearest index
+        let best = 0
+        let bestDiff = Infinity
+        for (let i = 0; i < frames.length; i++) {
+          const d = Math.abs(frames[i].time - t)
+          if (d < bestDiff) {
+            bestDiff = d
+            best = i
+          }
+        }
+        frameIdxRef.current = best
+        setFrameIdx(best)
+      } catch {}
+    }
+    window.addEventListener('maps:time-sync', onSync)
+    return () => window.removeEventListener('maps:time-sync', onSync)
+  }, [frames])
+
   // Paint the overlay for the currently-selected frame.
   useEffect(() => {
     const L = leafletRef.current
@@ -511,6 +535,11 @@ export function MeasureMap() {
         zIndex: 400,
       }).addTo(map)
     }
+
+    // Broadcast the active time so other panels can sync their sliders.
+    try {
+      window.dispatchEvent(new CustomEvent('maps:time-sync', { detail: { source: 'measure', time: frame.time } }))
+    } catch {}
   }, [layer, frames, frameIdx])
 
   // Animate the frame slider when playing.
@@ -652,7 +681,7 @@ export function MeasureMap() {
             <button
               type="submit"
               disabled={searching}
-              className="inline-flex items-center rounded-md bg-signal px-2 py-1 font-mono text-[0.625rem] uppercase tracking-wider text-signal-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
+              className="inline-flex items-center rounded-md bg-signal px-3 py-1.5 font-mono text-sm uppercase tracking-wider text-signal-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
             >
               {searching ? "…" : "Go"}
             </button>
@@ -715,7 +744,7 @@ export function MeasureMap() {
             onClick={() => setLayer(l.id)}
             aria-pressed={layer === l.id}
             className={cn(
-              "rounded-full px-2.5 py-1 font-mono text-[0.625rem] uppercase tracking-wider transition-colors",
+              "rounded-full px-3 py-1.5 font-mono text-sm uppercase tracking-wider transition-colors",
               layer === l.id
                 ? "bg-signal text-signal-foreground"
                 : "border border-border text-muted-foreground hover:bg-secondary hover:text-foreground",
@@ -728,7 +757,7 @@ export function MeasureMap() {
           href={albaharHref}
           target="_blank"
           rel="noopener noreferrer"
-          className="ml-auto inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 font-mono text-[0.625rem] uppercase tracking-wider text-foreground transition-colors hover:bg-secondary"
+          className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 font-mono text-sm uppercase tracking-wider text-foreground transition-colors hover:bg-secondary"
         >
           Al Bahar · NCM
           <ExternalLink className="h-2.5 w-2.5" aria-hidden="true" />

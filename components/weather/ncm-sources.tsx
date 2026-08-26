@@ -282,6 +282,10 @@ export function NcmSources() {
       }).addTo(map)
     }
     setStamp(new Date(f.time * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))
+    // Broadcast the active time so other map panels can sync.
+    try {
+      window.dispatchEvent(new CustomEvent('maps:time-sync', { detail: { source: 'ncm', time: f.time } }))
+    } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idx, frames, layer])
 
@@ -319,9 +323,24 @@ export function NcmSources() {
   // Wind forecast animation timer (speed 1x/2x).
   useEffect(() => {
     if (layer !== "wind" || !windPlaying || !windData || windData.frames.length < 2) return
-    const id = setInterval(() => setWindIdx((i) => (i + 1) % windData.frames.length), 900 / windSpeed)
+    const id = setInterval(() => setWindIdx((i) => (i + 1) % windData.frames.length), 900 / (windSpeed || 1))
     return () => clearInterval(id)
   }, [layer, windPlaying, windData, windSpeed])
+
+  // Listen for time sync events from other panels and align index where possible
+  useEffect(() => {
+    function onSync(e: any) {
+      try {
+        const t = e?.detail?.time
+        if (!t || !windData) return
+        // Try to find a matching frame and update windIdx/frame index where appropriate
+        const i = windData.frames.findIndex((f) => f.time === t)
+        if (i >= 0) setWindIdx(i)
+      } catch {}
+    }
+    window.addEventListener('maps:time-sync', onSync)
+    return () => window.removeEventListener('maps:time-sync', onSync)
+  }, [windData])
 
   // Manage the warnings polygon layer (NCM Al Bahar-style shaded emirates).
   useEffect(() => {
