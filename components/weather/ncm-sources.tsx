@@ -2,9 +2,22 @@
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import "leaflet/dist/leaflet.css"
-import { AlertTriangle, ArrowUpRight, CloudSun, Pause, Play, Radar, Satellite, ShieldAlert, Wind } from "lucide-react"
+import {
+  AlertTriangle,
+  ArrowUpRight,
+  ChevronLeft,
+  ChevronRight,
+  CloudSun,
+  Pause,
+  Play,
+  Radar,
+  Satellite,
+  ShieldAlert,
+  Wind,
+} from "lucide-react"
 import { Panel } from "@/components/station/panel"
-import { fetchWindField, type VelocityData } from "@/lib/wind-field"
+import { fetchWindFrames, type WindFrames } from "@/lib/wind-field"
+import { createWindLayer } from "@/lib/wind-layer"
 import {
   fetchEmirateWarnings,
   sampleWarnings,
@@ -48,15 +61,25 @@ const CLOUD_SCALE = [
   { c: "#d6dce6", label: "High / cold top" },
 ] as const
 
-// Wind-speed palette for the animated COSMO-style field (calm → gale).
-const WIND_COLORS = ["#3288bd", "#66c2a5", "#abdda4", "#e6f598", "#fee08b", "#fdae61", "#f46d43", "#9e0142"]
+// Wind-speed legend (m/s) matching the Windy-style heatmap palette (calm → gale).
 const WIND_SCALE = [
-  { c: "#3288bd", label: "Calm" },
-  { c: "#abdda4", label: "" },
-  { c: "#e6f598", label: "Breeze" },
-  { c: "#fdae61", label: "Strong" },
-  { c: "#9e0142", label: "Gale" },
+  { c: "#1a3a78", label: "Calm" },
+  { c: "#1a96be", label: "" },
+  { c: "#78c868", label: "Breeze" },
+  { c: "#f0963c", label: "Strong" },
+  { c: "#e4483a", label: "Gale" },
 ] as const
+
+/** Format a local ISO timestamp like "2026-08-26T12:00" into "Wed 26/08/2026 · 12:00". */
+function formatWindTime(iso?: string) {
+  if (!iso) return "—"
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const wd = d.toLocaleDateString("en-GB", { weekday: "short" })
+  const date = d.toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" })
+  const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
+  return `${wd} ${date} · ${time}`
+}
 
 const BANNER_TONE: Record<WarnLevel, string> = {
   green: "bg-alert-green/15 text-alert-green border-alert-green/40",
@@ -69,7 +92,7 @@ export function NcmSources() {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<any>(null)
   const overlayRef = useRef<any>(null)
-  const velocityRef = useRef<any>(null)
+  const windLayerRef = useRef<any>(null)
   const warnLayerRef = useRef<any>(null)
   const geoRef = useRef<any>(null)
   const leafletRef = useRef<any>(null)
@@ -79,9 +102,11 @@ export function NcmSources() {
   const [idx, setIdx] = useState(0)
   const [playing, setPlaying] = useState(true)
   const [stamp, setStamp] = useState("")
-  const [velocityReady, setVelocityReady] = useState(false)
-  const [windData, setWindData] = useState<VelocityData | null>(null)
-  const [windStamp, setWindStamp] = useState("")
+  const [mapReady, setMapReady] = useState(false)
+  const [windData, setWindData] = useState<WindFrames | null>(null)
+  const [windIdx, setWindIdx] = useState(0)
+  const [windPlaying, setWindPlaying] = useState(true)
+  const [windSpeed, setWindSpeed] = useState<1 | 2>(1)
   const [warnings, setWarnings] = useState<EmirateWarning[] | null>(null)
   const [geoReady, setGeoReady] = useState(false)
 
@@ -129,15 +154,15 @@ export function NcmSources() {
     }
   }, [])
 
-  // Load and refresh the live UAE wind field every 10 minutes (COSMO-style layer).
+  // Load and refresh the live UAE wind forecast every 10 minutes (Windy-style layer).
   useEffect(() => {
     const controller = new AbortController()
     async function load() {
       try {
-        const data = await fetchWindField(controller.signal)
+        const data = await fetchWindFrames(controller.signal)
         if (data) {
           setWindData(data)
-          setWindStamp(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))
+          setWindIdx(0)
         }
       } catch (err) {
         if ((err as any)?.name !== "AbortError")
@@ -196,17 +221,10 @@ export function NcmSources() {
     async function init() {
       const L = (await import("leaflet")).default
       if (cancelled || !containerRef.current || mapRef.current) return
-      ;(window as any).L = L
-      try {
-        await import("leaflet-velocity")
-        if (!cancelled) setVelocityReady(true)
-      } catch (err) {
-        console.log("[v0] leaflet-velocity load failed:", err instanceof Error ? err.message : err)
-      }
       leafletRef.current = L
       const map = L.map(containerRef.current, {
-        center: [24.6, 54.6],
-        zoom: 7,
+        center: [24.2, 55.2],
+        zoom: 8,
         minZoom: 4,
         maxZoom: 12,
         zoomControl: true,
@@ -216,6 +234,7 @@ export function NcmSources() {
       map.zoomControl.setPosition("bottomright")
       L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", { maxZoom: 12 }).addTo(map)
       mapRef.current = map
+      if (!cancelled) setMapReady(true)
       setTimeout(() => map.invalidateSize(), 250)
     }
     init()
@@ -225,7 +244,7 @@ export function NcmSources() {
         mapRef.current.remove()
         mapRef.current = null
         overlayRef.current = null
-        velocityRef.current = null
+        windLayerRef.current = null
         warnLayerRef.current = null
       }
     }
@@ -276,32 +295,33 @@ export function NcmSources() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layer])
 
-  // Manage the animated wind (velocity) layer.
+  // Manage the Windy-style wind layer (heatmap + arrow grid), swapping the active forecast frame.
   useEffect(() => {
     const L = leafletRef.current
     const map = mapRef.current
-    if (!L || !map || !velocityReady) return
+    if (!L || !map || !mapReady) return
 
-    if (layer === "wind" && windData) {
-      if (velocityRef.current) {
-        velocityRef.current.setData(windData)
-      } else if (typeof L.velocityLayer === "function") {
-        velocityRef.current = L.velocityLayer({
-          displayValues: false,
-          data: windData,
-          maxVelocity: 18,
-          velocityScale: 0.012,
-          particleAge: 90,
-          lineWidth: 1.6,
-          particleMultiplier: 1 / 200,
-          colorScale: WIND_COLORS,
-        }).addTo(map)
+    const grid = windData?.frames[Math.min(windIdx, windData.frames.length - 1)]
+
+    if (layer === "wind" && grid) {
+      if (windLayerRef.current) {
+        windLayerRef.current.setGrid(grid)
+      } else {
+        windLayerRef.current = createWindLayer(L, grid)
+        windLayerRef.current.addTo(map)
       }
-    } else if (velocityRef.current) {
-      map.removeLayer(velocityRef.current)
-      velocityRef.current = null
+    } else if (windLayerRef.current) {
+      map.removeLayer(windLayerRef.current)
+      windLayerRef.current = null
     }
-  }, [layer, windData, velocityReady])
+  }, [layer, windData, windIdx, mapReady])
+
+  // Wind forecast animation timer (speed 1x/2x).
+  useEffect(() => {
+    if (layer !== "wind" || !windPlaying || !windData || windData.frames.length < 2) return
+    const id = setInterval(() => setWindIdx((i) => (i + 1) % windData.frames.length), 900 / windSpeed)
+    return () => clearInterval(id)
+  }, [layer, windPlaying, windData, windSpeed])
 
   // Manage the warnings polygon layer (NCM Al Bahar-style shaded emirates).
   useEffect(() => {
@@ -549,16 +569,85 @@ export function NcmSources() {
             )}
             {layer === "wind" && (
               <span className="absolute right-3 top-3 z-[500] inline-flex items-center gap-1.5 rounded-md bg-signal/90 px-2 py-1 font-mono text-[0.5625rem] uppercase tracking-wider text-black backdrop-blur">
-                Animated · 10 km surface wind
+                Forecast · 10 m surface wind
               </span>
             )}
 
             <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[500] flex items-center gap-3 bg-gradient-to-t from-black/80 to-transparent px-4 py-3">
               {layer === "wind" ? (
-                <span className="inline-flex items-center gap-2 font-mono text-[0.6875rem] uppercase tracking-wider text-white/90">
-                  <span className="h-2 w-2 animate-pulse rounded-full bg-signal" aria-hidden="true" />
-                  {windData ? `Live wind · updated ${windStamp}` : "Loading wind field…"}
-                </span>
+                windData && windData.frames.length > 0 ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setWindPlaying((p) => !p)}
+                      className="pointer-events-auto grid h-8 w-8 shrink-0 place-items-center rounded-full bg-alert-red text-white shadow transition-transform hover:scale-105"
+                      aria-label={windPlaying ? "Pause forecast" : "Play forecast"}
+                    >
+                      {windPlaying ? <Pause className="h-4 w-4" aria-hidden="true" /> : <Play className="h-4 w-4" aria-hidden="true" />}
+                    </button>
+                    <div className="pointer-events-auto flex shrink-0 items-center gap-0.5 rounded-md border border-white/20 bg-black/55 p-0.5 backdrop-blur">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWindPlaying(false)
+                          setWindIdx((i) => (i - 1 + windData.frames.length) % windData.frames.length)
+                        }}
+                        className="grid h-6 w-6 place-items-center rounded text-white/80 hover:bg-white/10"
+                        aria-label="Previous hour"
+                      >
+                        <ChevronLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setWindPlaying(false)
+                          setWindIdx((i) => (i + 1) % windData.frames.length)
+                        }}
+                        className="grid h-6 w-6 place-items-center rounded text-white/80 hover:bg-white/10"
+                        aria-label="Next hour"
+                      >
+                        <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                    </div>
+                    <div className="pointer-events-auto flex shrink-0 items-center gap-1 rounded-md border border-white/20 bg-black/55 px-1.5 py-1 font-mono text-[0.625rem] uppercase tracking-wider text-white/70 backdrop-blur">
+                      <span>Speed</span>
+                      {([1, 2] as const).map((sp) => (
+                        <button
+                          key={sp}
+                          type="button"
+                          onClick={() => setWindSpeed(sp)}
+                          className={cn(
+                            "rounded px-1.5 py-0.5 transition-colors",
+                            windSpeed === sp ? "bg-signal text-black" : "text-white/70 hover:bg-white/10",
+                          )}
+                          aria-pressed={windSpeed === sp}
+                        >
+                          {sp}x
+                        </button>
+                      ))}
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={windData.frames.length - 1}
+                      value={Math.min(windIdx, windData.frames.length - 1)}
+                      onChange={(e) => {
+                        setWindPlaying(false)
+                        setWindIdx(Number(e.target.value))
+                      }}
+                      aria-label="Scrub the wind forecast time"
+                      className="pointer-events-auto h-1.5 flex-1 cursor-pointer accent-[var(--signal)]"
+                    />
+                    <span className="shrink-0 rounded-md bg-alert-red px-2.5 py-1 font-mono text-[0.6875rem] tabular-nums text-white shadow">
+                      {formatWindTime(windData.times[Math.min(windIdx, windData.times.length - 1)])}
+                    </span>
+                  </>
+                ) : (
+                  <span className="inline-flex items-center gap-2 font-mono text-[0.6875rem] uppercase tracking-wider text-white/90">
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-signal" aria-hidden="true" />
+                    Loading wind forecast…
+                  </span>
+                )
               ) : (
                 <>
                   <button
