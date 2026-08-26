@@ -19,11 +19,11 @@ import { Panel } from "@/components/station/panel"
 import { fetchWindFrames, type WindFrames } from "@/lib/wind-field"
 import { createWindLayer } from "@/lib/wind-layer"
 import {
-  fetchEmirateWarnings,
-  sampleWarnings,
+  fetchWarningFrames,
   WARN_FILL,
   WARN_LEGEND,
   type EmirateWarning,
+  type WarningFrames,
   type WarnLevel,
 } from "@/lib/ncm-warnings"
 import { cn } from "@/lib/utils"
@@ -109,19 +109,22 @@ export function NcmSources() {
   const [windIdx, setWindIdx] = useState(0)
   const [windPlaying, setWindPlaying] = useState(true)
   const [windSpeed, setWindSpeed] = useState<1 | 2>(1)
-  const [warnings, setWarnings] = useState<EmirateWarning[] | null>(null)
+  const [warnFrames, setWarnFrames] = useState<WarningFrames | null>(null)
+  const [warnIdx, setWarnIdx] = useState(0)
+  const [warnPlaying, setWarnPlaying] = useState(true)
   const [geoReady, setGeoReady] = useState(false)
 
   const frames = layer === "radar" ? (maps?.radar ?? []) : layer === "satellite" ? (maps?.satellite ?? []) : []
 
-  // Live warnings (level above green). If none, fall back to a labelled SAMPLE set.
-  const live = useMemo(() => (warnings ?? []).filter((w) => w.level !== "green"), [warnings])
-  const isSample = warnings != null && live.length === 0
+  // Real forecast warnings for the currently displayed hour (frame). No fabricated data.
+  const frameCount = warnFrames?.frames.length ?? 0
+  const safeIdx = frameCount ? Math.min(warnIdx, frameCount - 1) : 0
   const display = useMemo<EmirateWarning[]>(
-    () => (isSample ? sampleWarnings() : live),
-    [isSample, live],
+    () => warnFrames?.frames[safeIdx] ?? [],
+    [warnFrames, safeIdx],
   )
   const top = display[0] ?? null
+  const warnTime = warnFrames?.times[safeIdx]
 
   const frameUrl = (f: Frame) => {
     const host = maps?.host ?? "https://tilecache.rainviewer.com"
@@ -179,26 +182,34 @@ export function NcmSources() {
     }
   }, [])
 
-  // Load live per-emirate warnings every 5 minutes.
+  // Load the real hourly-forecast warning timeline; refresh every 10 minutes.
   useEffect(() => {
     const controller = new AbortController()
     async function load() {
       try {
-        const data = await fetchEmirateWarnings(controller.signal)
-        setWarnings(data)
+        const data = await fetchWarningFrames(controller.signal, 24)
+        setWarnFrames(data)
+        setWarnIdx(0)
       } catch (err) {
         if ((err as any)?.name !== "AbortError")
           console.log("[v0] warnings failed:", err instanceof Error ? err.message : err)
-        setWarnings([])
+        setWarnFrames({ frames: [[]], times: [new Date().toISOString().slice(0, 16)], issued: Date.now() })
       }
     }
     load()
-    const id = setInterval(load, 5 * 60 * 1000)
+    const id = setInterval(load, 10 * 60 * 1000)
     return () => {
       controller.abort()
       clearInterval(id)
     }
   }, [])
+
+  // Animate the warning timeline: advance one forecast hour every 2 seconds.
+  useEffect(() => {
+    if (layer !== "warnings" || !warnPlaying || frameCount < 2) return
+    const id = setInterval(() => setWarnIdx((i) => (i + 1) % frameCount), 2000)
+    return () => clearInterval(id)
+  }, [layer, warnPlaying, frameCount])
 
   // Load the UAE emirate polygons once.
   useEffect(() => {
@@ -488,13 +499,11 @@ export function NcmSources() {
               <p className="min-w-0 flex-1 truncate text-xs font-medium sm:text-sm">
                 {top
                   ? top.description
-                  : "No active weather warnings across the Emirates. Conditions are calm."}
+                  : "No active weather warnings for this hour across the Emirates. Conditions are calm."}
               </p>
-              {isSample && (
-                <span className="shrink-0 rounded bg-black/25 px-1.5 py-0.5 font-mono text-[0.5rem] font-bold uppercase tracking-widest">
-                  Sample
-                </span>
-              )}
+              <span className="shrink-0 rounded bg-black/25 px-1.5 py-0.5 font-mono text-[0.5rem] font-bold uppercase tracking-widest">
+                Forecast
+              </span>
             </div>
 
             {/* Compass rose */}
@@ -512,7 +521,9 @@ export function NcmSources() {
             {/* Right sidebar warning cards */}
             <div className="absolute right-3 top-32 z-[500] flex max-h-[58%] w-60 flex-col gap-2 overflow-auto sm:w-64">
               <div className="rounded-md border border-white/15 bg-primary/90 px-3 py-2 text-center font-mono text-[0.625rem] uppercase tracking-wider text-primary-foreground shadow">
-                {display.length ? `${display.length} active warning${display.length > 1 ? "s" : ""}` : "Show all warnings"}
+                {display.length
+                  ? `${display.length} warning${display.length > 1 ? "s" : ""} this hour`
+                  : "No warnings this hour"}
               </div>
               {display.map((w) => (
                 <article key={w.name} className="overflow-hidden rounded-md border border-border bg-card shadow">
@@ -525,13 +536,40 @@ export function NcmSources() {
                   <p className="px-3 py-2 text-[0.6875rem] leading-relaxed text-foreground">{w.description}</p>
                 </article>
               ))}
-              {isSample && (
-                <p className="rounded-md border border-dashed border-border bg-card/70 px-3 py-2 text-[0.625rem] leading-relaxed text-muted-foreground">
-                  No live warnings right now — showing a sample so you can preview the alert view. Live severity updates
-                  every 5 minutes.
-                </p>
-              )}
+              <p className="rounded-md border border-dashed border-border bg-card/70 px-3 py-2 text-[0.625rem] leading-relaxed text-muted-foreground">
+                Real 24-hour warning timeline derived from live Open-Meteo forecast for the seven emirates, playing one
+                hour every 2 seconds. Refreshes every 10 minutes.
+              </p>
             </div>
+
+            {/* Animated forecast playback (one real forecast hour every 2s) */}
+            {frameCount > 1 && (
+              <div className="absolute inset-x-3 bottom-16 z-[500] flex items-center gap-2 rounded-md bg-black/55 px-3 py-2 backdrop-blur sm:inset-x-auto sm:left-1/2 sm:w-[36rem] sm:max-w-[calc(100%-1.5rem)] sm:-translate-x-1/2">
+                <button
+                  type="button"
+                  onClick={() => setWarnPlaying((p) => !p)}
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-alert-red text-white shadow transition-transform hover:scale-105"
+                  aria-label={warnPlaying ? "Pause warning forecast" : "Play warning forecast"}
+                >
+                  {warnPlaying ? <Pause className="h-4 w-4" aria-hidden="true" /> : <Play className="h-4 w-4" aria-hidden="true" />}
+                </button>
+                <input
+                  type="range"
+                  min={0}
+                  max={frameCount - 1}
+                  value={safeIdx}
+                  onChange={(e) => {
+                    setWarnPlaying(false)
+                    setWarnIdx(Number(e.target.value))
+                  }}
+                  aria-label="Scrub the warning forecast time"
+                  className="h-1.5 flex-1 cursor-pointer accent-[var(--signal)]"
+                />
+                <span className="shrink-0 rounded-md bg-alert-red px-2.5 py-1 font-mono text-[0.6875rem] tabular-nums text-white shadow">
+                  {formatWindTime(warnTime)}
+                </span>
+              </div>
+            )}
 
             {/* Bottom severity legend */}
             <div className="absolute inset-x-3 bottom-3 z-[500] flex flex-wrap items-stretch gap-2 rounded-md bg-black/55 px-3 py-2 backdrop-blur">
