@@ -237,6 +237,10 @@ export function NcmSources() {
       basemapRef.current = L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
         maxZoom: 12,
       }).addTo(map)
+      // High-z pane so city labels sit above the shaded warning polygons (NCM look).
+      map.createPane("labels")
+      map.getPane("labels").style.zIndex = "650"
+      map.getPane("labels").style.pointerEvents = "none"
       mapRef.current = map
       if (!cancelled) setMapReady(true)
       setTimeout(() => map.invalidateSize(), 250)
@@ -299,7 +303,9 @@ export function NcmSources() {
       overlayRef.current = null
     }
     if (basemapRef.current) {
-      basemapRef.current.setOpacity(layer === "radar" || layer === "satellite" ? 0.4 : 1)
+      // Fade the dark basemap on radar/clouds/warnings so the NCM blue tint shows
+      // through instead of a bleak-black map. Wind covers the map with its heatmap.
+      basemapRef.current.setOpacity(layer === "wind" ? 1 : layer === "warnings" ? 0.22 : 0.4)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layer])
@@ -350,25 +356,27 @@ export function NcmSources() {
     display.forEach((w) => levelByName.set(w.name, w.level))
 
     const group = L.layerGroup()
-    // Navy sea/land tint to echo the NCM basemap without hiding labels.
+    // Medium-blue "water" field echoing the NCM Al Bahar basemap.
     L.rectangle(
       [
         [12, 44],
         [32, 64],
       ],
-      { stroke: false, fillColor: "#0b2545", fillOpacity: 0.4, interactive: false },
+      { stroke: false, fillColor: "#2f5f96", fillOpacity: 0.9, interactive: false },
     ).addTo(group)
 
+    // All emirates get a darker-blue land fill with crisp borders visible across the
+    // whole country; warned emirates are shaded by severity (yellow / orange / red).
     L.geoJSON(geoRef.current, {
       style: (feature: any) => {
         const lvl = levelByName.get(feature.properties.name) ?? "green"
         const warned = lvl !== "green"
         return {
-          color: warned ? "#ffffff" : "#6f8fb0",
-          weight: warned ? 1.4 : 0.7,
-          opacity: warned ? 0.9 : 0.5,
-          fillColor: WARN_FILL[lvl],
-          fillOpacity: warned ? 0.62 : 0.28,
+          color: warned ? "#ffffff" : "#a9c4e0",
+          weight: warned ? 1.6 : 0.9,
+          opacity: warned ? 0.95 : 0.85,
+          fillColor: warned ? WARN_FILL[lvl] : "#274d78",
+          fillOpacity: warned ? 0.85 : 0.9,
         }
       },
       onEachFeature: (feature: any, lyr: any) => {
@@ -376,6 +384,12 @@ export function NcmSources() {
         const label = lvl === "green" ? "No warning" : lvl === "yellow" ? "Be Aware" : lvl === "orange" ? "Be Prepared" : "Take Action"
         lyr.bindTooltip(`${feature.properties.name} — ${label}`, { sticky: true, direction: "top" })
       },
+    }).addTo(group)
+
+    // City labels on top (dedicated high-z pane) for the NCM cartographic look.
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/dark_only_labels/{z}/{x}/{y}{r}.png", {
+      maxZoom: 12,
+      pane: "labels",
     }).addTo(group)
 
     group.addTo(map)
@@ -448,7 +462,7 @@ export function NcmSources() {
         <div
         ref={containerRef}
         className="h-[80vh] min-h-[620px] w-full"
-        style={{ backgroundColor: "#3a4a63" }}
+        style={{ backgroundColor: layer === "warnings" ? "#2f5f96" : "#3a4a63" }}
           role="img"
           aria-label={
             isWarnings
