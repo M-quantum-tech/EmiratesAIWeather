@@ -332,9 +332,24 @@ function legendHtml(results: ModelResult[]) {
 /** Full popup card HTML: header (best match) + emoji strip + multi-model meteogram + legend + summary. */
 function buildSpotPopupHtml(point: Point, best: any, rawResults: ModelResult[], units: Units, W = 640, H = 236) {
   // Single-model 24-hour popup with header and footer (0-24h analysis)
-  const hours: any[] = best.hourly ?? []
+  const allHours: any[] = best.hourly ?? []
   const cur = best.current ?? {}
-  const nowIdx = typeof best.currentHourIndex === "number" ? best.currentHourIndex : 0
+  const globalNowIdx = typeof best.currentHourIndex === "number" ? best.currentHourIndex : 0
+
+  // Determine the local "today" date for the picked spot by using the timestamp at the current hour index.
+  // Then slice the hourly array to only include hours for that date (00:00–23:00 local day) so the popup shows a full-day breakdown for the chosen location.
+  const isoNow = allHours[globalNowIdx]?.time ?? new Date().toISOString()
+  const todayDateKey = isoNow.slice(0, 10)
+  const hours = allHours.filter((h) => (h.time || "").slice(0, 10) === todayDateKey).slice(0, 24)
+
+  // If filtering produced no results (edge cases), fall back to the next 24 hours starting at globalNowIdx
+  if (!hours.length && allHours.length) {
+    hours.push(...allHours.slice(globalNowIdx, globalNowIdx + 24))
+  }
+
+  // Map the now index into the sliced hours array
+  const nowIdx = hours.findIndex((h) => h.time === allHours[globalNowIdx]?.time)
+  const resolvedNowIdx = nowIdx >= 0 ? nowIdx : 0
 
   const temps = hours.map((h) => h.temperature)
   const tmax = temps.length ? Math.round(Math.max(...temps)) : 0
