@@ -27,6 +27,8 @@ import {
   type WarnLevel,
 } from "@/lib/ncm-warnings"
 import { cn } from "@/lib/utils"
+import { useWeather } from "@/components/weather/weather-provider"
+import { buildSpotPopupHtml, LOADING_HTML, ERROR_HTML } from "@/components/weather/measure-map"
 
 type Frame = { time: number; path: string }
 type Maps = { host: string; radar: Frame[]; satellite: Frame[] }
@@ -232,7 +234,16 @@ export function NcmSources() {
         scrollWheelZoom: true,
       })
       map.zoomControl.setPosition("bottomright")
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", { maxZoom: 12 }).addTo(map)
+      const cartoKey = process.env.NEXT_PUBLIC_CARTO_API_KEY
+      let base = ""
+      if (cartoKey) {
+        base = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+        base = base + `?api_key=${cartoKey}`
+      } else {
+        // Free basemap (OpenStreetMap Standard) — reliable public tiles
+        base = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+      }
+      L.tileLayer(base, { maxZoom: 12, attribution: '&copy; OpenStreetMap contributors' }).addTo(map)
       mapRef.current = map
       if (!cancelled) setMapReady(true)
       setTimeout(() => map.invalidateSize(), 250)
@@ -282,6 +293,10 @@ export function NcmSources() {
       }).addTo(map)
     }
     setStamp(new Date(f.time * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))
+    // Broadcast the active time so other map panels can sync.
+    try {
+      window.dispatchEvent(new CustomEvent('maps:time-sync', { detail: { source: 'ncm', time: f.time } }))
+    } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idx, frames, layer])
 
@@ -319,9 +334,24 @@ export function NcmSources() {
   // Wind forecast animation timer (speed 1x/2x).
   useEffect(() => {
     if (layer !== "wind" || !windPlaying || !windData || windData.frames.length < 2) return
-    const id = setInterval(() => setWindIdx((i) => (i + 1) % windData.frames.length), 900 / windSpeed)
+    const id = setInterval(() => setWindIdx((i) => (i + 1) % windData.frames.length), 900 / (windSpeed || 1))
     return () => clearInterval(id)
   }, [layer, windPlaying, windData, windSpeed])
+
+  // Listen for time sync events from other panels and align index where possible
+  useEffect(() => {
+    function onSync(e: any) {
+      try {
+        const t = e?.detail?.time
+        if (!t || !windData) return
+        // Try to find a matching frame and update windIdx/frame index where appropriate
+        const i = windData.frames.findIndex((f) => f.time === t)
+        if (i >= 0) setWindIdx(i)
+      } catch {}
+    }
+    window.addEventListener('maps:time-sync', onSync)
+    return () => window.removeEventListener('maps:time-sync', onSync)
+  }, [windData])
 
   // Manage the warnings polygon layer (NCM Al Bahar-style shaded emirates).
   useEffect(() => {
@@ -350,7 +380,7 @@ export function NcmSources() {
       { stroke: false, fillColor: "#0b2545", fillOpacity: 0.4, interactive: false },
     ).addTo(group)
 
-    L.geoJSON(geoRef.current, {
+    const geoLayer = L.geoJSON(geoRef.current, {
       style: (feature: any) => {
         const lvl = levelByName.get(feature.properties.name) ?? "green"
         const warned = lvl !== "green"
@@ -367,11 +397,145 @@ export function NcmSources() {
         const label = lvl === "green" ? "No warning" : lvl === "yellow" ? "Be Aware" : lvl === "orange" ? "Be Prepared" : "Take Action"
         lyr.bindTooltip(`${feature.properties.name} — ${label}`, { sticky: true, direction: "top" })
       },
-    }).addTo(group)
+    })
+
+    // Label layer: create small divIcons at each emirate centroid and toggle by zoom
+    const labelLayer = L.layerGroup()
+    try {
+      const features = geoRef.current.features ?? []
+      features.forEach((f: any) => {
+        const name = f.properties?.name ?? ""
+        // compute centroid (simple average of coordinates of first polygon ring)
+        let lat = 0
+        let lon = 0
+        let count = 0
+        const geom = f.geometry
+        if (geom && geom.type === "Polygon") {
+          const ring = geom.coordinates[0] ?? []
+          ring.forEach((c: any) => {
+            lon += c[0]
+            lat += c[1]
+            count++
+          })
+        } else if (geom && geom.type === "MultiPolygon") {
+          const ring = geom.coordinates[0]?.[0] ?? []
+          ring.forEach((c: any) => {
+            lon += c[0]
+            lat += c[1]
+            count++
+          })
+        }
+        if (count === 0) return
+        const cx = lat / count
+        const cy = lon / count
+        const icon = L.divIcon({
+          className: "emirate-label",
+          html: `<div style="padding:4px 8px;background:rgba(0,0,0,0.6);color:#fff;border-radius:6px;font-size:12px;font-weight:600;box-shadow:0 4px 10px rgba(0,0,0,0.6)">${name}</div>`,
+          iconAnchor: [0, 0],
+          interactive: false,
+        })
+        const m = L.marker([cx, cy], { icon })
+        labelLayer.addLayer(m)
+      })
+    } catch (err) {
+      console.log('label layer build failed', err)
+    }
+
+    // Add both geo and label layers to group so they can be toggled together
+    geoLayer.addTo(group)
+    labelLayer.addTo(group)
 
     group.addTo(map)
     warnLayerRef.current = group
+
+    // Zoom handler: show labels and emphasise boundaries at higher zoom levels (Al-Bahar style)
+    function onZoom() {
+      try {
+        const z = map.getZoom()
+        // show detailed labels when zoomed in
+        if (z >= 9) {
+          labelLayer.eachLayer((lyr: any) => map.addLayer(lyr))
+          geoLayer.setStyle((feature: any) => {
+            const lvl = levelByName.get(feature.properties.name) ?? "green"
+            const warned = lvl !== "green"
+            return {
+              color: warned ? "#ffffff" : "#9fb3cc",
+              weight: warned ? 1.8 : 1.0,
+              opacity: 0.95,
+              fillColor: WARN_FILL[lvl],
+              fillOpacity: warned ? 0.62 : 0.18,
+            }
+          })
+        } else {
+          // hide labels at low zoom
+          labelLayer.eachLayer((lyr: any) => map.removeLayer(lyr))
+          geoLayer.setStyle((feature: any) => {
+            const lvl = levelByName.get(feature.properties.name) ?? "green"
+            const warned = lvl !== "green"
+            return {
+              color: warned ? "#ffffff" : "#6f8fb0",
+              weight: warned ? 1.4 : 0.7,
+              opacity: warned ? 0.9 : 0.5,
+              fillColor: WARN_FILL[lvl],
+              fillOpacity: warned ? 0.62 : 0.28,
+            }
+          })
+        }
+      } catch {}
+    }
+    map.on('zoomend', onZoom)
+    // run once on init
+    onZoom()
+
+    // cleanup on unmount
+    const cleanup = () => {
+      try {
+        map.off('zoomend', onZoom)
+        if (labelLayer) labelLayer.clearLayers()
+      } catch {}
+    }
+
+    // attach cleanup to the return so React will remove handlers and layers on unmount
+    return cleanup
   }, [layer, geoReady, display])
+
+  // Add click-to-open-forecast popup like the Measure map so NCM panel shows the same Today breakdown
+  useEffect(() => {
+    const L = leafletRef.current
+    const map = mapRef.current
+    const { units } = useWeather()
+    if (!L || !map) return
+    function onClick(e: any) {
+      try {
+        const lat = e.latlng.lat
+        const lon = e.latlng.lng
+        const point = { lat, lon }
+        const marker = L.marker([lat, lon]).addTo(map)
+        marker.bindPopup(LOADING_HTML, { className: 'spot-popup', minWidth: 940, maxWidth: 980, autoPan: true }).openPopup()
+        ;(async () => {
+          try {
+            const res = await fetch(`/api/weather?lat=${lat}&lon=${lon}&units=${units}&model=best_match`)
+            if (!res.ok) {
+              marker.setPopupContent(ERROR_HTML)
+              return
+            }
+            const data = await res.json()
+            const best = data
+            const results = [
+              { id: 'best_match', label: 'Forecast', color: '#f5b642', hours: data.hourly },
+            ]
+            marker.setPopupContent(buildSpotPopupHtml(point, best, results, units, 920, 260))
+          } catch (err) {
+            console.log('ncm spot fetch failed', err)
+            marker.setPopupContent(ERROR_HTML)
+          }
+        })()
+      } catch (err) {}
+    }
+    map.on('click', onClick)
+    return () => map.off('click', onClick)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapRef.current, leafletRef.current, geoReady])
 
   // Animation timer (radar / satellite frame loop).
   useEffect(() => {
