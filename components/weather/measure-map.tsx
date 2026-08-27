@@ -25,13 +25,9 @@ type Point = { lat: number; lon: number }
 type Mode = "pick" | "measure"
 type LoopFrame = { time: number; path: string }
 
-// Every free Open-Meteo model is fetched and overlaid together in one popup.
+// For the Measure & Forecast map we only show a single 24-hour forecast (Best match) to simplify the UI.
 const MODELS = [
-  { id: "best_match", label: "Best", color: "#f5b642" },
-  { id: "ecmwf", label: "ECMWF", color: "#38bdf8" },
-  { id: "icon", label: "ICON", color: "#34d399" },
-  { id: "gfs", label: "GFS", color: "#f472b6" },
-  { id: "meteofrance", label: "M-France", color: "#a78bfa" },
+  { id: "best_match", label: "Forecast", color: "#f5b642" },
 ] as const
 type ModelId = (typeof MODELS)[number]["id"]
 
@@ -172,9 +168,8 @@ function agreementReport(results: ModelResult[], nowIdx: number, units: Units) {
 }
 
 /** Multi-model 24-hour meteogram: colorful temperature ribbon + rain bars + per-model curves + now marker. */
-function multiModelSvg(results: ModelResult[], barHours: any[], nowIdx: number, units: Units) {
-  const W = 320
-  const H = 118
+function multiModelSvg(results: ModelResult[], barHours: any[], nowIdx: number, units: Units, W = 320, H = 118) {
+  // Allow caller to override W/H to make larger/double-sized charts
   const top = 20
   const bottom = 26
   const n = 24
@@ -263,61 +258,52 @@ function legendHtml(results: ModelResult[]) {
 }
 
 /** Full popup card HTML: header (best match) + emoji strip + multi-model meteogram + legend + summary. */
-function buildSpotPopupHtml(point: Point, best: any, rawResults: ModelResult[], units: Units) {
+function buildSpotPopupHtml(point: Point, best: any, rawResults: ModelResult[], units: Units, W = 640, H = 236) {
+  // Single-model 24-hour popup with header and footer (0-24h analysis)
   const hours: any[] = best.hourly ?? []
   const cur = best.current ?? {}
   const nowIdx = typeof best.currentHourIndex === "number" ? best.currentHourIndex : 0
-  // Append our EmiratesConsensus blend (drawn last so it sits on top) + agreement report.
-  const consensus = buildConsensus(rawResults)
-  const results = consensus ? [...rawResults, consensus] : rawResults
-  const report = agreementReport(rawResults, nowIdx, units)
-  const reportHtml = report
-    ? `<div style="margin-top:5px;padding:5px 7px;border:1px solid var(--border);border-radius:6px;background:var(--secondary);font:600 9px ui-sans-serif,system-ui;color:var(--foreground);line-height:1.4">
-        <span style="color:#fff">EmiratesConsensus</span> blends ECMWF + ICON + GFS. ${report.count} models agree within
-        <span style="color:var(--signal)">${report.spread.toFixed(1)}${report.unit}</span> now &rarr; <span style="color:var(--signal)">${report.level}</span> predictability.
-      </div>`
-    : ""
-  const cond = describeCode(cur.weatherCode ?? 0)
-  const headEmoji = weatherEmoji(cur.weatherCode ?? 0, cur.isDay ?? true)
+
   const temps = hours.map((h) => h.temperature)
   const tmax = temps.length ? Math.round(Math.max(...temps)) : 0
   const tmin = temps.length ? Math.round(Math.min(...temps)) : 0
-  const wind =
-    units === "metric"
-      ? `${toMetersPerSecond(cur.windSpeed ?? 0).toFixed(1)} m/s`
-      : `${Math.round(cur.windSpeed ?? 0)} mph`
-  const emojiRow = [0, 4, 8, 12, 16, 20, 23]
-    .map((i) =>
-      hours[i]
-        ? `<span title="${hours[i].time.slice(11, 16)}">${weatherEmoji(hours[i].weatherCode, hours[i].isDay)}</span>`
-        : "<span></span>",
-    )
-    .join("")
-  return `<div style="width:320px;font-family:ui-sans-serif,system-ui;color:var(--foreground)">
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--border)">
-      <span style="font-size:26px;line-height:1">${headEmoji}</span>
-      <div style="line-height:1.15">
-        <div style="font-size:22px;font-weight:700">${Math.round(cur.temperature ?? 0)}${tempUnit(units)}</div>
-        <div style="font-size:11px;color:var(--muted-foreground)">${cond.label}</div>
+  const tmaxIdx = temps.indexOf(Math.max(...temps))
+  const tminIdx = temps.indexOf(Math.min(...temps))
+  const avgWind = hours.length ? (hours.reduce((s:any,h:any)=>s+(h.windSpeed??0),0)/hours.length) : 0
+  const avgPrecip = hours.length ? Math.round(hours.reduce((s:any,h:any)=>(s+(h.precipitationProbability??0)),0)/hours.length) : 0
+
+  const cond = describeCode(cur.weatherCode ?? 0)
+  const headEmoji = weatherEmoji(cur.weatherCode ?? 0, cur.isDay ?? true)
+
+  const results: ModelResult[] = rawResults
+  const header = `<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;padding:10px;border-bottom:1px solid var(--border)">
+      <div style="font-size:28px">${headEmoji}</div>
+      <div style="line-height:1">
+        <div style="font-size:20px;font-weight:700">${Math.round(cur.temperature ?? 0)}${tempUnit(units)}</div>
+        <div style="font-size:12px;color:var(--muted-foreground)">${cond.label}</div>
       </div>
-      <div style="margin-left:auto;text-align:right;font:600 9px ui-monospace,monospace;color:var(--muted-foreground)">${point.lat.toFixed(3)}&#176;N<br/>${point.lon.toFixed(3)}&#176;E</div>
-    </div>
-    <div style="display:flex;justify-content:space-between;font-size:15px;margin:0 6px 2px">${emojiRow}</div>
-    ${multiModelSvg(results, hours, nowIdx, units)}
-    ${legendHtml(results)}
-    <div style="display:flex;gap:10px;flex-wrap:wrap;font:600 10px ui-monospace,monospace;color:var(--muted-foreground);margin-top:5px">
-      <span>&#128168; ${wind}</span>
-      <span>&#128167; ${Math.round(cur.humidity ?? 0)}%</span>
-      <span>&#127777;&#65039; ${tmax}${tempUnit(units)} / ${tmin}${tempUnit(units)}</span>
-      <span>&#127783;&#65039; ${(cur.precipitation ?? 0).toFixed(units === "metric" ? 1 : 2)} ${precipUnit(units)}</span>
-    </div>
-    ${reportHtml}
-    <div style="font:9px ui-monospace,monospace;color:var(--muted-foreground);margin-top:4px">All models + consensus &middot; 00h &rarr; 23h &middot; bars = rain %</div>
+      <div style="margin-left:auto;text-align:right;font:600 11px ui-monospace,monospace;color:var(--muted-foreground)">${point.lat.toFixed(3)}°, ${point.lon.toFixed(3)}°</div>
+    </div>`
+
+  const footer = `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:13px;display:flex;gap:12px;justify-content:space-between;color:var(--muted-foreground)">
+    <div><strong>0–24h</strong>: Tmax ${tmax}${tempUnit(units)} at ${tmaxIdx>=0?hours[tmaxIdx].time.slice(11,16):'—'}</div>
+    <div>Tmin ${tmin}${tempUnit(units)} at ${tminIdx>=0?hours[tminIdx].time.slice(11,16):'—'}</div>
+    <div>Avg wind ${(units==='metric'?toMetersPerSecond(avgWind).toFixed(1):Math.round(avgWind))} ${units==='metric'?'m/s':'mph'}</div>
+    <div>Avg rain ${avgPrecip}%</div>
+  </div>`
+
+  // Build the main content (use multiModelSvg but with single-series and larger size)
+  const chart = multiModelSvg(results, hours, nowIdx, units, W, H)
+
+  return `<div style="width:${W}px;font-family:ui-sans-serif,system-ui;color:var(--foreground)">
+    ${header}
+    <div style="padding:8px">${chart}</div>
+    ${footer}
   </div>`
 }
 
-const LOADING_HTML = `<div style="width:230px;padding:8px 4px;font:11px ui-monospace,monospace;color:var(--muted-foreground)">Comparing all forecast models&hellip;</div>`
-const ERROR_HTML = `<div style="width:230px;padding:8px 4px;font:11px ui-monospace,monospace;color:var(--muted-foreground)">Forecast unavailable for this spot.</div>`
+const LOADING_HTML = `<div style="width:660px;padding:8px 4px;font:11px ui-monospace,monospace;color:var(--muted-foreground)">Loading 24-hour forecast&hellip;</div>`
+const ERROR_HTML = `<div style="width:660px;padding:8px 4px;font:11px ui-monospace,monospace;color:var(--muted-foreground)">Forecast unavailable for this spot.</div>`
 
 export function MeasureMap() {
   const { location, units } = useWeather()
@@ -401,7 +387,8 @@ export function MeasureMap() {
     showSpotRef.current = async (marker: any, point: Point) => {
       if (!marker) return
       setSpotForecast(null)
-      marker.bindPopup(LOADING_HTML, { className: "spot-popup", minWidth: 332, maxWidth: 344, autoPan: true }).openPopup()
+      // larger popup bounds for 24-hour expanded view
+      marker.bindPopup(LOADING_HTML, { className: "spot-popup", minWidth: 660, maxWidth: 700, autoPan: true }).openPopup()
       try {
         const settled = await Promise.all(
           MODELS.map(async (m) => {
@@ -427,7 +414,8 @@ export function MeasureMap() {
           color: s.meta.color,
           hours: s.data.hourly,
         }))
-        marker.setPopupContent(buildSpotPopupHtml(point, best, results, units))
+        // Build a single-model 24h popup (double-sized)
+        marker.setPopupContent(buildSpotPopupHtml(point, best, results, units, 640, 236))
         // Also set persistent spot forecast panel (used in pick mode)
         const id = `spot-${Date.now()}`
         const entry = { id, point, best, results }
@@ -888,7 +876,7 @@ export function MeasureMap() {
           </button>
         </div>
         <span className="hidden font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground sm:inline">
-          Popup compares all models
+          Popup shows a 24-hour forecast (Best model)
         </span>
       </div>
 
@@ -1067,8 +1055,8 @@ export function MeasureMap() {
           </div>
           <div className="mt-2">
             {/* meteogram */}
-            <div dangerouslySetInnerHTML={{ __html: multiModelSvg(spotForecast.results, spotForecast.best.hourly ?? [], typeof spotForecast.best.currentHourIndex === 'number' ? spotForecast.best.currentHourIndex : 0, units) }} />
-            <div className="mt-2 text-xs text-muted-foreground">Models: {spotForecast.results.map(r=>r.label).join(' · ')}</div>
+              <div dangerouslySetInnerHTML={{ __html: multiModelSvg(spotForecast.results, spotForecast.best.hourly ?? [], typeof spotForecast.best.currentHourIndex === 'number' ? spotForecast.best.currentHourIndex : 0, units, 640, 236) }} />
+              <div className="mt-2 text-xs text-muted-foreground">Model: {spotForecast.results[0]?.label ?? 'Forecast'}</div>
               {/* Hourly table */}
               <div className="mt-3 max-h-40 overflow-auto text-xs">
                 <table className="w-full text-left">
