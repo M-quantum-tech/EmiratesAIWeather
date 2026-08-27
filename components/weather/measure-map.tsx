@@ -44,6 +44,9 @@ const LAYERS = [
 ] as const
 type LayerId = (typeof LAYERS)[number]["id"]
 
+// Overlay zoom support: RainViewer frames are available only up to a limited zoom.
+const MAX_OVERLAY_ZOOM = 7
+
 // Wind-speed legend (m/s) matching the Windy-style heatmap palette (calm → gale).
 const WIND_SCALE = [
   { c: "#1a3a78", label: "Calm" },
@@ -339,6 +342,7 @@ export function MeasureMap() {
   const [query, setQuery] = useState("")
   const [searching, setSearching] = useState(false)
   const [searchNote, setSearchNote] = useState<string | null>(null)
+  const [zoomWarning, setZoomWarning] = useState(false)
   const [spotForecast, setSpotForecast] = useState<{ id: string; point: Point; best: any; results: ModelResult[] } | null>(null)
   const [pinnedSpots, setPinnedSpots] = useState<Array<{ id: string; point: Point; best: any; results: ModelResult[] }>>([])
   const [selectedPinnedId, setSelectedPinnedId] = useState<string | null>(null)
@@ -461,10 +465,27 @@ export function MeasureMap() {
         base = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
         base = base + `?api_key=${cartoKey}`
       } else {
-        // Free basemap (OpenStreetMap Standard) — reliable public tiles
-        base = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        // Prefer Carto Voyager (English labels) when no private Carto key is set — public Voyager tiles are readable.
+        base = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"
       }
-      L.tileLayer(base, { maxZoom: 18, attribution: '&copy; OpenStreetMap contributors' }).addTo(map)
+      L.tileLayer(base, { maxZoom: 18, attribution: cartoKey ? '&copy; CARTO / OSM' : 'Map tiles © CARTO / OpenStreetMap contributors' }).addTo(map)
+
+      // Hide radar/cloud overlays when user zooms beyond supported tile levels.
+      map.on('zoomend', () => {
+        try {
+          const z = map.getZoom()
+          if ((layer === 'radar' || layer === 'clouds') && z > MAX_OVERLAY_ZOOM) {
+            if (overlayRef.current) {
+              map.removeLayer(overlayRef.current)
+              overlayRef.current = null
+            }
+            setZoomWarning(true)
+          } else {
+            setZoomWarning(false)
+          }
+        } catch {}
+      })
+
       map.on("click", (e: any) => {
         const next: Point = { lat: e.latlng.lat, lon: e.latlng.lng }
         if (modeRef.current === 'pick') {
@@ -532,6 +553,20 @@ export function MeasureMap() {
     const last = Math.max(0, series.length - 1)
     frameIdxRef.current = last
     setFrameIdx(last)
+
+    // If current map zoom is too high for overlays, warn user and do not attach overlay until they zoom out.
+    try {
+      const map = mapRef.current
+      if (map && map.getZoom() > MAX_OVERLAY_ZOOM) {
+        setZoomWarning(true)
+        if (overlayRef.current) {
+          map.removeLayer(overlayRef.current)
+          overlayRef.current = null
+        }
+      } else {
+        setZoomWarning(false)
+      }
+    } catch {}
   }, [layer])
 
   // Listen for time sync events from other panels and align frame index when possible
@@ -592,6 +627,42 @@ export function MeasureMap() {
       window.dispatchEvent(new CustomEvent('maps:time-sync', { detail: { source: 'measure', time: frame.time } }))
     } catch {}
   }, [layer, frames, frameIdx])
+
+  // Clamp overlay creation to supported zoom levels. If user zooms too far, hide overlay and show tip.
+  useEffect(() => {
+    const L = leafletRef.current
+    const map = mapRef.current
+    if (!L || !map) return
+    if (layer === 'none' || frames.length === 0) return
+    const z = map.getZoom()
+    if (z > MAX_OVERLAY_ZOOM) {
+      // do not add overlay when zoomed in too far
+      if (overlayRef.current) {
+        map.removeLayer(overlayRef.current)
+        overlayRef.current = null
+      }
+      setZoomWarning(true)
+      return
+    }
+    setZoomWarning(false)
+    const store = framesRef.current
+    if (!store) return
+    const frame = frames[Math.min(frameIdx, frames.length - 1)]
+    if (!frame) return
+    const url =
+      layer === "radar"
+        ? `${store.host}${frame.path}/256/{z}/{x}/{y}/4/1_1.png`
+        : `${store.host}${frame.path}/256/{z}/{x}/{y}/0/0_0.png`
+    if (overlayRef.current) {
+      overlayRef.current.setUrl(url)
+    } else {
+      overlayRef.current = L.tileLayer(url, {
+        opacity: layer === "radar" ? 0.72 : 0.55,
+        maxZoom: MAX_OVERLAY_ZOOM,
+        zIndex: 400,
+      }).addTo(map)
+    }
+  }, [layer, frames, frameIdx, MAX_OVERLAY_ZOOM])
 
   // Fullscreen map init when modal opens
   useEffect(() => {
@@ -958,6 +1029,9 @@ export function MeasureMap() {
               : "Route set. Click a pin to reopen its forecast, or click again to start over."}
       </div>
 
+      {zoomWarning ? (
+        <div className="w-full bg-yellow-500 text-black px-4 py-2 text-sm text-center">Zoom too far in — radar/cloud overlays are not available at this zoom level. Please zoom out to view them.</div>
+      ) : null}
       <div
         ref={containerRef}
         className="h-[72vh] min-h-[560px] w-full bg-panel"
