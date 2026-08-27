@@ -378,7 +378,7 @@ export function NcmSources() {
       { stroke: false, fillColor: "#0b2545", fillOpacity: 0.4, interactive: false },
     ).addTo(group)
 
-    L.geoJSON(geoRef.current, {
+    const geoLayer = L.geoJSON(geoRef.current, {
       style: (feature: any) => {
         const lvl = levelByName.get(feature.properties.name) ?? "green"
         const warned = lvl !== "green"
@@ -395,10 +395,106 @@ export function NcmSources() {
         const label = lvl === "green" ? "No warning" : lvl === "yellow" ? "Be Aware" : lvl === "orange" ? "Be Prepared" : "Take Action"
         lyr.bindTooltip(`${feature.properties.name} — ${label}`, { sticky: true, direction: "top" })
       },
-    }).addTo(group)
+    })
+
+    // Label layer: create small divIcons at each emirate centroid and toggle by zoom
+    const labelLayer = L.layerGroup()
+    try {
+      const features = geoRef.current.features ?? []
+      features.forEach((f: any) => {
+        const name = f.properties?.name ?? ""
+        // compute centroid (simple average of coordinates of first polygon ring)
+        let lat = 0
+        let lon = 0
+        let count = 0
+        const geom = f.geometry
+        if (geom && geom.type === "Polygon") {
+          const ring = geom.coordinates[0] ?? []
+          ring.forEach((c: any) => {
+            lon += c[0]
+            lat += c[1]
+            count++
+          })
+        } else if (geom && geom.type === "MultiPolygon") {
+          const ring = geom.coordinates[0]?.[0] ?? []
+          ring.forEach((c: any) => {
+            lon += c[0]
+            lat += c[1]
+            count++
+          })
+        }
+        if (count === 0) return
+        const cx = lat / count
+        const cy = lon / count
+        const icon = L.divIcon({
+          className: "emirate-label",
+          html: `<div style="padding:4px 8px;background:rgba(0,0,0,0.6);color:#fff;border-radius:6px;font-size:12px;font-weight:600;box-shadow:0 4px 10px rgba(0,0,0,0.6)">${name}</div>`,
+          iconAnchor: [0, 0],
+          interactive: false,
+        })
+        const m = L.marker([cx, cy], { icon })
+        labelLayer.addLayer(m)
+      })
+    } catch (err) {
+      console.log('label layer build failed', err)
+    }
+
+    // Add both geo and label layers to group so they can be toggled together
+    geoLayer.addTo(group)
+    labelLayer.addTo(group)
 
     group.addTo(map)
     warnLayerRef.current = group
+
+    // Zoom handler: show labels and emphasise boundaries at higher zoom levels (Al-Bahar style)
+    function onZoom() {
+      try {
+        const z = map.getZoom()
+        // show detailed labels when zoomed in
+        if (z >= 9) {
+          labelLayer.eachLayer((lyr: any) => map.addLayer(lyr))
+          geoLayer.setStyle((feature: any) => {
+            const lvl = levelByName.get(feature.properties.name) ?? "green"
+            const warned = lvl !== "green"
+            return {
+              color: warned ? "#ffffff" : "#9fb3cc",
+              weight: warned ? 1.8 : 1.0,
+              opacity: 0.95,
+              fillColor: WARN_FILL[lvl],
+              fillOpacity: warned ? 0.62 : 0.18,
+            }
+          })
+        } else {
+          // hide labels at low zoom
+          labelLayer.eachLayer((lyr: any) => map.removeLayer(lyr))
+          geoLayer.setStyle((feature: any) => {
+            const lvl = levelByName.get(feature.properties.name) ?? "green"
+            const warned = lvl !== "green"
+            return {
+              color: warned ? "#ffffff" : "#6f8fb0",
+              weight: warned ? 1.4 : 0.7,
+              opacity: warned ? 0.9 : 0.5,
+              fillColor: WARN_FILL[lvl],
+              fillOpacity: warned ? 0.62 : 0.28,
+            }
+          })
+        }
+      } catch {}
+    }
+    map.on('zoomend', onZoom)
+    // run once on init
+    onZoom()
+
+    // cleanup on unmount
+    const cleanup = () => {
+      try {
+        map.off('zoomend', onZoom)
+        if (labelLayer) labelLayer.clearLayers()
+      } catch {}
+    }
+
+    // attach cleanup to the return so React will remove handlers and layers on unmount
+    return cleanup
   }, [layer, geoReady, display])
 
   // Animation timer (radar / satellite frame loop).
