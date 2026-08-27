@@ -87,11 +87,22 @@ function markerIcon(L: any, letter: "A" | "B") {
 }
 
 function flagIcon(L: any) {
+  // SVG flag marker for consistent styling (replaces emoji)
+  const svg = `data:image/svg+xml;utf8,` + encodeURIComponent(`
+    <svg xmlns='http://www.w3.org/2000/svg' width='28' height='36' viewBox='0 0 28 36'>
+      <g fill='none' fill-rule='evenodd'>
+        <path d='M4 34c0-6 0-24 0-24' stroke='#000' stroke-opacity='0.25' stroke-width='2' stroke-linecap='round' />
+        <g transform='translate(6,4)'>
+          <path d='M0 0c6-2 12-2 18 0v12c-6 2-12 2-18 0z' fill='%23f59e0b' stroke='%23333' stroke-width='0.5'/>
+        </g>
+      </g>
+    </svg>
+  `)
   return L.divIcon({
     className: "",
-    html: `<div style="transform:translateY(-6px);font-size:20px">📍</div>`,
-    iconSize: [24, 28],
-    iconAnchor: [12, 28],
+    html: `<img src='${svg}' style='transform:translateY(-6px);width:28px;height:36px'/>`,
+    iconSize: [28, 36],
+    iconAnchor: [14, 36],
   })
 }
 
@@ -328,7 +339,13 @@ export function MeasureMap() {
   const [query, setQuery] = useState("")
   const [searching, setSearching] = useState(false)
   const [searchNote, setSearchNote] = useState<string | null>(null)
-  const [spotForecast, setSpotForecast] = useState<{ point: Point; best: any; results: ModelResult[] } | null>(null)
+  const [spotForecast, setSpotForecast] = useState<{ id: string; point: Point; best: any; results: ModelResult[] } | null>(null)
+  const [pinnedSpots, setPinnedSpots] = useState<Array<{ id: string; point: Point; best: any; results: ModelResult[] }>>([])
+  const [selectedPinnedId, setSelectedPinnedId] = useState<string | null>(null)
+  const [fullscreenOpen, setFullscreenOpen] = useState(false)
+  const fullMapContainerRef = useRef<HTMLDivElement | null>(null)
+  const fullMapRef = useRef<any>(null)
+  const fullMapWindLayerRef = useRef<any>(null)
 
   // Wind layer state
   const windLayerRef = useRef<any>(null)
@@ -408,7 +425,15 @@ export function MeasureMap() {
         }))
         marker.setPopupContent(buildSpotPopupHtml(point, best, results, units))
         // Also set persistent spot forecast panel (used in pick mode)
-        setSpotForecast({ point, best, results })
+        const id = `spot-${Date.now()}`
+        const entry = { id, point, best, results }
+        if (modeRef.current === 'pick') {
+          setPinnedSpots((s) => [...s, entry])
+          setSelectedPinnedId(id)
+          setSpotForecast(entry)
+        } else {
+          setSpotForecast(entry)
+        }
       } catch (err) {
         console.log("[v0] spot forecast failed:", err instanceof Error ? err.message : err)
         marker.setPopupContent(ERROR_HTML)
@@ -442,18 +467,20 @@ export function MeasureMap() {
       L.tileLayer(base, { maxZoom: 18, attribution: 'Map tiles by Stamen Design, CC BY 3.0 — Map data © OpenStreetMap contributors' }).addTo(map)
       map.on("click", (e: any) => {
         const next: Point = { lat: e.latlng.lat, lon: e.latlng.lng }
-        // Pick mode: single pin replaced each click. Measure mode: accumulate up to two.
-        const updated =
-          modeRef.current === "pick"
-            ? [next]
-            : pointsRef.current.length >= 2
-              ? [next]
-              : [...pointsRef.current, next]
-        pointsRef.current = updated
-        setPoints(updated)
-        draw(updated)
-        const marker = markersRef.current[markersRef.current.length - 1]
-        showSpotRef.current(marker, next)
+        if (modeRef.current === 'pick') {
+          // Add a persistent pin with flag icon and fetch its forecast
+          const marker = L.marker([next.lat, next.lon], { icon: flagIcon(L) }).addTo(map)
+          markersRef.current.push(marker)
+          showSpotRef.current(marker, next)
+        } else {
+          // Measure mode: accumulate up to two markers and draw route
+          const updated = pointsRef.current.length >= 2 ? [next] : [...pointsRef.current, next]
+          pointsRef.current = updated
+          setPoints(updated)
+          draw(updated)
+          const marker = markersRef.current[markersRef.current.length - 1]
+          showSpotRef.current(marker, next)
+        }
       })
       mapRef.current = map
     }
@@ -565,6 +592,42 @@ export function MeasureMap() {
       window.dispatchEvent(new CustomEvent('maps:time-sync', { detail: { source: 'measure', time: frame.time } }))
     } catch {}
   }, [layer, frames, frameIdx])
+
+  // Fullscreen map init when modal opens
+  useEffect(() => {
+    if (!fullscreenOpen) {
+      if (fullMapRef.current) {
+        try { fullMapRef.current.remove() } catch {}
+        fullMapRef.current = null
+      }
+      return
+    }
+    const selected = pinnedSpots.find(s=>s.id===selectedPinnedId) ?? spotForecast
+    if (!selected) return
+    let cancelled = false
+    async function initFull() {
+      const L = (await import('leaflet')).default
+      if (cancelled) return
+      const container = fullMapContainerRef.current
+      if (!container) return
+      fullMapRef.current = L.map(container, { center: [selected.point.lat, selected.point.lon], zoom: 8, attributionControl: false })
+      const cartoKey = process.env.NEXT_PUBLIC_CARTO_API_KEY
+      const base = cartoKey ? `https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?api_key=${cartoKey}` : 'https://stamen-tiles.a.ssl.fastly.net/terrain/{z}/{x}/{y}.jpg'
+      L.tileLayer(base, { maxZoom: 18, attribution: cartoKey ? '' : 'Map tiles by Stamen Design, CC BY 3.0 — Map data © OpenStreetMap contributors' }).addTo(fullMapRef.current)
+      // add flag marker
+      L.marker([selected.point.lat, selected.point.lon], { icon: flagIcon(L) }).addTo(fullMapRef.current)
+      // add wind layer if available (use current wind frame)
+      try {
+        if (windData && windData.frames && windData.frames.length>0) {
+          const grid = windData.frames[Math.min(windIdx, windData.frames.length-1)]
+          fullMapWindLayerRef.current = createWindLayer(L, grid)
+          fullMapWindLayerRef.current.addTo(fullMapRef.current)
+        }
+      } catch (err) { console.log('fullmap wind failed', err) }
+    }
+    initFull()
+    return () => { cancelled = true; if (fullMapRef.current) try{ fullMapRef.current.remove() }catch{}; fullMapRef.current = null }
+  }, [fullscreenOpen, selectedPinnedId, pinnedSpots, spotForecast, windData, windIdx])
 
   // Animate the frame slider when playing.
   useEffect(() => {
@@ -929,6 +992,69 @@ export function MeasureMap() {
             {/* meteogram */}
             <div dangerouslySetInnerHTML={{ __html: multiModelSvg(spotForecast.results, spotForecast.best.hourly ?? [], typeof spotForecast.best.currentHourIndex === 'number' ? spotForecast.best.currentHourIndex : 0, units) }} />
             <div className="mt-2 text-xs text-muted-foreground">Models: {spotForecast.results.map(r=>r.label).join(' · ')}</div>
+              {/* Hourly table */}
+              <div className="mt-3 max-h-40 overflow-auto text-xs">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="text-muted-foreground">
+                      <th className="pb-1">Time</th>
+                      <th className="pb-1">T</th>
+                      <th className="pb-1">Rain%</th>
+                      <th className="pb-1">Wind</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(spotForecast.best.hourly ?? []).slice(0,24).map((h:any,i:number)=> (
+                      <tr key={i} className="border-t border-border">
+                        <td className="py-1">{h.time.slice(11,16)}</td>
+                        <td className="py-1">{Math.round(h.temperature)}{tempUnit(units)}</td>
+                        <td className="py-1">{Math.round(h.precipitationProbability ?? 0)}%</td>
+                        <td className="py-1">{(units==='metric'?toMetersPerSecond(h.windSpeed ?? 0).toFixed(1):Math.round(h.windSpeed ?? 0))} {(units==='metric')?'m/s':'mph'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="mt-2 flex gap-2">
+                <button className="rounded bg-signal px-3 py-1 text-xs text-signal-foreground" onClick={() => {
+                  // download CSV for this spot
+                  const rows = (spotForecast.best.hourly ?? []).slice(0,24).map((h:any)=>[
+                    h.time, h.temperature, h.precipitationProbability ?? 0, h.windSpeed ?? 0, h.windDirection ?? 0
+                  ])
+                  const csv = ['time,temperature,precipitationProbability,windSpeed,windDirection', ...rows.map(r=>r.join(','))].join('\n')
+                  const blob = new Blob([csv], { type: 'text/csv' })
+                  const url = URL.createObjectURL(blob)
+                  const a = document.createElement('a')
+                  a.href = url; a.download = `forecast-${spotForecast.point.lat.toFixed(3)}-${spotForecast.point.lon.toFixed(3)}.csv`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url)
+                }}>Download CSV</button>
+                <button className="rounded border border-border px-3 py-1 text-xs" onClick={() => { setFullscreenOpen(true)}}>Open full-screen forecast</button>
+              </div>
+            </div>
+          </div>
+      ) : null}
+
+      {/* Fullscreen forecast modal */}
+      {fullscreenOpen && (selectedPinnedId || spotForecast) ? (
+        <div className="fixed inset-0 z-60 flex items-stretch justify-center bg-black/60 p-6">
+          <div className="relative w-full max-w-6xl h-full bg-panel rounded shadow-lg overflow-hidden">
+            <div className="absolute right-3 top-3 z-50">
+              <button className="rounded bg-red-600 px-3 py-1 text-white" onClick={() => setFullscreenOpen(false)}>Close</button>
+            </div>
+            <div className="grid grid-cols-2 h-full">
+              <div className="p-4 overflow-auto">
+                <div className="label-caps text-xs text-muted-foreground">24‑hour meteogram (full)</div>
+                <div className="mt-2">
+                  {(() => {
+                    const sel = pinnedSpots.find(s=>s.id === selectedPinnedId) ?? spotForecast
+                    if (!sel) return null
+                    return <div dangerouslySetInnerHTML={{ __html: multiModelSvg(sel.results, sel.best.hourly ?? [], typeof sel.best.currentHourIndex === 'number' ? sel.best.currentHourIndex : 0, units) }} />
+                  })()}
+                </div>
+              </div>
+              <div className="relative">
+                <div ref={fullMapContainerRef} className="h-full w-full" />
+              </div>
+            </div>
           </div>
         </div>
       ) : null}
