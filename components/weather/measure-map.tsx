@@ -2,18 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import "leaflet/dist/leaflet.css"
-import {
-  CloudRain,
-  ExternalLink,
-  Layers,
-  MapPin,
-  MousePointerClick,
-  Pause,
-  Play,
-  RotateCcw,
-  Ruler,
-  Search,
-} from "lucide-react"
+import { ExternalLink, MapPin, MousePointerClick, RotateCcw, Ruler, Search } from "lucide-react"
 import { Panel } from "@/components/station/panel"
 import { useWeather } from "@/components/weather/weather-provider"
 import { compass, describeCode, precipUnit, tempUnit, toMetersPerSecond, weatherEmoji, type Units } from "@/lib/weather"
@@ -21,7 +10,6 @@ import { cn } from "@/lib/utils"
 
 type Point = { lat: number; lon: number }
 type Mode = "pick" | "measure"
-type LoopFrame = { time: number; path: string }
 
 // Every free Open-Meteo model is fetched and overlaid together in one popup.
 const MODELS = [
@@ -32,14 +20,6 @@ const MODELS = [
   { id: "meteofrance", label: "M-France", color: "#a78bfa" },
 ] as const
 type ModelId = (typeof MODELS)[number]["id"]
-
-// Free weather map layers (RainViewer, no API key).
-const LAYERS = [
-  { id: "none", label: "Base map" },
-  { id: "radar", label: "Rain radar" },
-  { id: "clouds", label: "Clouds / IR" },
-] as const
-type LayerId = (typeof LAYERS)[number]["id"]
 
 // Great-circle distance (Haversine) in kilometres.
 function haversineKm(a: Point, b: Point) {
@@ -77,7 +57,6 @@ function markerIcon(L: any, letter: "A" | "B") {
 type ModelResult = { id: ModelId | "consensus"; label: string; color: string; hours: any[] }
 
 // EmiratesConsensus: our own blended model = hourly mean of ECMWF + ICON + GFS.
-// Rendered as the headline curve and used to score cross-model agreement.
 const CONSENSUS_COLOR = "#ffffff"
 
 // meteoblue-style temperature ribbon scale: cold blues → mild teal → hot magenta.
@@ -136,23 +115,41 @@ function agreementReport(results: ModelResult[], nowIdx: number, units: Units) {
   return { spread, level, count: members.length, unit: tempUnit(units) }
 }
 
-/** Multi-model 24-hour meteogram: colorful temperature ribbon + rain bars + per-model curves + now marker. */
+/**
+ * Multi-model 24-hour meteogram — DOUBLE size with proper X (time) and Y (temperature)
+ * axes, gridlines and a clean plot boundary: colorful temperature ribbon + rain % bars
+ * + per-model curves + consensus + now marker.
+ */
 function multiModelSvg(results: ModelResult[], barHours: any[], nowIdx: number, units: Units) {
-  const W = 320
-  const H = 118
-  const top = 20
-  const bottom = 26
+  // Doubled canvas (was 320x118) with room for a left Y-axis gutter + bottom X-axis.
+  const W = 640
+  const H = 260
+  const padL = 40
+  const padR = 12
+  const padT = 30
+  const padB = 40
+  const plotL = padL
+  const plotR = W - padR
+  const plotT = padT
+  const plotB = H - padB
+  const plotW = plotR - plotL
+  const plotH = plotB - plotT
   const n = 24
-  const step = W / (n - 1)
-  const tx = (i: number) => i * step
+  const step = plotW / (n - 1)
+  const tx = (i: number) => plotL + i * step
   const toC = (t: number) => (units === "metric" ? t : ((t - 32) * 5) / 9)
+  const unit = tempUnit(units)
 
   const allTemps = results.flatMap((r) => r.hours.map((h) => h.temperature))
   if (allTemps.length < 2) return ""
-  const tmin = Math.min(...allTemps)
-  const tmax = Math.max(...allTemps)
+  // Pad the temperature range a little so the ribbon never touches the frame.
+  const rawMin = Math.min(...allTemps)
+  const rawMax = Math.max(...allTemps)
+  const pad = Math.max((rawMax - rawMin) * 0.12, 1)
+  const tmin = rawMin - pad
+  const tmax = rawMax + pad
   const tspan = Math.max(tmax - tmin, 1)
-  const ty = (t: number) => top + (1 - (t - tmin) / tspan) * (H - top - bottom)
+  const ty = (t: number) => plotT + (1 - (t - tmin) / tspan) * plotH
 
   // Headline series for the ribbon (consensus preferred, else best match, else first).
   const head =
@@ -161,6 +158,27 @@ function multiModelSvg(results: ModelResult[], barHours: any[], nowIdx: number, 
     results[0]
   const headHours = head.hours.slice(0, 24)
 
+  // ---- Axes ----------------------------------------------------------------
+  // Y gridlines + temperature labels (5 evenly spaced ticks across the range).
+  const yTicks = 4
+  const yGrid = Array.from({ length: yTicks + 1 }, (_, k) => {
+    const t = tmin + (tspan * k) / yTicks
+    const y = ty(t).toFixed(1)
+    return `<line x1="${plotL}" y1="${y}" x2="${plotR}" y2="${y}" stroke="var(--border)" stroke-width="0.8" opacity="0.5"/>
+      <text x="${plotL - 6}" y="${(Number(y) + 3).toFixed(1)}" fill="var(--muted-foreground)" font-size="9" font-family="ui-monospace,monospace" text-anchor="end">${Math.round(t)}${unit}</text>`
+  }).join("")
+
+  // X gridlines every 3 hours.
+  const xGrid = [0, 3, 6, 9, 12, 15, 18, 21]
+    .map((i) => `<line x1="${tx(i).toFixed(1)}" y1="${plotT}" x2="${tx(i).toFixed(1)}" y2="${plotB}" stroke="var(--border)" stroke-width="0.8" opacity="0.32"/>`)
+    .join("")
+
+  // Plot boundary frame + emphasised baseline/left axis.
+  const frame = `<rect x="${plotL}" y="${plotT}" width="${plotW}" height="${plotH}" fill="none" stroke="var(--border)" stroke-width="1"/>
+    <line x1="${plotL}" y1="${plotB}" x2="${plotR}" y2="${plotB}" stroke="var(--muted-foreground)" stroke-width="1" opacity="0.7"/>
+    <line x1="${plotL}" y1="${plotT}" x2="${plotL}" y2="${plotB}" stroke="var(--muted-foreground)" stroke-width="1" opacity="0.7"/>`
+
+  // ---- Data ----------------------------------------------------------------
   // Horizontal temperature gradient: one stop per hour, colored by that hour's temp.
   const gradId = `ribbon-${Math.random().toString(36).slice(2, 8)}`
   const stops = headHours
@@ -169,25 +187,16 @@ function multiModelSvg(results: ModelResult[], barHours: any[], nowIdx: number, 
   const gradDef = `<defs><linearGradient id="${gradId}" x1="0" y1="0" x2="1" y2="0">${stops}</linearGradient></defs>`
 
   // Filled band beneath the headline curve, painted with the temperature gradient.
-  const baseY = H - bottom
   const ribbonLine = headHours.map((h, i) => `${i === 0 ? "M" : "L"}${tx(i).toFixed(1)},${ty(h.temperature).toFixed(1)}`).join(" ")
-  const ribbon = `<path d="${ribbonLine} L${W},${baseY} L0,${baseY} Z" fill="url(#${gradId})" opacity="0.9"/>`
+  const ribbon = `<path d="${ribbonLine} L${plotR.toFixed(1)},${plotB} L${plotL.toFixed(1)},${plotB} Z" fill="url(#${gradId})" opacity="0.85"/>`
 
-  // Per-hour temperature labels along the top of the ribbon (every 3rd hour to avoid clutter).
-  const tempLabels = headHours
-    .map((h, i) =>
-      i % 3 === 0
-        ? `<text x="${tx(i).toFixed(1)}" y="${(ty(h.temperature) - 3).toFixed(1)}" fill="var(--foreground)" font-size="7" font-weight="700" font-family="ui-monospace,monospace" text-anchor="middle">${Math.round(h.temperature)}&#176;</text>`
-        : "",
-    )
-    .join("")
-
+  // Rain-probability bars anchored to the baseline.
   const bars = barHours
     .slice(0, 24)
     .map((h, i) => {
-      const bh = Math.max(0, (h.precipitationProbability ?? 0) / 100) * (H - top - bottom) * 0.6
+      const bh = Math.max(0, (h.precipitationProbability ?? 0) / 100) * plotH * 0.6
       return bh > 0.5
-        ? `<rect x="${(tx(i) - step * 0.28).toFixed(1)}" y="${(baseY - bh).toFixed(1)}" width="${(step * 0.56).toFixed(1)}" height="${bh.toFixed(1)}" fill="var(--accent)" opacity="0.5" rx="0.5"/>`
+        ? `<rect x="${(tx(i) - step * 0.28).toFixed(1)}" y="${(plotB - bh).toFixed(1)}" width="${(step * 0.56).toFixed(1)}" height="${bh.toFixed(1)}" fill="var(--accent)" opacity="0.45" rx="1"/>`
         : ""
     })
     .join("")
@@ -199,30 +208,46 @@ function multiModelSvg(results: ModelResult[], barHours: any[], nowIdx: number, 
         .map((h, i) => `${i === 0 ? "M" : "L"}${tx(i).toFixed(1)},${ty(h.temperature).toFixed(1)}`)
         .join(" ")
       const isBlend = r.id === head.id
-      return `<path d="${line}" fill="none" stroke="${isBlend ? "#ffffff" : r.color}" stroke-width="${isBlend ? 2 : 0.9}" opacity="${isBlend ? 1 : 0.55}" stroke-linejoin="round"/>`
+      return `<path d="${line}" fill="none" stroke="${isBlend ? "#ffffff" : r.color}" stroke-width="${isBlend ? 2.6 : 1.3}" opacity="${isBlend ? 1 : 0.6}" stroke-linejoin="round"/>`
     })
     .join("")
 
+  // Per-hour temperature labels along the headline curve (every 3rd hour).
+  const tempLabels = headHours
+    .map((h, i) =>
+      i % 3 === 0
+        ? `<text x="${tx(i).toFixed(1)}" y="${(ty(h.temperature) - 6).toFixed(1)}" fill="var(--foreground)" font-size="10" font-weight="700" font-family="ui-monospace,monospace" text-anchor="middle">${Math.round(h.temperature)}&#176;</text>`
+        : "",
+    )
+    .join("")
+
+  // X-axis hour labels below the frame.
   const axis = [0, 3, 6, 9, 12, 15, 18, 21, 23]
     .map((i) => {
       const anchor = i === 0 ? "start" : i === 23 ? "end" : "middle"
       const label = barHours[i] ? barHours[i].time.slice(11, 13) : String(i).padStart(2, "0")
-      return `<text x="${tx(i).toFixed(1)}" y="${H - 6}" fill="var(--muted-foreground)" font-size="7" font-family="ui-monospace,monospace" text-anchor="${anchor}">${label}h</text>`
+      return `<text x="${tx(i).toFixed(1)}" y="${plotB + 16}" fill="var(--muted-foreground)" font-size="9.5" font-family="ui-monospace,monospace" text-anchor="${anchor}">${label}h</text>`
     })
     .join("")
 
+  // Axis titles.
+  const titles = `<text x="${plotL - 30}" y="${plotT - 12}" fill="var(--muted-foreground)" font-size="9" font-family="ui-monospace,monospace">${unit}</text>
+    <text x="${plotR}" y="${H - 6}" fill="var(--muted-foreground)" font-size="9" font-family="ui-monospace,monospace" text-anchor="end">hour of day</text>`
+
   const clamped = Math.min(Math.max(nowIdx, 0), n - 1)
   const nowX = tx(clamped)
-  const now = `<line x1="${nowX.toFixed(1)}" y1="${top - 4}" x2="${nowX.toFixed(1)}" y2="${baseY}" stroke="var(--signal)" stroke-width="1.2" stroke-dasharray="2 2"/><circle cx="${nowX.toFixed(1)}" cy="${ty(headHours[clamped]?.temperature ?? tmin).toFixed(1)}" r="2.5" fill="var(--signal)"/>`
+  const now = `<line x1="${nowX.toFixed(1)}" y1="${plotT}" x2="${nowX.toFixed(1)}" y2="${plotB}" stroke="var(--signal)" stroke-width="1.4" stroke-dasharray="3 3"/>
+    <circle cx="${nowX.toFixed(1)}" cy="${ty(headHours[clamped]?.temperature ?? tmin).toFixed(1)}" r="3.5" fill="var(--signal)"/>
+    <text x="${nowX.toFixed(1)}" y="${plotT - 6}" fill="var(--signal)" font-size="9" font-weight="700" font-family="ui-monospace,monospace" text-anchor="middle">NOW</text>`
 
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${gradDef}${ribbon}${bars}${curves}${now}${tempLabels}${axis}</svg>`
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${gradDef}${yGrid}${xGrid}${ribbon}${bars}${curves}${frame}${now}${tempLabels}${axis}${titles}</svg>`
 }
 
 function legendHtml(results: ModelResult[]) {
-  return `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">${results
+  return `<div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:6px">${results
     .map(
       (r) =>
-        `<span style="display:inline-flex;align-items:center;gap:3px;font:600 8px ui-monospace,monospace;color:var(--muted-foreground)"><span style="display:inline-block;width:9px;height:2px;background:${r.color}"></span>${r.label}</span>`,
+        `<span style="display:inline-flex;align-items:center;gap:4px;font:600 10px ui-monospace,monospace;color:var(--muted-foreground)"><span style="display:inline-block;width:12px;height:3px;background:${r.color}"></span>${r.label}</span>`,
     )
     .join("")}</div>`
 }
@@ -237,7 +262,7 @@ function buildSpotPopupHtml(point: Point, best: any, rawResults: ModelResult[], 
   const results = consensus ? [...rawResults, consensus] : rawResults
   const report = agreementReport(rawResults, nowIdx, units)
   const reportHtml = report
-    ? `<div style="margin-top:5px;padding:5px 7px;border:1px solid var(--border);border-radius:6px;background:var(--secondary);font:600 9px ui-sans-serif,system-ui;color:var(--foreground);line-height:1.4">
+    ? `<div style="margin-top:7px;padding:7px 9px;border:1px solid var(--border);border-radius:7px;background:var(--secondary);font:600 11px ui-sans-serif,system-ui;color:var(--foreground);line-height:1.45">
         <span style="color:#fff">EmiratesConsensus</span> blends ECMWF + ICON + GFS. ${report.count} models agree within
         <span style="color:var(--signal)">${report.spread.toFixed(1)}${report.unit}</span> now &rarr; <span style="color:var(--signal)">${report.level}</span> predictability.
       </div>`
@@ -258,31 +283,31 @@ function buildSpotPopupHtml(point: Point, best: any, rawResults: ModelResult[], 
         : "<span></span>",
     )
     .join("")
-  return `<div style="width:320px;font-family:ui-sans-serif,system-ui;color:var(--foreground)">
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--border)">
-      <span style="font-size:26px;line-height:1">${headEmoji}</span>
+  return `<div style="width:640px;max-width:100%;font-family:ui-sans-serif,system-ui;color:var(--foreground)">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--border)">
+      <span style="font-size:34px;line-height:1">${headEmoji}</span>
       <div style="line-height:1.15">
-        <div style="font-size:22px;font-weight:700">${Math.round(cur.temperature ?? 0)}${tempUnit(units)}</div>
-        <div style="font-size:11px;color:var(--muted-foreground)">${cond.label}</div>
+        <div style="font-size:30px;font-weight:700">${Math.round(cur.temperature ?? 0)}${tempUnit(units)}</div>
+        <div style="font-size:13px;color:var(--muted-foreground)">${cond.label}</div>
       </div>
-      <div style="margin-left:auto;text-align:right;font:600 9px ui-monospace,monospace;color:var(--muted-foreground)">${point.lat.toFixed(3)}&#176;N<br/>${point.lon.toFixed(3)}&#176;E</div>
+      <div style="margin-left:auto;text-align:right;font:600 11px ui-monospace,monospace;color:var(--muted-foreground)">${point.lat.toFixed(3)}&#176;N<br/>${point.lon.toFixed(3)}&#176;E</div>
     </div>
-    <div style="display:flex;justify-content:space-between;font-size:15px;margin:0 6px 2px">${emojiRow}</div>
+    <div style="display:flex;justify-content:space-between;font-size:20px;margin:0 10px 4px">${emojiRow}</div>
     ${multiModelSvg(results, hours, nowIdx, units)}
     ${legendHtml(results)}
-    <div style="display:flex;gap:10px;flex-wrap:wrap;font:600 10px ui-monospace,monospace;color:var(--muted-foreground);margin-top:5px">
+    <div style="display:flex;gap:16px;flex-wrap:wrap;font:600 12px ui-monospace,monospace;color:var(--muted-foreground);margin-top:7px">
       <span>&#128168; ${wind}</span>
       <span>&#128167; ${Math.round(cur.humidity ?? 0)}%</span>
       <span>&#127777;&#65039; ${tmax}${tempUnit(units)} / ${tmin}${tempUnit(units)}</span>
       <span>&#127783;&#65039; ${(cur.precipitation ?? 0).toFixed(units === "metric" ? 1 : 2)} ${precipUnit(units)}</span>
     </div>
     ${reportHtml}
-    <div style="font:9px ui-monospace,monospace;color:var(--muted-foreground);margin-top:4px">All models + consensus &middot; 00h &rarr; 23h &middot; bars = rain %</div>
+    <div style="font:10px ui-monospace,monospace;color:var(--muted-foreground);margin-top:6px">All models + consensus &middot; 00h &rarr; 23h &middot; bars = rain %</div>
   </div>`
 }
 
-const LOADING_HTML = `<div style="width:230px;padding:8px 4px;font:11px ui-monospace,monospace;color:var(--muted-foreground)">Comparing all forecast models&hellip;</div>`
-const ERROR_HTML = `<div style="width:230px;padding:8px 4px;font:11px ui-monospace,monospace;color:var(--muted-foreground)">Forecast unavailable for this spot.</div>`
+const LOADING_HTML = `<div style="width:300px;padding:10px 6px;font:12px ui-monospace,monospace;color:var(--muted-foreground)">Comparing all forecast models&hellip;</div>`
+const ERROR_HTML = `<div style="width:300px;padding:10px 6px;font:12px ui-monospace,monospace;color:var(--muted-foreground)">Forecast unavailable for this spot.</div>`
 
 export function MeasureMap() {
   const { location, units } = useWeather()
@@ -294,16 +319,9 @@ export function MeasureMap() {
   const pointsRef = useRef<Point[]>([])
   const modeRef = useRef<Mode>("pick")
   const showSpotRef = useRef<(marker: any, point: Point) => void>(() => {})
-  const overlayRef = useRef<any>(null)
-  const framesRef = useRef<{ host: string; radar: LoopFrame[]; clouds: LoopFrame[] } | null>(null)
-  const frameIdxRef = useRef(0)
 
   const [points, setPoints] = useState<Point[]>([])
   const [mode, setMode] = useState<Mode>("pick")
-  const [layer, setLayer] = useState<LayerId>("none")
-  const [frames, setFrames] = useState<LoopFrame[]>([])
-  const [frameIdx, setFrameIdx] = useState(0)
-  const [playing, setPlaying] = useState(true)
   const [query, setQuery] = useState("")
   const [searching, setSearching] = useState(false)
   const [searchNote, setSearchNote] = useState<string | null>(null)
@@ -350,7 +368,7 @@ export function MeasureMap() {
   useEffect(() => {
     showSpotRef.current = async (marker: any, point: Point) => {
       if (!marker) return
-      marker.bindPopup(LOADING_HTML, { className: "spot-popup", minWidth: 332, maxWidth: 344, autoPan: true }).openPopup()
+      marker.bindPopup(LOADING_HTML, { className: "spot-popup", minWidth: 660, maxWidth: 680, autoPan: true }).openPopup()
       try {
         const settled = await Promise.all(
           MODELS.map(async (m) => {
@@ -397,7 +415,15 @@ export function MeasureMap() {
         zoomControl: true,
         attributionControl: false,
       })
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", { maxZoom: 18 }).addTo(map)
+      // Keyless dark basemap (Esri World Dark Gray) + a matching reference label layer.
+      L.tileLayer(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+        { maxZoom: 16 },
+      ).addTo(map)
+      L.tileLayer(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
+        { maxZoom: 16, opacity: 0.9 },
+      ).addTo(map)
       map.on("click", (e: any) => {
         const next: Point = { lat: e.latlng.lat, lon: e.latlng.lng }
         // Pick mode: single pin replaced each click. Measure mode: accumulate up to two.
@@ -425,85 +451,6 @@ export function MeasureMap() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  // Load the full free RainViewer frame series (radar past+nowcast, IR satellite).
-  useEffect(() => {
-    let cancelled = false
-    async function loadFrames() {
-      try {
-        const res = await fetch("https://api.rainviewer.com/public/weather-maps.json")
-        if (!res.ok) return
-        const json = await res.json()
-        const host = json.host ?? "https://tilecache.rainviewer.com"
-        const radar: LoopFrame[] = [...(json.radar?.past ?? []), ...(json.radar?.nowcast ?? [])].map((f: any) => ({
-          time: f.time,
-          path: f.path,
-        }))
-        const clouds: LoopFrame[] = (json.satellite?.infrared ?? []).map((f: any) => ({ time: f.time, path: f.path }))
-        if (!cancelled) framesRef.current = { host, radar, clouds }
-      } catch (err) {
-        console.log("[v0] rainviewer frames failed:", err instanceof Error ? err.message : err)
-      }
-    }
-    loadFrames()
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  // When the active layer changes, load its frame series into the slider.
-  useEffect(() => {
-    const store = framesRef.current
-    if (layer === "none" || !store) {
-      setFrames([])
-      return
-    }
-    const series = layer === "radar" ? store.radar : store.clouds
-    setFrames(series)
-    const last = Math.max(0, series.length - 1)
-    frameIdxRef.current = last
-    setFrameIdx(last)
-  }, [layer])
-
-  // Paint the overlay for the currently-selected frame.
-  useEffect(() => {
-    const L = leafletRef.current
-    const map = mapRef.current
-    const store = framesRef.current
-    if (!L || !map) return
-    if (layer === "none" || !store || frames.length === 0) {
-      if (overlayRef.current) {
-        map.removeLayer(overlayRef.current)
-        overlayRef.current = null
-      }
-      return
-    }
-    const frame = frames[Math.min(frameIdx, frames.length - 1)]
-    if (!frame) return
-    const url =
-      layer === "radar"
-        ? `${store.host}${frame.path}/256/{z}/{x}/{y}/4/1_1.png`
-        : `${store.host}${frame.path}/256/{z}/{x}/{y}/0/0_0.png`
-    if (overlayRef.current) {
-      overlayRef.current.setUrl(url)
-    } else {
-      overlayRef.current = L.tileLayer(url, {
-        opacity: layer === "radar" ? 0.72 : 0.55,
-        maxZoom: 18,
-        zIndex: 400,
-      }).addTo(map)
-    }
-  }, [layer, frames, frameIdx])
-
-  // Animate the frame slider when playing.
-  useEffect(() => {
-    if (layer === "none" || frames.length < 2 || !playing) return
-    const id = setInterval(() => {
-      frameIdxRef.current = (frameIdxRef.current + 1) % frames.length
-      setFrameIdx(frameIdxRef.current)
-    }, 750)
-    return () => clearInterval(id)
-  }, [layer, frames, playing])
 
   // Free Open-Meteo geocoding search to jump the map to any place.
   const runSearch = useCallback(async () => {
@@ -551,6 +498,7 @@ export function MeasureMap() {
 
   const km = points.length === 2 ? haversineKm(points[0], points[1]) : 0
   const bearing = points.length === 2 ? bearingDeg(points[0], points[1]) : 0
+  const last = points[points.length - 1]
   const albaharHref = `https://ghaith.ncm.gov.ae/?lang=en#cosmo-uae-wind`
 
   return (
@@ -629,30 +577,6 @@ export function MeasureMap() {
         <span className="hidden font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground sm:inline">
           Popup compares all models
         </span>
-      </div>
-
-      {/* Free weather-layer overlays on the same map */}
-      <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-3 py-2">
-        <span className="mr-1 flex items-center gap-1 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-          <Layers className="h-3 w-3" aria-hidden="true" />
-          Layer
-        </span>
-        {LAYERS.map((l) => (
-          <button
-            key={l.id}
-            type="button"
-            onClick={() => setLayer(l.id)}
-            aria-pressed={layer === l.id}
-            className={cn(
-              "rounded-full px-2.5 py-1 font-mono text-[0.625rem] uppercase tracking-wider transition-colors",
-              layer === l.id
-                ? "bg-signal text-signal-foreground"
-                : "border border-border text-muted-foreground hover:bg-secondary hover:text-foreground",
-            )}
-          >
-            {l.label}
-          </button>
-        ))}
         <a
           href={albaharHref}
           target="_blank"
@@ -663,44 +587,6 @@ export function MeasureMap() {
           <ExternalLink className="h-2.5 w-2.5" aria-hidden="true" />
         </a>
       </div>
-
-      {/* Time slider for the active radar/cloud layer */}
-      {layer !== "none" && frames.length > 0 ? (
-        <div className="flex items-center gap-3 border-b border-border bg-card/60 px-3 py-2">
-          <button
-            type="button"
-            onClick={() => setPlaying((p) => !p)}
-            aria-label={playing ? "Pause loop" : "Play loop"}
-            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 font-mono text-[0.625rem] uppercase tracking-wider text-foreground transition-colors hover:bg-secondary"
-          >
-            {playing ? <Pause className="h-3 w-3" aria-hidden="true" /> : <Play className="h-3 w-3" aria-hidden="true" />}
-            {playing ? "Pause" : "Play"}
-          </button>
-          <input
-            type="range"
-            min={0}
-            max={frames.length - 1}
-            value={Math.min(frameIdx, frames.length - 1)}
-            onChange={(e) => {
-              const i = Number(e.target.value)
-              setPlaying(false)
-              frameIdxRef.current = i
-              setFrameIdx(i)
-            }}
-            aria-label="Scrub the radar time slider"
-            className="h-1 flex-1 cursor-pointer accent-[var(--signal)]"
-          />
-          <span className="min-w-[92px] text-right font-mono text-[0.625rem] tabular-nums text-muted-foreground">
-            {frames[Math.min(frameIdx, frames.length - 1)]
-              ? new Date(frames[Math.min(frameIdx, frames.length - 1)].time * 1000).toLocaleTimeString([], {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })
-              : "—"}{" "}
-            · {frameIdx + 1}/{frames.length}
-          </span>
-        </div>
-      ) : null}
 
       <div className="border-b border-border bg-secondary/40 px-4 py-2 font-mono text-[0.625rem] text-muted-foreground">
         {searchNote ? (
@@ -721,7 +607,7 @@ export function MeasureMap() {
         ref={containerRef}
         className="h-[72vh] min-h-[560px] w-full bg-panel"
         role="application"
-        aria-label="Interactive map: pick any spot for an all-model 24-hour meteogram, toggle free radar/cloud layers, or measure distance between two spots"
+        aria-label="Interactive map: pick any spot for an all-model 24-hour meteogram, or measure distance between two spots"
       />
 
       {/* Route metrics */}
@@ -738,26 +624,17 @@ export function MeasureMap() {
             <span className="font-mono text-[0.5625rem] text-muted-foreground">heading {compass(bearing)}</span>
           ) : null}
         </Stat>
-        <Stat label="Layer" value={LAYERS.find((l) => l.id === layer)?.label ?? "Base map"}>
+        <Stat label="Selected point" value={last ? `${last.lat.toFixed(2)}°, ${last.lon.toFixed(2)}°` : "—"}>
           <span className="flex items-center gap-1 font-mono text-[0.5625rem] text-muted-foreground">
-            {layer === "none" ? (
-              <>
-                <MapPin className="h-3 w-3" aria-hidden="true" />
-                {mode === "pick" ? "pick a spot for its meteogram" : "measuring route"}
-              </>
-            ) : (
-              <>
-                <CloudRain className="h-3 w-3" aria-hidden="true" />
-                live RainViewer overlay
-              </>
-            )}
+            <MapPin className="h-3 w-3" aria-hidden="true" />
+            {last ? "tap the pin for its all-model forecast" : mode === "pick" ? "pick a spot for its meteogram" : "measuring route"}
           </span>
         </Stat>
       </div>
 
       <div className="border-t border-border px-4 py-2 font-mono text-[0.5625rem] text-muted-foreground">
-        All-model spot meteograms via Open-Meteo (ECMWF · ICON · GFS · Météo-France) · free radar/cloud tiles © RainViewer
-        · basemap © CARTO / OSM · UAE: NCM Al Bahar
+        All-model spot meteograms via Open-Meteo (ECMWF · ICON · GFS · Météo-France) · basemap © Esri / OSM · UAE: NCM Al
+        Bahar. Rain radar &amp; clouds/IR live in the map above.
       </div>
     </Panel>
   )
