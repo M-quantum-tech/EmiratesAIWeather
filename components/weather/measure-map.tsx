@@ -165,10 +165,10 @@ function agreementReport(results: ModelResult[], nowIdx: number, units: Units) {
 }
 
 /** Multi-model 24-hour meteogram: colorful temperature ribbon + rain bars + per-model curves + now marker. */
-function multiModelSvg(results: ModelResult[], barHours: any[], nowIdx: number, units: Units, W = 320, H = 118) {
-  // Allow caller to override W/H to make larger/double-sized charts
-  const top = 20
-  const bottom = 26
+function multiModelSvg(results: ModelResult[], barHours: any[], nowIdx: number, units: Units, W = 320, H = 118, highlightIdx?: number) {
+  // Larger top padding to make room for the peak marker/label
+  const top = 28
+  const bottom = 32
   const n = 24
   const step = W / (n - 1)
   const tx = (i: number) => i * step
@@ -188,6 +188,11 @@ function multiModelSvg(results: ModelResult[], barHours: any[], nowIdx: number, 
     results[0]
   const headHours = head.hours.slice(0, 24)
 
+  // compute peak index if not provided
+  const computedPeak = headHours.reduce((acc, h, i) => ({ idx: acc.idx, val: acc.val }), { idx: -1, val: -Infinity } as any)
+  let peakIdx = typeof highlightIdx === 'number' && highlightIdx >= 0 ? highlightIdx : headHours.findIndex((h) => h.temperature === tmax)
+  if (peakIdx < 0) peakIdx = 0
+
   // Horizontal temperature gradient: one stop per hour, colored by that hour's temp.
   const gradId = `ribbon-${Math.random().toString(36).slice(2, 8)}`
   const stops = headHours
@@ -198,13 +203,13 @@ function multiModelSvg(results: ModelResult[], barHours: any[], nowIdx: number, 
   // Filled band beneath the headline curve, painted with the temperature gradient.
   const baseY = H - bottom
   const ribbonLine = headHours.map((h, i) => `${i === 0 ? "M" : "L"}${tx(i).toFixed(1)},${ty(h.temperature).toFixed(1)}`).join(" ")
-  const ribbon = `<path d="${ribbonLine} L${W},${baseY} L0,${baseY} Z" fill="url(#${gradId})" opacity="0.9"/>`
+  const ribbon = `<path d="${ribbonLine} L${W},${baseY} L0,${baseY} Z" fill="url(#${gradId})" opacity="0.95"/>`
 
   // Per-hour temperature labels along the top of the ribbon (every 3rd hour to avoid clutter).
   const tempLabels = headHours
     .map((h, i) =>
       i % 3 === 0
-        ? `<text x="${tx(i).toFixed(1)}" y="${(ty(h.temperature) - 3).toFixed(1)}" fill="var(--foreground)" font-size="7" font-weight="700" font-family="ui-monospace,monospace" text-anchor="middle">${Math.round(h.temperature)}&#176;</text>`
+        ? `<text x="${tx(i).toFixed(1)}" y="${(ty(h.temperature) - 6).toFixed(1)}" fill="#fff" font-size="8" font-weight="700" font-family="ui-monospace,monospace" text-anchor="middle">${Math.round(h.temperature)}&#176;</text>`
         : "",
     )
     .join("")
@@ -214,7 +219,7 @@ function multiModelSvg(results: ModelResult[], barHours: any[], nowIdx: number, 
     .map((h, i) => {
       const bh = Math.max(0, (h.precipitationProbability ?? 0) / 100) * (H - top - bottom) * 0.6
       return bh > 0.5
-        ? `<rect x="${(tx(i) - step * 0.28).toFixed(1)}" y="${(baseY - bh).toFixed(1)}" width="${(step * 0.56).toFixed(1)}" height="${bh.toFixed(1)}" fill="var(--accent)" opacity="0.5" rx="0.5"/>`
+        ? `<rect x="${(tx(i) - step * 0.28).toFixed(1)}" y="${(baseY - bh).toFixed(1)}" width="${(step * 0.56).toFixed(1)}" height="${bh.toFixed(1)}" fill="#ffcc66" opacity="0.22" rx="0.5"/>`
         : ""
     })
     .join("")
@@ -226,7 +231,7 @@ function multiModelSvg(results: ModelResult[], barHours: any[], nowIdx: number, 
         .map((h, i) => `${i === 0 ? "M" : "L"}${tx(i).toFixed(1)},${ty(h.temperature).toFixed(1)}`)
         .join(" ")
       const isBlend = r.id === head.id
-      return `<path d="${line}" fill="none" stroke="${isBlend ? "#ffffff" : r.color}" stroke-width="${isBlend ? 2 : 0.9}" opacity="${isBlend ? 1 : 0.55}" stroke-linejoin="round"/>`
+      return `<path d="${line}" fill="none" stroke="${isBlend ? "#fff" : r.color}" stroke-width="${isBlend ? 2 : 0.9}" opacity="${isBlend ? 1 : 0.55}" stroke-linejoin="round"/>`
     })
     .join("")
 
@@ -234,15 +239,22 @@ function multiModelSvg(results: ModelResult[], barHours: any[], nowIdx: number, 
     .map((i) => {
       const anchor = i === 0 ? "start" : i === 23 ? "end" : "middle"
       const label = barHours[i] ? barHours[i].time.slice(11, 13) : String(i).padStart(2, "0")
-      return `<text x="${tx(i).toFixed(1)}" y="${H - 6}" fill="var(--muted-foreground)" font-size="7" font-family="ui-monospace,monospace" text-anchor="${anchor}">${label}h</text>`
+      return `<text x="${tx(i).toFixed(1)}" y="${H - 8}" fill="#9aa3ad" font-size="8" font-family="ui-monospace,monospace" text-anchor="${anchor}">${label}h</text>`
     })
     .join("")
 
   const clamped = Math.min(Math.max(nowIdx, 0), n - 1)
   const nowX = tx(clamped)
-  const now = `<line x1="${nowX.toFixed(1)}" y1="${top - 4}" x2="${nowX.toFixed(1)}" y2="${baseY}" stroke="var(--signal)" stroke-width="1.2" stroke-dasharray="2 2"/><circle cx="${nowX.toFixed(1)}" cy="${ty(headHours[clamped]?.temperature ?? tmin).toFixed(1)}" r="2.5" fill="var(--signal)"/>`
+  const now = `<line x1="${nowX.toFixed(1)}" y1="${top - 6}" x2="${nowX.toFixed(1)}" y2="${baseY}" stroke="#f59e0b" stroke-width="1.2" stroke-dasharray="3 3" opacity="0.9"/><circle cx="${nowX.toFixed(1)}" cy="${ty(headHours[clamped]?.temperature ?? tmin).toFixed(1)}" r="3" fill="#f59e0b"/>`
 
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${gradDef}${ribbon}${bars}${curves}${now}${tempLabels}${axis}</svg>`
+  // Peak marker (dashed vertical at peakIdx with small badge)
+  const peakX = tx(peakIdx)
+  const peakY = ty(headHours[peakIdx]?.temperature ?? tmin)
+  const peakLine = `<line x1="${peakX.toFixed(1)}" y1="${top - 6}" x2="${peakX.toFixed(1)}" y2="${baseY}" stroke="#ffd1a2" stroke-width="1" stroke-dasharray="4 3" opacity="0.85"/>`
+  const peakBadge = `<circle cx="${peakX.toFixed(1)}" cy="${(peakY - 6).toFixed(1)}" r="4" fill="#ffd166" stroke="#222" stroke-width="0.8"/>`
+  const peakLabel = `<text x="${peakX.toFixed(1)}" y="${(peakY - 10).toFixed(1)}" fill="#fff" font-size="9" font-weight="700" font-family="ui-monospace,monospace" text-anchor="middle">${Math.round(headHours[peakIdx]?.temperature ?? 0)}&#176;</text>`
+
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${gradDef}${ribbon}${bars}${curves}${peakLine}${peakBadge}${peakLabel}${now}${tempLabels}${axis}</svg>`
 }
 
 function legendHtml(results: ModelResult[]) {
