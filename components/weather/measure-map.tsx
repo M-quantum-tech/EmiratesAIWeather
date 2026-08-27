@@ -458,6 +458,9 @@ export function MeasureMap() {
         zoom: 6,
         zoomControl: true,
         attributionControl: false,
+        // limit max zoom to avoid unsupported overlay zooms and visual jitter
+        maxZoom: 12,
+        minZoom: 4,
       })
       const cartoKey = process.env.NEXT_PUBLIC_CARTO_API_KEY
       let base = ""
