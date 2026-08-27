@@ -37,8 +37,9 @@ const LAYERS = [
 ] as const
 type LayerId = (typeof LAYERS)[number]["id"]
 
-// Overlay zoom support: RainViewer frames are available only up to a limited zoom.
-const MAX_OVERLAY_ZOOM = 7
+// Overlay zoom support: allow overlays up to higher zoom for closer inspection.
+// RainViewer frames are natively available at 512 tiles; use larger tileSize/zoomOffset so clouds/radar feel bigger.
+const MAX_OVERLAY_ZOOM = 12
 
 // Wind-speed legend (m/s) matching the Windy-style heatmap palette (calm → gale).
 const WIND_SCALE = [
@@ -607,16 +608,19 @@ export function MeasureMap() {
     }
     const frame = frames[Math.min(frameIdx, frames.length - 1)]
     if (!frame) return
+    // Use 512 tiles and a zoomOffset so overlays appear larger at moderate zooms.
     const url =
       layer === "radar"
-        ? `${store.host}${frame.path}/256/{z}/{x}/{y}/4/1_1.png`
-        : `${store.host}${frame.path}/256/{z}/{x}/{y}/0/0_0.png`
+        ? `${store.host}${frame.path}/512/{z}/{x}/{y}/4/1_1.png`
+        : `${store.host}${frame.path}/512/{z}/{x}/{y}/0/0_0.png`
     if (overlayRef.current) {
       overlayRef.current.setUrl(url)
     } else {
       overlayRef.current = L.tileLayer(url, {
-        opacity: layer === "radar" ? 0.72 : 0.55,
-        maxZoom: 18,
+        opacity: layer === "radar" ? 0.82 : 0.72, // stronger opacity for visibility
+        maxZoom: MAX_OVERLAY_ZOOM,
+        tileSize: 512,
+        zoomOffset: -1,
         zIndex: 400,
       }).addTo(map)
     }
@@ -648,16 +652,19 @@ export function MeasureMap() {
     if (!store) return
     const frame = frames[Math.min(frameIdx, frames.length - 1)]
     if (!frame) return
+    // Use larger tiles for overlays so cloud graphics feel more prominent at higher zooms.
     const url =
       layer === "radar"
-        ? `${store.host}${frame.path}/256/{z}/{x}/{y}/4/1_1.png`
-        : `${store.host}${frame.path}/256/{z}/{x}/{y}/0/0_0.png`
+        ? `${store.host}${frame.path}/512/{z}/{x}/{y}/4/1_1.png`
+        : `${store.host}${frame.path}/512/{z}/{x}/{y}/0/0_0.png`
     if (overlayRef.current) {
       overlayRef.current.setUrl(url)
     } else {
       overlayRef.current = L.tileLayer(url, {
-        opacity: layer === "radar" ? 0.72 : 0.55,
+        opacity: layer === "radar" ? 0.82 : 0.78,
         maxZoom: MAX_OVERLAY_ZOOM,
+        tileSize: 512,
+        zoomOffset: -1,
         zIndex: 400,
       }).addTo(map)
     }
