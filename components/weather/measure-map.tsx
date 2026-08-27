@@ -258,6 +258,68 @@ function multiModelSvg(results: ModelResult[], barHours: any[], nowIdx: number, 
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${gradDef}${ribbon}${bars}${curves}${peakLine}${peakBadge}${peakLabel}${now}${tempLabels}${axis}</svg>`
 }
 
+/**
+ * Small multi-parameter trend chart (0-24h) showing humidity, wind speed, wind gust, precipitation probability, and wind direction markers.
+ * Hours must be an array of 24 hourly objects with fields: temperature, precipitationProbability, windSpeed, windGust, windDirection, relativeHumidity/humidity.
+ */
+function multiParamSvg(hours: any[], units: Units, W = 640, H = 84) {
+  if (!hours || hours.length === 0) return ""
+  const n = Math.min(24, hours.length)
+  const step = W / (n - 1)
+  const tx = (i: number) => i * step
+
+  const vals = {
+    rh: hours.slice(0, n).map((h: any) => (h.relativeHumidity ?? h.humidity ?? h.rh ?? 0)),
+    wind: hours.slice(0, n).map((h: any) => h.windSpeed ?? h.windspeed ?? h.wind ?? 0),
+    gust: hours.slice(0, n).map((h: any) => h.windGust ?? h.wind_gust ?? h.gust ?? 0),
+    pop: hours.slice(0, n).map((h: any) => h.precipitationProbability ?? h.pop ?? h.precipProbability ?? 0),
+    dir: hours.slice(0, n).map((h: any) => h.windDirection ?? h.wind_dir ?? 0),
+  }
+
+  const scale = (arr: number[], minOverride?: number, maxOverride?: number) => {
+    const min = typeof minOverride === 'number' ? minOverride : Math.min(...arr)
+    const max = typeof maxOverride === 'number' ? maxOverride : Math.max(...arr)
+    const span = Math.max(max - min, 1)
+    return { min, max, span, y: (v: number) => 6 + (1 - (v - min) / span) * (H - 18) }
+  }
+
+  const rhS = scale(vals.rh, 0, 100)
+  const windS = scale(vals.wind, 0, Math.max(1, Math.ceil(Math.max(...vals.wind))))
+  const gustS = scale(vals.gust, 0, Math.max(1, Math.ceil(Math.max(...vals.gust))))
+  const popS = scale(vals.pop, 0, 100)
+
+  const pathFor = (arr: number[], s: any) => arr.map((v: number, i: number) => `${i === 0 ? 'M' : 'L'}${tx(i).toFixed(1)},${s.y(v).toFixed(1)}`).join(' ')
+
+  const rhPath = `<path d="${pathFor(vals.rh, rhS)}" fill="none" stroke="#3b82f6" stroke-width="1.2" opacity="0.95"/>`
+  const windPath = `<path d="${pathFor(vals.wind, windS)}" fill="none" stroke="#06b6d4" stroke-width="1.2" opacity="0.95"/>`
+  const gustPath = `<path d="${pathFor(vals.gust, gustS)}" fill="none" stroke="#f97316" stroke-width="1.2" opacity="0.95" stroke-dasharray="3 2"/>`
+  const popPath = `<path d="${pathFor(vals.pop, popS)}" fill="none" stroke="#8b5cf6" stroke-width="1.2" opacity="0.7"/>`
+
+  // Wind direction markers: small rotated triangles above the line
+  const dirMarkers = vals.dir
+    .map((d: number, i: number) => {
+      const x = tx(i)
+      const y = 6
+      const size = 6
+      const points = `${x},${y} ${x - size},${y + size * 1.5} ${x + size},${y + size * 1.5}`
+      return `<g transform="translate(0,0) rotate(${d}, ${x}, ${y})"><polygon points="${points}" fill="#fff" opacity="0.9"/></g>`
+    })
+    .join('')
+
+  const legend = `
+    <g font-family="ui-monospace,monospace" font-size="10">
+      <rect x="0" y="${H - 14}" width="${W}" height="14" fill="transparent" />
+      <g transform="translate(6,${H - 11})">
+        <circle cx="6" cy="0" r="5" fill="#3b82f6"/> <text x="14" y="2" fill="#cbd5e1">Humidity</text>
+        <circle cx="110" cy="0" r="5" fill="#06b6d4"/> <text x="118" y="2" fill="#cbd5e1">Wind</text>
+        <circle cx="200" cy="0" r="5" fill="#f97316"/> <text x="208" y="2" fill="#cbd5e1">Gust</text>
+        <circle cx="288" cy="0" r="5" fill="#8b5cf6"/> <text x="296" y="2" fill="#cbd5e1">Precip %</text>
+      </g>
+    </g>`
+
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">${rhPath}${windPath}${gustPath}${popPath}${dirMarkers}${legend}</svg>`
+}
+
 function legendHtml(results: ModelResult[]) {
   return `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">${results
     .map(
@@ -304,10 +366,12 @@ function buildSpotPopupHtml(point: Point, best: any, rawResults: ModelResult[], 
 
   // Build the main content (use multiModelSvg but with single-series and larger size)
   const chart = multiModelSvg(results, hours, nowIdx, units, W, H)
+  const params = multiParamSvg(hours, units, W, 88)
 
   return `<div style="width:${W}px;font-family:ui-sans-serif,system-ui;color:var(--foreground)">
     ${header}
     <div style="padding:8px">${chart}</div>
+    <div style="padding:6px 8px;margin-top:6px;background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent);border-top:1px solid rgba(255,255,255,0.03)">${params}</div>
     ${footer}
   </div>`
 }
