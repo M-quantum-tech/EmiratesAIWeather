@@ -330,24 +330,19 @@ function legendHtml(results: ModelResult[]) {
 }
 
 /** Full popup card HTML: header (best match) + emoji strip + multi-model meteogram + legend + summary. */
-function buildSpotPopupHtml(point: Point, best: any, rawResults: ModelResult[], units: Units, W = 640, H = 236) {
-  // Single-model 24-hour popup with header and footer (0-24h analysis)
+function buildSpotPopupHtml(point: Point, best: any, rawResults: ModelResult[], units: Units, W = 920, H = 260) {
+  // Single-model 24-hour popup with header and footer (00:00–23:00 local day breakdown)
   const allHours: any[] = best.hourly ?? []
   const cur = best.current ?? {}
   const globalNowIdx = typeof best.currentHourIndex === "number" ? best.currentHourIndex : 0
 
   // Determine the local "today" date for the picked spot by using the timestamp at the current hour index.
-  // Then slice the hourly array to only include hours for that date (00:00–23:00 local day) so the popup shows a full-day breakdown for the chosen location.
   const isoNow = allHours[globalNowIdx]?.time ?? new Date().toISOString()
   const todayDateKey = isoNow.slice(0, 10)
   const hours = allHours.filter((h) => (h.time || "").slice(0, 10) === todayDateKey).slice(0, 24)
-
-  // If filtering produced no results (edge cases), fall back to the next 24 hours starting at globalNowIdx
   if (!hours.length && allHours.length) {
     hours.push(...allHours.slice(globalNowIdx, globalNowIdx + 24))
   }
-
-  // Map the now index into the sliced hours array
   const nowIdx = hours.findIndex((h) => h.time === allHours[globalNowIdx]?.time)
   const resolvedNowIdx = nowIdx >= 0 ? nowIdx : 0
 
@@ -363,6 +358,8 @@ function buildSpotPopupHtml(point: Point, best: any, rawResults: ModelResult[], 
   const headEmoji = weatherEmoji(cur.weatherCode ?? 0, cur.isDay ?? true)
 
   const results: ModelResult[] = rawResults
+
+  // Header (left: emoji + temp, right: coords)
   const header = `<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;padding:10px;border-bottom:1px solid var(--border)">
       <div style="font-size:28px">${headEmoji}</div>
       <div style="line-height:1">
@@ -372,19 +369,34 @@ function buildSpotPopupHtml(point: Point, best: any, rawResults: ModelResult[], 
       <div style="margin-left:auto;text-align:right;font:600 11px ui-monospace,monospace;color:var(--muted-foreground)">${point.lat.toFixed(3)}°, ${point.lon.toFixed(3)}°</div>
     </div>`
 
+  // Top title similar to "Today · hourly breakdown"
+  const title = `<div style="padding:10px 12px;font-weight:700;color:var(--muted-foreground);font-size:14px">Today · hourly breakdown</div>`
+
+  // Time row and sky icon row
+  const cellW = Math.max(28, Math.floor(W / 24))
+  const times = hours.map((h:any,i:number)=>`<div style="width:${cellW}px;text-align:center;color:#9aa3ad;font-size:11px">${(h.time||'').slice(11,13)}</div>`).join("")
+  const skies = hours.map((h:any,i:number)=>{
+    const isDay = typeof h.isDay === 'boolean' ? h.isDay : (parseInt((h.time||'').slice(11,13),10) >= 6 && parseInt((h.time||'').slice(11,13),10) < 19)
+    return `<div style="width:${cellW}px;text-align:center;font-size:16px">${weatherEmoji(h.weatherCode ?? 0, isDay)}</div>`
+  }).join("")
+
+  // Main big meteogram using the multiModelSvg for the day's hours
+  const chartH = Math.max(180, H - 80)
+  const chart = multiModelSvg(results, hours, resolvedNowIdx, units, W, chartH)
+  const params = multiParamSvg(hours, units, W, 88)
+
   const footer = `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:13px;display:flex;gap:12px;justify-content:space-between;color:var(--muted-foreground)">
-    <div><strong>0–24h</strong>: Tmax ${tmax}${tempUnit(units)} at ${tmaxIdx>=0?hours[tmaxIdx].time.slice(11,16):'—'}</div>
+    <div><strong>00–23</strong>: Tmax ${tmax}${tempUnit(units)} at ${tmaxIdx>=0?hours[tmaxIdx].time.slice(11,16):'—'}</div>
     <div>Tmin ${tmin}${tempUnit(units)} at ${tminIdx>=0?hours[tminIdx].time.slice(11,16):'—'}</div>
     <div>Avg wind ${(units==='metric'?toMetersPerSecond(avgWind).toFixed(1):Math.round(avgWind))} ${units==='metric'?'m/s':'mph'}</div>
     <div>Avg rain ${avgPrecip}%</div>
   </div>`
 
-  // Build the main content (use multiModelSvg but with single-series and larger size)
-  const chart = multiModelSvg(results, hours, nowIdx, units, W, H)
-  const params = multiParamSvg(hours, units, W, 88)
-
   return `<div style="width:${W}px;font-family:ui-sans-serif,system-ui;color:var(--foreground)">
     ${header}
+    ${title}
+    <div style="display:flex;align-items:center;padding:0 6px;overflow:hidden">${times}</div>
+    <div style="display:flex;align-items:center;padding:2px 6px 8px 6px;overflow:hidden">${skies}</div>
     <div style="padding:8px">${chart}</div>
     <div style="padding:6px 8px;margin-top:6px;background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent);border-top:1px solid rgba(255,255,255,0.03)">${params}</div>
     ${footer}
@@ -477,7 +489,7 @@ export function MeasureMap() {
       if (!marker) return
       setSpotForecast(null)
       // larger popup bounds for 24-hour expanded view
-      marker.bindPopup(LOADING_HTML, { className: "spot-popup", minWidth: 660, maxWidth: 700, autoPan: true }).openPopup()
+      marker.bindPopup(LOADING_HTML, { className: "spot-popup", minWidth: 940, maxWidth: 980, autoPan: true }).openPopup()
       try {
         const settled = await Promise.all(
           MODELS.map(async (m) => {
@@ -504,7 +516,7 @@ export function MeasureMap() {
           hours: s.data.hourly,
         }))
         // Build a single-model 24h popup (double-sized)
-        marker.setPopupContent(buildSpotPopupHtml(point, best, results, units, 640, 236))
+        marker.setPopupContent(buildSpotPopupHtml(point, best, results, units, 920, 260))
         // Also set persistent spot forecast panel (used in pick mode)
         const id = `spot-${Date.now()}`
         const entry = { id, point, best, results }
