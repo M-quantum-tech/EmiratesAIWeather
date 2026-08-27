@@ -415,7 +415,16 @@ export function MeasureMap() {
         zoomControl: true,
         attributionControl: false,
       })
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", { maxZoom: 18 }).addTo(map)
+      const cartoKey = process.env.NEXT_PUBLIC_CARTO_API_KEY
+      let base = ""
+      if (cartoKey) {
+        base = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+        base = base + `?api_key=${cartoKey}`
+      } else {
+        // Free dark basemap (no API key required)
+        base = "https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}.png"
+      }
+      L.tileLayer(base, { maxZoom: 18, attribution: '&copy; Stadia Maps &amp; OpenStreetMap contributors' }).addTo(map)
       map.on("click", (e: any) => {
         const next: Point = { lat: e.latlng.lat, lon: e.latlng.lng }
         // Pick mode: single pin replaced each click. Measure mode: accumulate up to two.
