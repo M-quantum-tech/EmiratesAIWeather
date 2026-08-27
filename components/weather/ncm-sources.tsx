@@ -27,6 +27,8 @@ import {
   type WarnLevel,
 } from "@/lib/ncm-warnings"
 import { cn } from "@/lib/utils"
+import { useWeather } from "@/components/weather/weather-provider"
+import { buildSpotPopupHtml, LOADING_HTML, ERROR_HTML } from "@/components/weather/measure-map"
 
 type Frame = { time: number; path: string }
 type Maps = { host: string; radar: Frame[]; satellite: Frame[] }
@@ -496,6 +498,44 @@ export function NcmSources() {
     // attach cleanup to the return so React will remove handlers and layers on unmount
     return cleanup
   }, [layer, geoReady, display])
+
+  // Add click-to-open-forecast popup like the Measure map so NCM panel shows the same Today breakdown
+  useEffect(() => {
+    const L = leafletRef.current
+    const map = mapRef.current
+    const { units } = useWeather()
+    if (!L || !map) return
+    function onClick(e: any) {
+      try {
+        const lat = e.latlng.lat
+        const lon = e.latlng.lng
+        const point = { lat, lon }
+        const marker = L.marker([lat, lon]).addTo(map)
+        marker.bindPopup(LOADING_HTML, { className: 'spot-popup', minWidth: 940, maxWidth: 980, autoPan: true }).openPopup()
+        ;(async () => {
+          try {
+            const res = await fetch(`/api/weather?lat=${lat}&lon=${lon}&units=${units}&model=best_match`)
+            if (!res.ok) {
+              marker.setPopupContent(ERROR_HTML)
+              return
+            }
+            const data = await res.json()
+            const best = data
+            const results = [
+              { id: 'best_match', label: 'Forecast', color: '#f5b642', hours: data.hourly },
+            ]
+            marker.setPopupContent(buildSpotPopupHtml(point, best, results, units, 920, 260))
+          } catch (err) {
+            console.log('ncm spot fetch failed', err)
+            marker.setPopupContent(ERROR_HTML)
+          }
+        })()
+      } catch (err) {}
+    }
+    map.on('click', onClick)
+    return () => map.off('click', onClick)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapRef.current, leafletRef.current, geoReady])
 
   // Animation timer (radar / satellite frame loop).
   useEffect(() => {

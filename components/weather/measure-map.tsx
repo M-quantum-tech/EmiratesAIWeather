@@ -330,7 +330,7 @@ function legendHtml(results: ModelResult[]) {
 }
 
 /** Full popup card HTML: header (best match) + emoji strip + multi-model meteogram + legend + summary. */
-function buildSpotPopupHtml(point: Point, best: any, rawResults: ModelResult[], units: Units, W = 920, H = 260) {
+export function buildSpotPopupHtml(point: Point, best: any, rawResults: ModelResult[], units: Units, W = 920, H = 260) {
   // Single-model 24-hour popup with header and footer (00:00–23:00 local day breakdown)
   const allHours: any[] = best.hourly ?? []
   const cur = best.current ?? {}
@@ -372,18 +372,44 @@ function buildSpotPopupHtml(point: Point, best: any, rawResults: ModelResult[], 
   // Top title similar to "Today · hourly breakdown"
   const title = `<div style="padding:10px 12px;font-weight:700;color:var(--muted-foreground);font-size:14px">Today · hourly breakdown</div>`
 
-  // Time row and sky icon row
-  const cellW = Math.max(28, Math.floor(W / 24))
+  // Left Y-axis (emoji + label) column width
+  const leftW = 92
+  const cellW = Math.max(28, Math.floor((W - leftW) / 24))
+
+  // Helper: wind direction arrow from degrees
+  const degToArrow = (d:any) => {
+    const deg = Number(d) || 0
+    if (deg < 22.5 || deg >= 337.5) return '↑'
+    if (deg < 67.5) return '↗'
+    if (deg < 112.5) return '→'
+    if (deg < 157.5) return '↘'
+    if (deg < 202.5) return '↓'
+    if (deg < 247.5) return '↙'
+    if (deg < 292.5) return '←'
+    return '↖'
+  }
+
   const times = hours.map((h:any,i:number)=>`<div style="width:${cellW}px;text-align:center;color:#9aa3ad;font-size:11px">${(h.time||'').slice(11,13)}</div>`).join("")
   const skies = hours.map((h:any,i:number)=>{
     const isDay = typeof h.isDay === 'boolean' ? h.isDay : (parseInt((h.time||'').slice(11,13),10) >= 6 && parseInt((h.time||'').slice(11,13),10) < 19)
     return `<div style="width:${cellW}px;text-align:center;font-size:16px">${weatherEmoji(h.weatherCode ?? 0, isDay)}</div>`
   }).join("")
 
+  // Numeric rows: precip mm, precip %, feels, RH%, wind speed, gust
+  const precipMm = hours.map((h:any)=>`<div style="width:${cellW}px;text-align:center;color:var(--muted-foreground);font-size:12px">${h.precipitation?.toFixed? (h.precipitation).toFixed(1) : (h.precipitation ?? h.precipitationAmount ?? 0)}</div>`).join("")
+  const precipP = hours.map((h:any)=>`<div style="width:${cellW}px;text-align:center;color:var(--muted-foreground);font-size:12px">${Math.round(h.precipitationProbability??h.pop??0)}</div>`).join("")
+  const feels = hours.map((h:any)=>`<div style="width:${cellW}px;text-align:center;color:#fb923c;font-size:12px">${Math.round(h.apparentTemperature ?? h.feels_like ?? h.temperature ?? 0)}&#176;</div>`).join("")
+  const rh = hours.map((h:any)=>`<div style="width:${cellW}px;text-align:center;color:var(--muted-foreground);font-size:12px">${Math.round(h.relativeHumidity??h.rh??0)}</div>`).join("")
+  const windSpeedRow = hours.map((h:any)=>`<div style="width:${cellW}px;text-align:center;color:#06b6d4;font-size:12px">${(h.windSpeed??h.wind_speed??0).toFixed? (Number((h.windSpeed??h.wind_speed??0)).toFixed(1)) : (h.windSpeed??h.wind_speed??0)}</div>`).join("")
+  const gustRow = hours.map((h:any)=>`<div style="width:${cellW}px;text-align:center;color:#f97316;font-size:12px">${(h.windGust??h.wind_gust??0).toFixed? (Number((h.windGust??h.wind_gust??0)).toFixed(1)) : (h.windGust??h.wind_gust??0)}</div>`).join("")
+  const windArrows = hours.map((h:any)=>`<div style="width:${cellW}px;text-align:center;color:#9aa3ad;font-size:12px">${degToArrow(h.windDirection??h.wind_dir??h.wind_deg)}</div>`).join("")
+
   // Main big meteogram using the multiModelSvg for the day's hours
-  const chartH = Math.max(180, H - 80)
-  const chart = multiModelSvg(results, hours, resolvedNowIdx, units, W, chartH)
-  const params = multiParamSvg(hours, units, W, 88)
+  const chartH = Math.max(180, H - 100)
+  const chart = multiModelSvg(results, hours, resolvedNowIdx, units, W - leftW, chartH)
+  const params = multiParamSvg(hours, units, W - leftW, 88)
+
+  const legendBar = `<div style="display:flex;align-items:center;gap:8px;padding:8px 6px;font-size:12px;color:var(--muted-foreground)"><div style="opacity:0.9">00H → 23H · EVERY HOUR</div><div style="display:flex;align-items:center;gap:6px;margin-left:auto"><div style="width:12px;height:8px;background:linear-gradient(90deg,#3b82f6,#f97316);border-radius:4px"></div><div>COOL → HOT</div><div style="width:8px;height:8px;background:#f59e0b;border-radius:50%"></div><div>NOW</div></div></div>`
 
   const footer = `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:13px;display:flex;gap:12px;justify-content:space-between;color:var(--muted-foreground)">
     <div><strong>00–23</strong>: Tmax ${tmax}${tempUnit(units)} at ${tmaxIdx>=0?hours[tmaxIdx].time.slice(11,16):'—'}</div>
@@ -392,19 +418,44 @@ function buildSpotPopupHtml(point: Point, best: any, rawResults: ModelResult[], 
     <div>Avg rain ${avgPrecip}%</div>
   </div>`
 
-  return `<div style="width:${W}px;font-family:ui-sans-serif,system-ui;color:var(--foreground)">
-    ${header}
-    ${title}
-    <div style="display:flex;align-items:center;padding:0 6px;overflow:hidden">${times}</div>
-    <div style="display:flex;align-items:center;padding:2px 6px 8px 6px;overflow:hidden">${skies}</div>
-    <div style="padding:8px">${chart}</div>
-    <div style="padding:6px 8px;margin-top:6px;background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent);border-top:1px solid rgba(255,255,255,0.03)">${params}</div>
+  // Left axis column HTML (rows: empty, Sky, °C, mm, % (precip %), feels, RH%, km/h arrow, gust)
+  const leftAxis = `<div style="width:${leftW}px;display:flex;flex-direction:column;gap:6px;padding:6px 8px;color:var(--muted-foreground);font-size:12px">
+    <div style="height:28px"></div>
+    <div style="height:28px;display:flex;align-items:center;gap:8px">🌤️ <span>Sky</span></div>
+    <div style="height:${chartH}px;display:flex;align-items:flex-start;gap:8px">🌡️ <span>°C</span></div>
+    <div style="height:24px;display:flex;align-items:center;gap:8px">💧 <span>mm</span></div>
+    <div style="height:24px;display:flex;align-items:center;gap:8px">☔ <span>%</span></div>
+    <div style="height:24px;display:flex;align-items:center;gap:8px;color:#fb923c">🔥 <span>Feels</span></div>
+    <div style="height:24px;display:flex;align-items:center;gap:8px">💦 <span>RH%</span></div>
+    <div style="height:24px;display:flex;align-items:center;gap:8px">🍃 <span>km/h</span></div>
+    <div style="height:24px;display:flex;align-items:center;gap:8px">🌬️ <span>Gust</span></div>
+  </div>`
+
+  // Right content: times, skies, chart, numeric rows
+  const right = `
+    <div style="flex:1;overflow:hidden">
+      <div style="display:flex;align-items:center;padding:0 6px;overflow:hidden">${times}</div>
+      <div style="display:flex;align-items:center;padding:2px 6px 8px 6px;overflow:hidden">${skies}</div>
+      <div style="padding:8px">${chart}</div>
+      <div style="display:flex;align-items:center;padding:0 6px;overflow:hidden">${precipMm}</div>
+      <div style="display:flex;align-items:center;padding:0 6px;overflow:hidden">${precipP}</div>
+      <div style="display:flex;align-items:center;padding:0 6px;overflow:hidden">${feels}</div>
+      <div style="display:flex;align-items:center;padding:0 6px;overflow:hidden">${rh}</div>
+      <div style="display:flex;align-items:center;padding:0 6px;overflow:hidden">${windArrows}${windSpeedRow}</div>
+      <div style="display:flex;align-items:center;padding:0 6px;overflow:hidden">${gustRow}</div>
+      <div style="padding:6px 8px;margin-top:6px;background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent);border-top:1px solid rgba(255,255,255,0.03)">${params}</div>
+      ${legendBar}
+    </div>`
+
+  return `<div style="width:${W}px;font-family:ui-sans-serif,system-ui;color:var(--foreground);display:flex"> 
+    ${leftAxis}
+    ${right}
     ${footer}
   </div>`
 }
 
-const LOADING_HTML = `<div style="width:660px;padding:8px 4px;font:11px ui-monospace,monospace;color:var(--muted-foreground)">Loading 24-hour forecast&hellip;</div>`
-const ERROR_HTML = `<div style="width:660px;padding:8px 4px;font:11px ui-monospace,monospace;color:var(--muted-foreground)">Forecast unavailable for this spot.</div>`
+export const LOADING_HTML = `<div style="width:660px;padding:8px 4px;font:11px ui-monospace,monospace;color:var(--muted-foreground)">Loading 24-hour forecast&hellip;</div>`
+export const ERROR_HTML = `<div style="width:660px;padding:8px 4px;font:11px ui-monospace,monospace;color:var(--muted-foreground)">Forecast unavailable for this spot.</div>`
 
 export function MeasureMap() {
   const { location, units } = useWeather()
