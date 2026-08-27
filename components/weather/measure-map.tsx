@@ -86,6 +86,15 @@ function markerIcon(L: any, letter: "A" | "B") {
   })
 }
 
+function flagIcon(L: any) {
+  return L.divIcon({
+    className: "",
+    html: `<div style="transform:translateY(-6px);font-size:20px">📍</div>`,
+    iconSize: [24, 28],
+    iconAnchor: [12, 28],
+  })
+}
+
 type ModelResult = { id: ModelId | "consensus"; label: string; color: string; hours: any[] }
 
 // EmiratesConsensus: our own blended model = hourly mean of ECMWF + ICON + GFS.
@@ -319,6 +328,7 @@ export function MeasureMap() {
   const [query, setQuery] = useState("")
   const [searching, setSearching] = useState(false)
   const [searchNote, setSearchNote] = useState<string | null>(null)
+  const [spotForecast, setSpotForecast] = useState<{ point: Point; best: any; results: ModelResult[] } | null>(null)
 
   // Wind layer state
   const windLayerRef = useRef<any>(null)
@@ -347,7 +357,8 @@ export function MeasureMap() {
       if (!L || !map) return
       clearOverlays()
       pts.forEach((p, i) => {
-        const marker = L.marker([p.lat, p.lon], { icon: markerIcon(L, i === 0 ? "A" : "B") }).addTo(map)
+        const icon = modeRef.current === 'pick' ? flagIcon(L) : markerIcon(L, i === 0 ? "A" : "B")
+        const marker = L.marker([p.lat, p.lon], { icon }).addTo(map)
         markersRef.current.push(marker)
       })
       if (pts.length === 2) {
@@ -368,6 +379,7 @@ export function MeasureMap() {
   useEffect(() => {
     showSpotRef.current = async (marker: any, point: Point) => {
       if (!marker) return
+      setSpotForecast(null)
       marker.bindPopup(LOADING_HTML, { className: "spot-popup", minWidth: 332, maxWidth: 344, autoPan: true }).openPopup()
       try {
         const settled = await Promise.all(
@@ -395,9 +407,12 @@ export function MeasureMap() {
           hours: s.data.hourly,
         }))
         marker.setPopupContent(buildSpotPopupHtml(point, best, results, units))
+        // Also set persistent spot forecast panel (used in pick mode)
+        setSpotForecast({ point, best, results })
       } catch (err) {
         console.log("[v0] spot forecast failed:", err instanceof Error ? err.message : err)
         marker.setPopupContent(ERROR_HTML)
+        setSpotForecast(null)
       }
     }
   }, [units])
@@ -421,10 +436,10 @@ export function MeasureMap() {
         base = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
         base = base + `?api_key=${cartoKey}`
       } else {
-        // Free basemap (OpenStreetMap)
-        base = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        // Free basemap (Stamen Terrain) with English place labels
+        base = "https://stamen-tiles.a.ssl.fastly.net/terrain/{z}/{x}/{y}.jpg"
       }
-      L.tileLayer(base, { maxZoom: 18, attribution: '&copy; OpenStreetMap contributors' }).addTo(map)
+      L.tileLayer(base, { maxZoom: 18, attribution: 'Map tiles by Stamen Design, CC BY 3.0 — Map data © OpenStreetMap contributors' }).addTo(map)
       map.on("click", (e: any) => {
         const next: Point = { lat: e.latlng.lat, lon: e.latlng.lng }
         // Pick mode: single pin replaced each click. Measure mode: accumulate up to two.
@@ -886,6 +901,37 @@ export function MeasureMap() {
         role="application"
         aria-label="Interactive map: pick any spot for an all-model 24-hour meteogram, toggle free radar/cloud layers, or measure distance between two spots"
       />
+
+      {/* Persistent pick-mode forecast panel (top-right) */}
+      {mode === 'pick' && spotForecast ? (
+        <div className="pointer-events-auto fixed right-4 top-20 z-50 w-80 max-w-[420px] rounded-md border border-border bg-card p-3 shadow-lg">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <div className="label-caps text-xs text-muted-foreground">Point forecast (24h)</div>
+              <div className="font-semibold">{spotForecast.best?.name ?? `${spotForecast.point.lat.toFixed(3)}, ${spotForecast.point.lon.toFixed(3)}`}</div>
+            </div>
+            <div className="flex gap-1">
+              <button
+                className="rounded px-2 py-1 text-xs hover:bg-secondary"
+                onClick={() => {
+                  // remove pin and clear panel
+                  setSpotForecast(null)
+                  pointsRef.current = []
+                  setPoints([])
+                  clearOverlays()
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+          <div className="mt-2">
+            {/* meteogram */}
+            <div dangerouslySetInnerHTML={{ __html: multiModelSvg(spotForecast.results, spotForecast.best.hourly ?? [], typeof spotForecast.best.currentHourIndex === 'number' ? spotForecast.best.currentHourIndex : 0, units) }} />
+            <div className="mt-2 text-xs text-muted-foreground">Models: {spotForecast.results.map(r=>r.label).join(' · ')}</div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Route metrics */}
       <div className="grid gap-px bg-border sm:grid-cols-3">
