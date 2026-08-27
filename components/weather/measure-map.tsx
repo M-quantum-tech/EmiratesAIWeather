@@ -461,10 +461,10 @@ export function MeasureMap() {
         base = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
         base = base + `?api_key=${cartoKey}`
       } else {
-        // Free basemap (Stamen Terrain) with English place labels
-        base = "https://stamen-tiles.a.ssl.fastly.net/terrain/{z}/{x}/{y}.jpg"
+        // Free basemap (OpenStreetMap Standard) — reliable public tiles
+        base = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       }
-      L.tileLayer(base, { maxZoom: 18, attribution: 'Map tiles by Stamen Design, CC BY 3.0 — Map data © OpenStreetMap contributors' }).addTo(map)
+      L.tileLayer(base, { maxZoom: 18, attribution: '&copy; OpenStreetMap contributors' }).addTo(map)
       map.on("click", (e: any) => {
         const next: Point = { lat: e.latlng.lat, lon: e.latlng.lng }
         if (modeRef.current === 'pick') {
