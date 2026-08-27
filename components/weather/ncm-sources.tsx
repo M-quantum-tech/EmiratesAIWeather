@@ -238,10 +238,10 @@ export function NcmSources() {
         base = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
         base = base + `?api_key=${cartoKey}`
       } else {
-        // Free dark basemap (no API key required)
-        base = "https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}.png"
+        // Free basemap (OpenStreetMap)
+        base = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       }
-      L.tileLayer(base, { maxZoom: 12, attribution: '&copy; Stadia Maps &amp; OpenStreetMap contributors' }).addTo(map)
+      L.tileLayer(base, { maxZoom: 12, attribution: '&copy; OpenStreetMap contributors' }).addTo(map)
       mapRef.current = map
       if (!cancelled) setMapReady(true)
       setTimeout(() => map.invalidateSize(), 250)
