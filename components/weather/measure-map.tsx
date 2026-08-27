@@ -31,12 +31,9 @@ const MODELS = [
 ] as const
 type ModelId = (typeof MODELS)[number]["id"]
 
-// Free weather map layers (RainViewer, no API key).
+// Map layer selector — only base map here (other overlays exist on the live NCM panel).
 const LAYERS = [
   { id: "none", label: "Base map" },
-  { id: "wind", label: "Wind field" },
-  { id: "radar", label: "Rain radar" },
-  { id: "clouds", label: "Clouds / IR" },
 ] as const
 type LayerId = (typeof LAYERS)[number]["id"]
 
@@ -453,13 +450,12 @@ export function MeasureMap() {
       const cartoKey = process.env.NEXT_PUBLIC_CARTO_API_KEY
       let base = ""
       if (cartoKey) {
-        base = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-        base = base + `?api_key=${cartoKey}`
+        base = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?api_key=" + cartoKey
       } else {
-        // Prefer Carto Voyager (English labels) when no private Carto key is set — public Voyager tiles are readable.
-        base = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"
+        // Use OpenStreetMap standard tiles when no Carto key is provided to avoid API key watermarks.
+        base = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       }
-      L.tileLayer(base, { maxZoom: 18, attribution: cartoKey ? '&copy; CARTO / OSM' : 'Map tiles © CARTO / OpenStreetMap contributors' }).addTo(map)
+      L.tileLayer(base, { maxZoom: 18, attribution: cartoKey ? '&copy; CARTO / OSM' : '&copy; OpenStreetMap contributors' }).addTo(map)
 
       // Hide radar/cloud overlays when user zooms beyond supported tile levels.
       map.on('zoomend', () => {
@@ -674,8 +670,8 @@ export function MeasureMap() {
       if (!container) return
       fullMapRef.current = L.map(container, { center: [selected.point.lat, selected.point.lon], zoom: 8, attributionControl: false })
       const cartoKey = process.env.NEXT_PUBLIC_CARTO_API_KEY
-      const base = cartoKey ? `https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?api_key=${cartoKey}` : 'https://stamen-tiles.a.ssl.fastly.net/terrain/{z}/{x}/{y}.jpg'
-      L.tileLayer(base, { maxZoom: 18, attribution: cartoKey ? '' : 'Map tiles by Stamen Design, CC BY 3.0 — Map data © OpenStreetMap contributors' }).addTo(fullMapRef.current)
+      const base = cartoKey ? `https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?api_key=${cartoKey}` : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
+      L.tileLayer(base, { maxZoom: 18, attribution: cartoKey ? '' : '&copy; OpenStreetMap contributors' }).addTo(fullMapRef.current)
       // add flag marker
       L.marker([selected.point.lat, selected.point.lon], { icon: flagIcon(L) }).addTo(fullMapRef.current)
       // add wind layer if available (use current wind frame)
