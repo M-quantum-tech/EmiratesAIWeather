@@ -19,11 +19,11 @@ import { Panel } from "@/components/station/panel"
 import { fetchWindFrames, type WindFrames } from "@/lib/wind-field"
 import { createWindLayer } from "@/lib/wind-layer"
 import {
-  fetchEmirateWarnings,
-  sampleWarnings,
+  fetchWarningFrames,
   WARN_FILL,
   WARN_LEGEND,
   type EmirateWarning,
+  type WarningFrames,
   type WarnLevel,
 } from "@/lib/ncm-warnings"
 import { cn } from "@/lib/utils"
@@ -43,16 +43,17 @@ const NCM_LINKS = [
   { label: "Satellite HD Global", href: "https://ghaith.ncm.gov.ae/?lang=en#satellite-hd-global", icon: Satellite },
 ] as const
 
-// Al Bahar-style precipitation intensity scale (light → extreme). Matches the
-// RainViewer "Rainbow @ SELEX-SI" colour scheme (index 7) used for the radar tiles.
+// NCM Al Bahar-style reflectivity scale (light → extreme): green for moderate rain,
+// red for heavy, magenta/white for violent cores. Matches the RainViewer "NEXRAD
+// Level III" colour scheme (index 6) used for the radar tiles.
 const RADAR_SCALE = [
-  { c: "#37c6ff", label: "Light" },
-  { c: "#22e06a", label: "" },
-  { c: "#0aa03c", label: "Moderate" },
-  { c: "#e6e12b", label: "" },
-  { c: "#f5a623", label: "Heavy" },
-  { c: "#e8442a", label: "" },
-  { c: "#b01d8f", label: "Violent" },
+  { c: "#04e9e7", label: "Light" },
+  { c: "#0300f4", label: "" },
+  { c: "#02fd02", label: "Moderate" },
+  { c: "#fdf802", label: "" },
+  { c: "#fd9500", label: "Heavy" },
+  { c: "#fd0000", label: "" },
+  { c: "#f800fd", label: "Violent" },
 ] as const
 
 const CLOUD_SCALE = [
@@ -91,9 +92,14 @@ const BANNER_TONE: Record<WarnLevel, string> = {
 }
 
 export function NcmSources() {
+  const { units } = useWeather()
+  const unitsRef = useRef(units)
+  unitsRef.current = units
+
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<any>(null)
   const overlayRef = useRef<any>(null)
+  const basemapRef = useRef<any>(null)
   const windLayerRef = useRef<any>(null)
   const warnLayerRef = useRef<any>(null)
   const geoRef = useRef<any>(null)
@@ -109,24 +115,27 @@ export function NcmSources() {
   const [windIdx, setWindIdx] = useState(0)
   const [windPlaying, setWindPlaying] = useState(true)
   const [windSpeed, setWindSpeed] = useState<1 | 2>(1)
-  const [warnings, setWarnings] = useState<EmirateWarning[] | null>(null)
+  const [warnFrames, setWarnFrames] = useState<WarningFrames | null>(null)
+  const [warnIdx, setWarnIdx] = useState(0)
+  const [warnPlaying, setWarnPlaying] = useState(true)
   const [geoReady, setGeoReady] = useState(false)
 
   const frames = layer === "radar" ? (maps?.radar ?? []) : layer === "satellite" ? (maps?.satellite ?? []) : []
 
-  // Live warnings (level above green). If none, fall back to a labelled SAMPLE set.
-  const live = useMemo(() => (warnings ?? []).filter((w) => w.level !== "green"), [warnings])
-  const isSample = warnings != null && live.length === 0
+  // Real forecast warnings for the currently displayed hour (frame). No fabricated data.
+  const frameCount = warnFrames?.frames.length ?? 0
+  const safeIdx = frameCount ? Math.min(warnIdx, frameCount - 1) : 0
   const display = useMemo<EmirateWarning[]>(
-    () => (isSample ? sampleWarnings() : live),
-    [isSample, live],
+    () => warnFrames?.frames[safeIdx] ?? [],
+    [warnFrames, safeIdx],
   )
   const top = display[0] ?? null
+  const warnTime = warnFrames?.times[safeIdx]
 
   const frameUrl = (f: Frame) => {
     const host = maps?.host ?? "https://tilecache.rainviewer.com"
     return layer === "radar"
-      ? `${host}${f.path}/512/{z}/{x}/{y}/7/1_1.png`
+      ? `${host}${f.path}/512/{z}/{x}/{y}/6/1_1.png`
       : `${host}${f.path}/512/{z}/{x}/{y}/0/0_0.png`
   }
 
@@ -179,26 +188,34 @@ export function NcmSources() {
     }
   }, [])
 
-  // Load live per-emirate warnings every 5 minutes.
+  // Load the real hourly-forecast warning timeline; refresh every 10 minutes.
   useEffect(() => {
     const controller = new AbortController()
     async function load() {
       try {
-        const data = await fetchEmirateWarnings(controller.signal)
-        setWarnings(data)
+        const data = await fetchWarningFrames(controller.signal, 24)
+        setWarnFrames(data)
+        setWarnIdx(0)
       } catch (err) {
         if ((err as any)?.name !== "AbortError")
           console.log("[v0] warnings failed:", err instanceof Error ? err.message : err)
-        setWarnings([])
+        setWarnFrames({ frames: [[]], times: [new Date().toISOString().slice(0, 16)], issued: Date.now() })
       }
     }
     load()
-    const id = setInterval(load, 5 * 60 * 1000)
+    const id = setInterval(load, 10 * 60 * 1000)
     return () => {
       controller.abort()
       clearInterval(id)
     }
   }, [])
+
+  // Animate the warning timeline: advance one forecast hour every 2 seconds.
+  useEffect(() => {
+    if (layer !== "warnings" || !warnPlaying || frameCount < 2) return
+    const id = setInterval(() => setWarnIdx((i) => (i + 1) % frameCount), 2000)
+    return () => clearInterval(id)
+  }, [layer, warnPlaying, frameCount])
 
   // Load the UAE emirate polygons once.
   useEffect(() => {
@@ -235,15 +252,21 @@ export function NcmSources() {
       })
       map.zoomControl.setPosition("bottomright")
       const cartoKey = process.env.NEXT_PUBLIC_CARTO_API_KEY
-      let base = ""
-      if (cartoKey) {
-        base = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-        base = base + `?api_key=${cartoKey}`
-      } else {
-        // Free basemap (OpenStreetMap Standard) — reliable public tiles
-        base = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+      const base = cartoKey
+        ? `https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?api_key=${cartoKey}`
+        : // Keyless dark basemap (Esri Dark Gray) — reliable public tiles, matches theme
+          "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+      basemapRef.current = L.tileLayer(base, {
+        maxZoom: 12,
+        attribution: "&copy; OpenStreetMap contributors",
+      }).addTo(map)
+      // High-z pane so city labels sit above the shaded warning polygons (NCM look).
+      map.createPane("labels")
+      const labelsPane = map.getPane("labels")
+      if (labelsPane) {
+        labelsPane.style.zIndex = "650"
+        labelsPane.style.pointerEvents = "none"
       }
-      L.tileLayer(base, { maxZoom: 12, attribution: '&copy; OpenStreetMap contributors' }).addTo(map)
       mapRef.current = map
       if (!cancelled) setMapReady(true)
       setTimeout(() => map.invalidateSize(), 250)
@@ -287,7 +310,7 @@ export function NcmSources() {
       overlayRef.current.setUrl(url)
     } else {
       overlayRef.current = L.tileLayer(url, {
-        opacity: layer === "radar" ? 0.85 : 0.62,
+        opacity: layer === "radar" ? 0.92 : 0.7,
         maxZoom: 12,
         zIndex: 400,
       }).addTo(map)
@@ -301,11 +324,18 @@ export function NcmSources() {
   }, [idx, frames, layer])
 
   // Reset the tile overlay when switching layers so scheme/opacity swaps cleanly.
+  // Also fade the dark basemap on radar/clouds so the navy container tint shows
+  // through as NCM Al Bahar-style blue-grey water (never a bleak-black empty map).
   useEffect(() => {
     const map = mapRef.current
     if (map && overlayRef.current) {
       map.removeLayer(overlayRef.current)
       overlayRef.current = null
+    }
+    if (basemapRef.current) {
+      // Fade the dark basemap on radar/clouds/warnings so the NCM blue tint shows
+      // through instead of a bleak-black map. Wind covers the map with its heatmap.
+      basemapRef.current.setOpacity(layer === "wind" ? 1 : layer === "warnings" ? 0.22 : 0.4)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layer])
@@ -345,7 +375,7 @@ export function NcmSources() {
         const t = e?.detail?.time
         if (!t || !windData) return
         // Try to find a matching frame and update windIdx/frame index where appropriate
-        const i = windData.frames.findIndex((f) => f.time === t)
+        const i = windData.times.findIndex((ft) => ft === t)
         if (i >= 0) setWindIdx(i)
       } catch {}
     }
@@ -371,25 +401,27 @@ export function NcmSources() {
     display.forEach((w) => levelByName.set(w.name, w.level))
 
     const group = L.layerGroup()
-    // Navy sea/land tint to echo the NCM basemap without hiding labels.
+    // Medium-blue "water" field echoing the NCM Al Bahar basemap.
     L.rectangle(
       [
         [12, 44],
         [32, 64],
       ],
-      { stroke: false, fillColor: "#0b2545", fillOpacity: 0.4, interactive: false },
+      { stroke: false, fillColor: "#2f5f96", fillOpacity: 0.9, interactive: false },
     ).addTo(group)
 
+    // All emirates get a darker-blue land fill with crisp borders visible across the
+    // whole country; warned emirates are shaded by severity (yellow / orange / red).
     const geoLayer = L.geoJSON(geoRef.current, {
       style: (feature: any) => {
         const lvl = levelByName.get(feature.properties.name) ?? "green"
         const warned = lvl !== "green"
         return {
-          color: warned ? "#ffffff" : "#6f8fb0",
-          weight: warned ? 1.4 : 0.7,
-          opacity: warned ? 0.9 : 0.5,
-          fillColor: WARN_FILL[lvl],
-          fillOpacity: warned ? 0.62 : 0.28,
+          color: warned ? "#ffffff" : "#a9c4e0",
+          weight: warned ? 1.6 : 0.9,
+          opacity: warned ? 0.95 : 0.85,
+          fillColor: warned ? WARN_FILL[lvl] : "#274d78",
+          fillOpacity: warned ? 0.85 : 0.9,
         }
       },
       onEachFeature: (feature: any, lyr: any) => {
@@ -444,6 +476,12 @@ export function NcmSources() {
     // Add both geo and label layers to group so they can be toggled together
     geoLayer.addTo(group)
     labelLayer.addTo(group)
+
+    // City labels on top (dedicated high-z pane) for the NCM cartographic look.
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/dark_only_labels/{z}/{x}/{y}{r}.png", {
+      maxZoom: 12,
+      pane: "labels",
+    }).addTo(group)
 
     group.addTo(map)
     warnLayerRef.current = group
@@ -503,10 +541,10 @@ export function NcmSources() {
   useEffect(() => {
     const L = leafletRef.current
     const map = mapRef.current
-    const { units } = useWeather()
     if (!L || !map) return
     function onClick(e: any) {
       try {
+        const units = unitsRef.current
         const lat = e.latlng.lat
         const lon = e.latlng.lng
         const point = { lat, lon }
@@ -523,7 +561,7 @@ export function NcmSources() {
             const best = data
             const results = [
               { id: 'best_match', label: 'Forecast', color: '#f5b642', hours: data.hourly },
-            ]
+            ] as any
             marker.setPopupContent(buildSpotPopupHtml(point, best, results, units, 920, 260))
           } catch (err) {
             console.log('ncm spot fetch failed', err)
@@ -601,8 +639,9 @@ export function NcmSources() {
       {/* Big live map */}
       <div className="relative">
         <div
-          ref={containerRef}
-          className="h-[80vh] min-h-[620px] w-full bg-panel"
+        ref={containerRef}
+        className="h-[80vh] min-h-[620px] w-full"
+        style={{ backgroundColor: layer === "warnings" ? "#2f5f96" : "#3a4a63" }}
           role="img"
           aria-label={
             isWarnings
@@ -628,13 +667,11 @@ export function NcmSources() {
               <p className="min-w-0 flex-1 truncate text-xs font-medium sm:text-sm">
                 {top
                   ? top.description
-                  : "No active weather warnings across the Emirates. Conditions are calm."}
+                  : "No active weather warnings for this hour across the Emirates. Conditions are calm."}
               </p>
-              {isSample && (
-                <span className="shrink-0 rounded bg-black/25 px-1.5 py-0.5 font-mono text-[0.5rem] font-bold uppercase tracking-widest">
-                  Sample
-                </span>
-              )}
+              <span className="shrink-0 rounded bg-black/25 px-1.5 py-0.5 font-mono text-[0.5rem] font-bold uppercase tracking-widest">
+                Forecast
+              </span>
             </div>
 
             {/* Compass rose */}
@@ -652,7 +689,9 @@ export function NcmSources() {
             {/* Right sidebar warning cards */}
             <div className="absolute right-3 top-32 z-[500] flex max-h-[58%] w-60 flex-col gap-2 overflow-auto sm:w-64">
               <div className="rounded-md border border-white/15 bg-primary/90 px-3 py-2 text-center font-mono text-[0.625rem] uppercase tracking-wider text-primary-foreground shadow">
-                {display.length ? `${display.length} active warning${display.length > 1 ? "s" : ""}` : "Show all warnings"}
+                {display.length
+                  ? `${display.length} warning${display.length > 1 ? "s" : ""} this hour`
+                  : "No warnings this hour"}
               </div>
               {display.map((w) => (
                 <article key={w.name} className="overflow-hidden rounded-md border border-border bg-card shadow">
@@ -665,13 +704,40 @@ export function NcmSources() {
                   <p className="px-3 py-2 text-[0.6875rem] leading-relaxed text-foreground">{w.description}</p>
                 </article>
               ))}
-              {isSample && (
-                <p className="rounded-md border border-dashed border-border bg-card/70 px-3 py-2 text-[0.625rem] leading-relaxed text-muted-foreground">
-                  No live warnings right now — showing a sample so you can preview the alert view. Live severity updates
-                  every 5 minutes.
-                </p>
-              )}
+              <p className="rounded-md border border-dashed border-border bg-card/70 px-3 py-2 text-[0.625rem] leading-relaxed text-muted-foreground">
+                Real 24-hour warning timeline derived from live Open-Meteo forecast for the seven emirates, playing one
+                hour every 2 seconds. Refreshes every 10 minutes.
+              </p>
             </div>
+
+            {/* Animated forecast playback (one real forecast hour every 2s) */}
+            {frameCount > 1 && (
+              <div className="absolute inset-x-3 bottom-16 z-[500] flex items-center gap-2 rounded-md bg-black/55 px-3 py-2 backdrop-blur sm:inset-x-auto sm:left-1/2 sm:w-[36rem] sm:max-w-[calc(100%-1.5rem)] sm:-translate-x-1/2">
+                <button
+                  type="button"
+                  onClick={() => setWarnPlaying((p) => !p)}
+                  className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-alert-red text-white shadow transition-transform hover:scale-105"
+                  aria-label={warnPlaying ? "Pause warning forecast" : "Play warning forecast"}
+                >
+                  {warnPlaying ? <Pause className="h-4 w-4" aria-hidden="true" /> : <Play className="h-4 w-4" aria-hidden="true" />}
+                </button>
+                <input
+                  type="range"
+                  min={0}
+                  max={frameCount - 1}
+                  value={safeIdx}
+                  onChange={(e) => {
+                    setWarnPlaying(false)
+                    setWarnIdx(Number(e.target.value))
+                  }}
+                  aria-label="Scrub the warning forecast time"
+                  className="h-1.5 flex-1 cursor-pointer accent-[var(--signal)]"
+                />
+                <span className="shrink-0 rounded-md bg-alert-red px-2.5 py-1 font-mono text-[0.6875rem] tabular-nums text-white shadow">
+                  {formatWindTime(warnTime)}
+                </span>
+              </div>
+            )}
 
             {/* Bottom severity legend */}
             <div className="absolute inset-x-3 bottom-3 z-[500] flex flex-wrap items-stretch gap-2 rounded-md bg-black/55 px-3 py-2 backdrop-blur">
