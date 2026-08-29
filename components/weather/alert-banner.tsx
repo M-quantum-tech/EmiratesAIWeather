@@ -11,11 +11,11 @@ const LEVEL_STYLES: Record<
   { bar: string; text: string; chip: string; solid: string; glowShadow: string }
 > = {
   green: {
-    bar: "bg-alert-green/10 border-alert-green/40",
+    bar: "bg-gradient-to-br from-alert-green/16 via-alert-green/6 to-signal/8 border-alert-green/45 shadow-[0_0_50px_-18px_var(--color-alert-green)]",
     text: "text-alert-green",
-    chip: "bg-alert-green/15 text-alert-green border-alert-green/40",
+    chip: "bg-alert-green/15 text-alert-green border-alert-green/45",
     solid: "bg-alert-green",
-    glowShadow: "",
+    glowShadow: "shadow-[0_0_38px_-10px_var(--color-alert-green)]",
   },
   yellow: {
     bar: "bg-alert-yellow/10 border-alert-yellow/40",
@@ -104,13 +104,14 @@ function useBuzzer(active: boolean, muted: boolean) {
   )
 }
 
-export function AlertBanner() {
+export function AlertBanner({ muteAudio = false }: { muteAudio?: boolean } = {}) {
   const { payload, isValidating } = useWeather()
   const alert = useMemo(() => (payload ? buildAlert(payload) : null), [payload])
   const [muted, setMuted] = useState(false)
 
   const danger = alert?.danger ?? false
-  useBuzzer(danger, muted)
+  // When embedded as a tab we suppress the audio so only the top banner buzzes.
+  useBuzzer(danger, muted || muteAudio)
 
   if (!payload || !alert) {
     return <div className="h-40 animate-pulse rounded-lg border border-border bg-panel" />

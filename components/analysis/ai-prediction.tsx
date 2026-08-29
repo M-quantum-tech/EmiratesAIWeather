@@ -1,8 +1,9 @@
 "use client"
 
 import { useId, useMemo, useState } from "react"
-import { CloudRain, Sparkles, Thermometer, TriangleAlert, Wind } from "lucide-react"
+import { CloudRain, ShieldCheck, Sparkles, Thermometer, TriangleAlert, Wind } from "lucide-react"
 import { Panel, PanelHeader } from "@/components/station/panel"
+import { AlertBanner } from "@/components/weather/alert-banner"
 import { useWeather } from "@/components/weather/weather-provider"
 import { speedUnit, tempUnit } from "@/lib/weather"
 import type { HourlyReading, Units } from "@/lib/weather"
@@ -154,9 +155,9 @@ export function AiPrediction() {
         }
       />
 
-      <div className="p-4">
+      <div className="p-5 sm:p-6">
         {/* Group tabs */}
-        <div role="tablist" aria-label="Prediction group" className="flex flex-wrap gap-1.5">
+        <div role="tablist" aria-label="Prediction group" className="flex flex-wrap gap-2">
           {GROUPS.map((g) => {
             const Icon = g.icon
             const on = g.id === groupId
@@ -170,22 +171,45 @@ export function AiPrediction() {
                   setHover(null)
                 }}
                 className={cn(
-                  "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors",
+                  "inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition-colors",
                   on
-                    ? "border-signal bg-signal text-signal-foreground shadow"
-                    : "border-border bg-card/60 text-muted-foreground hover:text-foreground",
+                    ? "border-signal bg-signal text-signal-foreground shadow-lg shadow-signal/20"
+                    : "border-border bg-card/60 text-muted-foreground hover:border-signal/40 hover:text-foreground",
                 )}
               >
-                <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                <Icon className="h-4 w-4" aria-hidden="true" />
                 <span className="hidden sm:inline">{g.label}</span>
                 <span className="sm:hidden">{g.short}</span>
               </button>
             )
           })}
+          {/* Safety model tab */}
+          <button
+            role="tab"
+            aria-selected={groupId === "safety"}
+            onClick={() => {
+              setGroupId("safety")
+              setHover(null)
+            }}
+            className={cn(
+              "inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition-colors",
+              groupId === "safety"
+                ? "border-alert-green bg-alert-green text-background shadow-lg shadow-alert-green/25"
+                : "border-border bg-card/60 text-muted-foreground hover:border-alert-green/40 hover:text-foreground",
+            )}
+          >
+            <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+            <span className="hidden sm:inline">AI Safety model</span>
+            <span className="sm:hidden">Safety</span>
+          </button>
         </div>
 
-        {!model || isLoading ? (
-          <div className="mt-4 flex h-[320px] animate-pulse items-center justify-center rounded-lg border border-border bg-secondary/30 text-sm text-muted-foreground">
+        {groupId === "safety" ? (
+          <div className="mt-5">
+            <AlertBanner muteAudio />
+          </div>
+        ) : !model || isLoading ? (
+          <div className="mt-5 flex h-[460px] animate-pulse items-center justify-center rounded-xl border border-border bg-secondary/30 text-sm text-muted-foreground">
             Building 24-hour projection…
           </div>
         ) : (
@@ -194,7 +218,7 @@ export function AiPrediction() {
             {group.id === "wind" && gust ? (
               <div
                 className={cn(
-                  "mt-4 flex items-center gap-3 rounded-lg border px-3.5 py-2.5",
+                  "mt-5 flex items-center gap-3 rounded-xl border px-4 py-3",
                   gustHigh
                     ? "border-destructive/50 bg-destructive/10 text-destructive"
                     : "border-accent/40 bg-accent/10 text-accent",
@@ -216,27 +240,27 @@ export function AiPrediction() {
             ) : null}
 
             {/* Per-series stat strip */}
-            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
               {model.series.map((s) => (
                 <div
                   key={s.key}
                   className={cn(
-                    "rounded-lg border bg-card/60 px-3 py-2.5",
+                    "rounded-xl border bg-card/60 px-4 py-3.5",
                     s.emphasize ? "border-2" : "border-border",
                   )}
                   style={s.emphasize ? { borderColor: s.color } : undefined}
                 >
-                  <div className="flex items-center gap-1.5">
-                    <span className="h-2 w-2 rounded-full" style={{ background: s.color }} aria-hidden="true" />
+                  <div className="flex items-center gap-2">
+                    <span className="h-2.5 w-2.5 rounded-full" style={{ background: s.color }} aria-hidden="true" />
                     <span className="label-caps truncate text-muted-foreground">{s.label}</span>
                   </div>
-                  <p className="mt-1 font-mono text-xl font-semibold leading-none tabular-nums text-foreground">
+                  <p className="mt-1.5 font-mono text-3xl font-bold leading-none tabular-nums text-foreground">
                     {s.now.toFixed(s.decimals)}
-                    <span className="ml-1 text-xs font-normal text-muted-foreground">{s.unit(units)}</span>
+                    <span className="ml-1 text-sm font-normal text-muted-foreground">{s.unit(units)}</span>
                   </p>
                   <p
                     className={cn(
-                      "mt-1 font-mono text-[0.625rem] tabular-nums",
+                      "mt-1.5 font-mono text-xs tabular-nums",
                       s.extreme >= s.now ? "text-accent" : "text-destructive",
                     )}
                   >
@@ -248,8 +272,8 @@ export function AiPrediction() {
             </div>
 
             {/* Chart */}
-            <figure className="mt-4">
-              <div className="relative overflow-hidden rounded-lg border border-border bg-gradient-to-b from-secondary/20 to-transparent">
+            <figure className="mt-5">
+              <div className="relative overflow-hidden rounded-xl border border-border bg-gradient-to-b from-secondary/25 via-secondary/5 to-transparent">
                 <div className="flex">
                   {/* Y axis (normalized %) — top is 100% (max), bottom is 0% (min) */}
                   <div className="flex w-10 shrink-0 flex-col justify-between py-3 pr-1 text-right">
@@ -264,7 +288,7 @@ export function AiPrediction() {
                     <svg
                       viewBox={`0 0 ${model.W} ${model.H}`}
                       preserveAspectRatio="none"
-                      className="h-[260px] w-full overflow-visible sm:h-[320px]"
+                      className="h-[360px] w-full overflow-visible sm:h-[480px]"
                       role="img"
                       aria-label={`24-hour AI prediction — ${group.label}`}
                     >
