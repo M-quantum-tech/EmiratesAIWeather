@@ -6,8 +6,7 @@ import { WeatherProvider } from "@/components/weather/weather-provider"
 import { AlertBanner } from "@/components/weather/alert-banner"
 import { ForecastStrip } from "@/components/forecast/forecast-strip"
 import { WeekMeteogram } from "@/components/forecast/week-meteogram"
-import { MeasureMap } from "@/components/weather/measure-map"
-import { NcmSources } from "@/components/weather/ncm-sources"
+import { MapTabs } from "@/components/weather/map-tabs"
 import { Webcams } from "@/components/weather/webcams"
 import { StationDashboard } from "@/components/station/station-dashboard"
 import { DeepDiveMap } from "@/components/analysis/deep-dive-map"
@@ -72,14 +71,9 @@ export default function Page() {
               <StationDashboard />
             </section>
 
-            {/* 4 · NCM live radar & satellite loops (zoom + time slider) */}
-            <section id="radar" className="mt-6 scroll-mt-6">
-              <NcmSources />
-            </section>
-
-            {/* 5 · Big multi-model measure & forecast map */}
+            {/* 4 · Weather maps — live radar/wind/warnings + measure & forecast, in tabs */}
             <section id="map" className="mt-6 scroll-mt-6">
-              <MeasureMap />
+              <MapTabs />
             </section>
 
             {/* 6 · Local webcams */}

@@ -8,7 +8,6 @@ import {
   LineChart,
   type LucideIcon,
   Map as MapIcon,
-  Satellite,
   Sparkles,
   Swords,
 } from "lucide-react"
@@ -21,8 +20,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "hourly", label: "Hourly Meteogram", icon: LineChart },
   { id: "ai-prediction", label: "AI Prediction", icon: Sparkles },
   { id: "observations", label: "Live Observations", icon: Gauge },
-  { id: "radar", label: "Radar & Satellite", icon: Satellite },
-  { id: "map", label: "Weather Map", icon: MapIcon },
+  { id: "map", label: "Weather Maps", icon: MapIcon },
   { id: "webcams", label: "Webcams", icon: Camera },
   { id: "play", label: "Register & Play", icon: Swords },
 ]
