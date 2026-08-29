@@ -11,13 +11,13 @@ import { NcmSources } from "@/components/weather/ncm-sources"
 import { Webcams } from "@/components/weather/webcams"
 import { StationDashboard } from "@/components/station/station-dashboard"
 import { DeepDiveMap } from "@/components/analysis/deep-dive-map"
+import { AiPrediction } from "@/components/analysis/ai-prediction"
 import { RegisterPanel } from "@/components/players/register-panel"
 import { AdUnit } from "@/components/station/ad-unit"
 import { ChessGame } from "@/components/games/chess-game"
 import { BreathingGame } from "@/components/wellness/breathing-game"
 import { WeatherAssistant } from "@/components/ai/weather-assistant"
 import { TipsPopup } from "@/components/wellness/tips-popup"
-import { Hero } from "@/components/hero"
 
 export const metadata: Metadata = {
   title: "EmiratesAIWeather — 7-Day Forecast, EmiratesConsensus Model & Live Radar",
@@ -47,11 +47,6 @@ export default function Page() {
               <AlertBanner />
             </div>
 
-            {/* Hero / landing */}
-            <section id="hero" className="mt-3 scroll-mt-6">
-              <Hero />
-            </section>
-
             {/* 1 · 7-day forecast (drives the hourly meteogram) */}
             <section id="forecast" className="mt-6 scroll-mt-6">
               <ForecastStrip />
@@ -60,6 +55,11 @@ export default function Page() {
             {/* 2 · Hourly breakdown / meteogram for the selected day */}
             <section id="hourly" className="mt-6 scroll-mt-6">
               <DeepDiveMap />
+            </section>
+
+            {/* AI Prediction · 24-hour trend */}
+            <section id="ai-prediction" className="mt-6 scroll-mt-6">
+              <AiPrediction />
             </section>
 
             {/* 7-day multi-panel meteogram */}
