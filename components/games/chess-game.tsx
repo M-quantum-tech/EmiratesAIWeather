@@ -254,10 +254,10 @@ export function ChessGame() {
         </div>
       )}
 
-      <div className="flex flex-col gap-4 p-4 lg:flex-row">
-        {/* Board */}
-        <div className="mx-auto w-full max-w-[26rem]">
-          <div className="grid aspect-square w-full grid-cols-8 overflow-hidden rounded-md border border-border shadow-sm">
+      <div className="flex flex-col gap-5 p-4 lg:flex-row lg:p-6">
+        {/* Board — enlarged to fill the available space */}
+        <div className="mx-auto w-full max-w-[40rem] lg:mx-0 lg:flex-[3]">
+          <div className="grid aspect-square w-full grid-cols-8 overflow-hidden rounded-lg border border-border shadow-md">
             {board.map((rankRow, r) =>
               rankRow.map((cell, c) => {
                 const sq = squareName(r, c)
@@ -272,7 +272,7 @@ export function ChessGame() {
                     onClick={() => onSquareClick(sq)}
                     aria-label={`${sq}${cell ? `, ${cell.color === "w" ? "white" : "black"} ${cell.type}` : ", empty"}`}
                     className={cn(
-                      "relative flex aspect-square items-center justify-center text-3xl leading-none transition-colors sm:text-4xl",
+                      "relative flex aspect-square items-center justify-center text-4xl leading-none transition-colors sm:text-5xl md:text-6xl",
                       dark ? "chess-dark" : "chess-light",
                       isLast && "ring-2 ring-inset ring-signal/70",
                     )}
@@ -298,12 +298,12 @@ export function ChessGame() {
                       />
                     ) : null}
                     {c === 0 ? (
-                      <span className="pointer-events-none absolute left-0.5 top-0 text-[0.5rem] font-bold text-foreground/50">
+                      <span className="pointer-events-none absolute left-1 top-0.5 text-[0.625rem] font-bold text-foreground/50 sm:text-xs">
                         {8 - r}
                       </span>
                     ) : null}
                     {r === 7 ? (
-                      <span className="pointer-events-none absolute bottom-0 right-0.5 text-[0.5rem] font-bold text-foreground/50">
+                      <span className="pointer-events-none absolute bottom-0.5 right-1 text-[0.625rem] font-bold text-foreground/50 sm:text-xs">
                         {FILES[c]}
                       </span>
                     ) : null}
@@ -315,7 +315,7 @@ export function ChessGame() {
         </div>
 
         {/* Side panel */}
-        <div className="flex flex-1 flex-col gap-3">
+        <div className="flex flex-col gap-3 lg:flex-[2] lg:max-w-sm">
           <div
             className={cn(
               "rounded-md border px-3 py-2.5 text-sm font-medium",

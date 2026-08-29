@@ -86,7 +86,7 @@ export default function Page() {
             {/* 7 · Register + play chess together by name, flanked by vertical ad rails */}
             <section id="play" className="mt-6 scroll-mt-6">
               <RegisterPanel />
-              <div className="mt-6 grid gap-6 xl:grid-cols-[180px_minmax(0,1fr)_180px]">
+              <div className="mt-6 grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)_300px]">
                 <aside className="hidden xl:block">
                   <div className="sticky top-6">
                     <AdUnit label="Sponsored" orientation="vertical" />
@@ -94,6 +94,10 @@ export default function Page() {
                 </aside>
                 <div>
                   <ChessGame />
+                  {/* Mobile / tablet ad — the vertical rails are hidden below xl */}
+                  <div className="mt-6 xl:hidden">
+                    <AdUnit label="Sponsored" orientation="horizontal" />
+                  </div>
                 </div>
                 <aside className="hidden xl:block">
                   <div className="sticky top-6">

@@ -54,12 +54,13 @@ const RADAR_SCALE = [
   { c: "#f800fd", label: "Violent" },
 ] as const
 
+// True-colour cloud shading (VIIRS): clear sky → thin haze → thick bright cloud tops.
 const CLOUD_SCALE = [
-  { c: "#0b1b33", label: "Clear" },
-  { c: "#2b3f5c", label: "" },
-  { c: "#5a6f8c", label: "Low cloud" },
-  { c: "#9aa8bd", label: "" },
-  { c: "#d6dce6", label: "High / cold top" },
+  { c: "#1c3a2a", label: "Clear" },
+  { c: "#5b6b6a", label: "" },
+  { c: "#9aa4a8", label: "Haze" },
+  { c: "#cdd3d6", label: "" },
+  { c: "#ffffff", label: "Thick cloud" },
 ] as const
 
 // Wind-speed legend (m/s) matching the Windy-style heatmap palette (calm → gale).
@@ -131,7 +132,9 @@ export function NcmSources() {
     const host = maps?.host ?? "https://tilecache.rainviewer.com"
     return layer === "radar"
       ? `${host}${f.path}/512/{z}/{x}/{y}/6/1_1.png`
-      : `${host}${f.path}/512/{z}/{x}/{y}/0/0_0.png`
+      : // Satellite = NASA GIBS VIIRS NOAA-20 true-colour for the frame's date (f.path is
+        // a YYYY-MM-DD string). Real clouds over true-colour earth, just like NCM.
+        `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_NOAA20_CorrectedReflectance_TrueColor/default/${f.path}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`
   }
 
   // Load and refresh RainViewer frame catalogue every 5 minutes.
@@ -146,7 +149,16 @@ export function NcmSources() {
           time: f.time,
           path: f.path,
         }))
-        const satellite: Frame[] = (json.satellite?.infrared ?? []).map((f: any) => ({ time: f.time, path: f.path }))
+        // Real cloud satellite: NASA GIBS VIIRS/NOAA-20 true-colour daily composites
+        // (keyless, global, real clouds baked in) — one frame per recent day so the loop
+        // animates through the last week like NCM's Satellite HD Global view. GIBS lags
+        // ~3h, so we start from yesterday (UTC) and walk back 7 days.
+        const DAY = 86400
+        const startUtc = Math.floor(Date.now() / 1000) - DAY // yesterday
+        const satellite: Frame[] = Array.from({ length: 7 }, (_, i) => {
+          const t = startUtc - (6 - i) * DAY // oldest → newest
+          return { time: t, path: new Date(t * 1000).toISOString().slice(0, 10) } // YYYY-MM-DD
+        })
         if (!cancelled) setMaps({ host: json.host ?? "https://tilecache.rainviewer.com", radar, satellite })
       } catch (err) {
         console.log("[v0] ncm loops frames failed:", err instanceof Error ? err.message : err)
@@ -311,12 +323,20 @@ export function NcmSources() {
       overlayRef.current.setUrl(url)
     } else {
       overlayRef.current = L.tileLayer(url, {
-        opacity: layer === "radar" ? 0.92 : 0.7,
+        // Radar tiles blend at 0.92; the GIBS satellite frame is real imagery so it sits
+        // fully opaque on top and animates frame-to-frame like the NCM satellite loop.
+        opacity: layer === "radar" ? 0.92 : 1,
         maxZoom: 12,
+        // GIBS true-colour tiles only exist to zoom 8 — upscale past that instead of 404.
+        maxNativeZoom: layer === "satellite" ? 8 : 12,
         zIndex: 400,
       }).addTo(map)
     }
-    setStamp(new Date(f.time * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))
+    setStamp(
+      layer === "satellite"
+        ? new Date(f.time * 1000).toLocaleDateString([], { weekday: "short", day: "2-digit", month: "short" })
+        : new Date(f.time * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    )
     // Broadcast the active time so other map panels can sync.
     try {
       window.dispatchEvent(new CustomEvent('maps:time-sync', { detail: { source: 'ncm', time: f.time } }))
@@ -541,7 +561,7 @@ export function NcmSources() {
 
   const isWarnings = layer === "warnings"
   const scale = layer === "radar" ? RADAR_SCALE : layer === "satellite" ? CLOUD_SCALE : WIND_SCALE
-  const legendTitle = layer === "radar" ? "Rain intensity" : layer === "satellite" ? "Cloud top" : "Wind speed"
+    const legendTitle = layer === "radar" ? "Rain intensity" : layer === "satellite" ? "Cloud cover" : "Wind speed"
 
   const tabs: { id: Layer; label: string; Icon: typeof Radar }[] = [
     { id: "warnings", label: "Warnings", Icon: ShieldAlert },
