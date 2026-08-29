@@ -120,10 +120,17 @@ function agreementReport(results: ModelResult[], nowIdx: number, units: Units) {
  * axes, gridlines and a clean plot boundary: colorful temperature ribbon + rain % bars
  * + per-model curves + consensus + now marker.
  */
-function multiModelSvg(results: ModelResult[], barHours: any[], nowIdx: number, units: Units) {
+function multiModelSvg(
+  results: ModelResult[],
+  barHours: any[],
+  nowIdx: number,
+  units: Units,
+  chartW = 640,
+  chartH = 260,
+) {
   // Doubled canvas (was 320x118) with room for a left Y-axis gutter + bottom X-axis.
-  const W = 640
-  const H = 260
+  const W = chartW
+  const H = chartH
   const padL = 40
   const padR = 12
   const padT = 30
@@ -253,7 +260,14 @@ function legendHtml(results: ModelResult[]) {
 }
 
 /** Full popup card HTML: header (best match) + emoji strip + multi-model meteogram + legend + summary. */
-function buildSpotPopupHtml(point: Point, best: any, rawResults: ModelResult[], units: Units) {
+export function buildSpotPopupHtml(
+  point: Point,
+  best: any,
+  rawResults: ModelResult[],
+  units: Units,
+  chartW = 640,
+  chartH = 260,
+) {
   const hours: any[] = best.hourly ?? []
   const cur = best.current ?? {}
   const nowIdx = typeof best.currentHourIndex === "number" ? best.currentHourIndex : 0
@@ -283,7 +297,7 @@ function buildSpotPopupHtml(point: Point, best: any, rawResults: ModelResult[], 
         : "<span></span>",
     )
     .join("")
-  return `<div style="width:640px;max-width:100%;font-family:ui-sans-serif,system-ui;color:var(--foreground)">
+  return `<div style="width:${chartW}px;max-width:100%;font-family:ui-sans-serif,system-ui;color:var(--foreground)">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--border)">
       <span style="font-size:34px;line-height:1">${headEmoji}</span>
       <div style="line-height:1.15">
@@ -293,7 +307,7 @@ function buildSpotPopupHtml(point: Point, best: any, rawResults: ModelResult[], 
       <div style="margin-left:auto;text-align:right;font:600 11px ui-monospace,monospace;color:var(--muted-foreground)">${point.lat.toFixed(3)}&#176;N<br/>${point.lon.toFixed(3)}&#176;E</div>
     </div>
     <div style="display:flex;justify-content:space-between;font-size:20px;margin:0 10px 4px">${emojiRow}</div>
-    ${multiModelSvg(results, hours, nowIdx, units)}
+    ${multiModelSvg(results, hours, nowIdx, units, chartW, chartH)}
     ${legendHtml(results)}
     <div style="display:flex;gap:16px;flex-wrap:wrap;font:600 12px ui-monospace,monospace;color:var(--muted-foreground);margin-top:7px">
       <span>&#128168; ${wind}</span>
@@ -306,8 +320,8 @@ function buildSpotPopupHtml(point: Point, best: any, rawResults: ModelResult[], 
   </div>`
 }
 
-const LOADING_HTML = `<div style="width:300px;padding:10px 6px;font:12px ui-monospace,monospace;color:var(--muted-foreground)">Comparing all forecast models&hellip;</div>`
-const ERROR_HTML = `<div style="width:300px;padding:10px 6px;font:12px ui-monospace,monospace;color:var(--muted-foreground)">Forecast unavailable for this spot.</div>`
+export const LOADING_HTML = `<div style="width:300px;padding:10px 6px;font:12px ui-monospace,monospace;color:var(--muted-foreground)">Comparing all forecast models&hellip;</div>`
+export const ERROR_HTML = `<div style="width:300px;padding:10px 6px;font:12px ui-monospace,monospace;color:var(--muted-foreground)">Forecast unavailable for this spot.</div>`
 
 export function MeasureMap() {
   const { location, units } = useWeather()
