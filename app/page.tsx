@@ -3,6 +3,7 @@ import { SiteNav } from "@/components/site-nav"
 import { LeftNav } from "@/components/left-nav"
 import { HeroIntro } from "@/components/hero-intro"
 import { WeatherProvider } from "@/components/weather/weather-provider"
+import { LocationBar } from "@/components/weather/location-bar"
 import { AlertBanner } from "@/components/weather/alert-banner"
 import { ForecastStrip } from "@/components/forecast/forecast-strip"
 import { WeekMeteogram } from "@/components/forecast/week-meteogram"
@@ -29,6 +30,7 @@ export default function Page() {
     <WeatherProvider>
       <div className="min-h-dvh bg-background">
         <SiteNav />
+        <LocationBar />
         <div className="mx-auto flex max-w-[1800px] gap-6 px-4 py-6 sm:px-6 lg:py-8">
           {/* Left section navigation (desktop) */}
           <aside className="hidden w-52 shrink-0 xl:block">

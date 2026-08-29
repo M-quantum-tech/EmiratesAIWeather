@@ -94,6 +94,7 @@ export function NcmSources() {
   const mapRef = useRef<any>(null)
   const overlayRef = useRef<any>(null)
   const basemapRef = useRef<any>(null)
+  const imageryRef = useRef<any>(null)
   const windLayerRef = useRef<any>(null)
   const warnLayerRef = useRef<any>(null)
   const geoRef = useRef<any>(null)
@@ -245,15 +246,19 @@ export function NcmSources() {
         scrollWheelZoom: true,
       })
       map.zoomControl.setPosition("bottomright")
-      const cartoKey = process.env.NEXT_PUBLIC_CARTO_API_KEY
-      const base = cartoKey
-        ? `https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?api_key=${cartoKey}`
-        : // Keyless dark basemap (Esri Dark Gray) — reliable public tiles, matches theme
-          "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-      basemapRef.current = L.tileLayer(base, {
-        maxZoom: 12,
-        attribution: "&copy; OpenStreetMap contributors",
+      // Clean Google-Maps-style street basemap (OpenStreetMap standard) — truly keyless &
+      // reliable, full-colour roads/water/labels like Google Maps, no API-key watermark.
+      basemapRef.current = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        subdomains: "abc",
+        attribution: "",
       }).addTo(map)
+      // True satellite/aerial imagery (Esri World Imagery) — shown only on the Clouds / IR
+      // layer beneath the infrared clouds so it resembles NCM's Satellite HD Global view.
+      imageryRef.current = L.tileLayer(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        { maxZoom: 19, opacity: 0, zIndex: 200 },
+      ).addTo(map)
       // High-z pane so city labels sit above the shaded warning polygons (NCM look).
       map.createPane("labels")
       const labelsPane = map.getPane("labels")
@@ -272,6 +277,8 @@ export function NcmSources() {
         mapRef.current.remove()
         mapRef.current = null
         overlayRef.current = null
+        imageryRef.current = null
+        basemapRef.current = null
         windLayerRef.current = null
         warnLayerRef.current = null
       }
@@ -327,9 +334,13 @@ export function NcmSources() {
       overlayRef.current = null
     }
     if (basemapRef.current) {
-      // Fade the dark basemap on radar/clouds/warnings so the NCM blue tint shows
-      // through instead of a bleak-black map. Wind covers the map with its heatmap.
-      basemapRef.current.setOpacity(layer === "wind" ? 1 : layer === "warnings" ? 0.22 : 0.4)
+      // Clean Google-style street map stays fully visible under radar/clouds/warnings.
+      // On the Clouds / IR layer we hide the street map and reveal satellite imagery instead.
+      basemapRef.current.setOpacity(layer === "satellite" ? 0 : 1)
+    }
+    if (imageryRef.current) {
+      // Real satellite imagery only on the Clouds / IR layer (NCM Satellite HD look).
+      imageryRef.current.setOpacity(layer === "satellite" ? 1 : 0)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layer])
@@ -395,27 +406,20 @@ export function NcmSources() {
     display.forEach((w) => levelByName.set(w.name, w.level))
 
     const group = L.layerGroup()
-    // Medium-blue "water" field echoing the NCM Al Bahar basemap.
-    L.rectangle(
-      [
-        [12, 44],
-        [32, 64],
-      ],
-      { stroke: false, fillColor: "#2f5f96", fillOpacity: 0.9, interactive: false },
-    ).addTo(group)
 
-    // All emirates get a darker-blue land fill with crisp borders visible across the
-    // whole country; warned emirates are shaded by severity (yellow / orange / red).
+    // Emirates outlines drawn over the clean Google-style basemap. Non-warned areas are
+    // just a crisp translucent boundary so streets/water read through; warned emirates
+    // are shaded by severity (yellow / orange / red) like the NCM Al Bahar warning map.
     const geoLayer = L.geoJSON(geoRef.current, {
       style: (feature: any) => {
         const lvl = levelByName.get(feature.properties.name) ?? "green"
         const warned = lvl !== "green"
         return {
-          color: warned ? "#ffffff" : "#a9c4e0",
-          weight: warned ? 1.6 : 0.9,
-          opacity: warned ? 0.95 : 0.85,
-          fillColor: warned ? WARN_FILL[lvl] : "#274d78",
-          fillOpacity: warned ? 0.85 : 0.9,
+          color: warned ? "#b91c1c" : "#1f4b7a",
+          weight: warned ? 1.8 : 1.1,
+          opacity: warned ? 0.95 : 0.7,
+          fillColor: warned ? WARN_FILL[lvl] : "#3b82f6",
+          fillOpacity: warned ? 0.5 : 0.06,
         }
       },
       onEachFeature: (feature: any, lyr: any) => {
@@ -471,11 +475,8 @@ export function NcmSources() {
     geoLayer.addTo(group)
     labelLayer.addTo(group)
 
-    // City labels on top (dedicated high-z pane) for the NCM cartographic look.
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/dark_only_labels/{z}/{x}/{y}{r}.png", {
-      maxZoom: 12,
-      pane: "labels",
-    }).addTo(group)
+    // The OpenStreetMap street basemap already carries city/road labels, so no separate
+    // label tile layer is needed here (avoids an extra keyed request).
 
     group.addTo(map)
     warnLayerRef.current = group
@@ -491,11 +492,11 @@ export function NcmSources() {
             const lvl = levelByName.get(feature.properties.name) ?? "green"
             const warned = lvl !== "green"
             return {
-              color: warned ? "#ffffff" : "#9fb3cc",
-              weight: warned ? 1.8 : 1.0,
-              opacity: 0.95,
-              fillColor: WARN_FILL[lvl],
-              fillOpacity: warned ? 0.62 : 0.18,
+              color: warned ? "#b91c1c" : "#1f4b7a",
+              weight: warned ? 1.8 : 1.1,
+              opacity: warned ? 0.95 : 0.7,
+              fillColor: warned ? WARN_FILL[lvl] : "#3b82f6",
+              fillOpacity: warned ? 0.5 : 0.06,
             }
           })
         } else {
@@ -505,11 +506,11 @@ export function NcmSources() {
             const lvl = levelByName.get(feature.properties.name) ?? "green"
             const warned = lvl !== "green"
             return {
-              color: warned ? "#ffffff" : "#6f8fb0",
-              weight: warned ? 1.4 : 0.7,
-              opacity: warned ? 0.9 : 0.5,
-              fillColor: WARN_FILL[lvl],
-              fillOpacity: warned ? 0.62 : 0.28,
+              color: warned ? "#b91c1c" : "#1f4b7a",
+              weight: warned ? 1.6 : 0.9,
+              opacity: warned ? 0.9 : 0.6,
+              fillColor: warned ? WARN_FILL[lvl] : "#3b82f6",
+              fillOpacity: warned ? 0.5 : 0.05,
             }
           })
         }
@@ -898,7 +899,7 @@ export function NcmSources() {
       </div>
 
       <div className="border-t border-border px-4 py-2 font-mono text-[0.5625rem] text-muted-foreground">
-        Live wind &amp; warnings via Open-Meteo · radar &amp; cloud loops © RainViewer · basemap © CARTO / OSM · boundaries ©
+        Live wind &amp; warnings via Open-Meteo · radar &amp; cloud loops © RainViewer · basemap © OpenStreetMap · satellite © Esri · boundaries ©
         geoBoundaries · official imagery &amp; warnings via NCM Al Bahar (opens in a new tab)
       </div>
     </Panel>

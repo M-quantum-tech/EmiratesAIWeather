@@ -429,15 +429,12 @@ export function MeasureMap() {
         zoomControl: true,
         attributionControl: false,
       })
-      // Keyless dark basemap (Esri World Dark Gray) + a matching reference label layer.
-      L.tileLayer(
-        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
-        { maxZoom: 16 },
-      ).addTo(map)
-      L.tileLayer(
-        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
-        { maxZoom: 16, opacity: 0.9 },
-      ).addTo(map)
+      // Clean Google-Maps-style street basemap (OpenStreetMap standard) — truly keyless &
+      // reliable, full-colour roads/water/labels like Google Maps, no API-key watermark.
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        subdomains: "abc",
+      }).addTo(map)
       map.on("click", (e: any) => {
         const next: Point = { lat: e.latlng.lat, lon: e.latlng.lng }
         // Pick mode: single pin replaced each click. Measure mode: accumulate up to two.
@@ -647,8 +644,8 @@ export function MeasureMap() {
       </div>
 
       <div className="border-t border-border px-4 py-2 font-mono text-[0.5625rem] text-muted-foreground">
-        All-model spot meteograms via Open-Meteo (ECMWF · ICON · GFS · Météo-France) · basemap © Esri / OSM · UAE: NCM Al
-        Bahar. Rain radar &amp; clouds/IR live in the map above.
+        All-model spot meteograms via Open-Meteo (ECMWF · ICON · GFS · Météo-France) · basemap © OpenStreetMap ·
+        UAE: NCM Al Bahar. Rain radar &amp; clouds/IR live in the map above.
       </div>
     </Panel>
   )
