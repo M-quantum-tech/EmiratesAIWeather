@@ -1,124 +1,145 @@
 "use client"
 
 import { useId, useMemo, useState } from "react"
-import { Droplets, Gauge, Sparkles, Thermometer, Wind } from "lucide-react"
+import { CloudRain, Sparkles, Thermometer, TriangleAlert, Wind } from "lucide-react"
 import { Panel, PanelHeader } from "@/components/station/panel"
 import { useWeather } from "@/components/weather/weather-provider"
 import { speedUnit, tempUnit } from "@/lib/weather"
 import type { HourlyReading, Units } from "@/lib/weather"
 import { cn } from "@/lib/utils"
 
-const OBSERVED = "#38bdf8"
-const PROJECTED = "#f5b642"
+type NumKey =
+  | "temperature"
+  | "apparentTemperature"
+  | "humidity"
+  | "windSpeed"
+  | "windGusts"
+  | "windDirection"
+  | "precipitation"
+  | "precipitationProbability"
+  | "weatherCode"
 
-type ParamKey = "temperature" | "apparentTemperature" | "humidity" | "windSpeed" | "windGusts" | "precipitationProbability"
+type SeriesDef = {
+  key: NumKey
+  label: string
+  color: string
+  unit: (u: Units) => string
+  decimals: number
+  emphasize?: boolean
+}
 
-type ParamDef = {
-  key: ParamKey
+type GroupDef = {
+  id: string
   label: string
   short: string
   icon: typeof Thermometer
-  unit: (u: Units) => string
-  decimals: number
+  series: SeriesDef[]
 }
 
-const PARAMS: ParamDef[] = [
-  { key: "temperature", label: "Temperature", short: "Temp", icon: Thermometer, unit: tempUnit, decimals: 0 },
-  { key: "apparentTemperature", label: "Feels like", short: "Feels", icon: Thermometer, unit: tempUnit, decimals: 0 },
-  { key: "humidity", label: "Humidity", short: "Humidity", icon: Droplets, unit: () => "%", decimals: 0 },
-  { key: "windSpeed", label: "Wind speed", short: "Wind", icon: Wind, unit: speedUnit, decimals: 1 },
-  { key: "windGusts", label: "Wind gusts", short: "Gusts", icon: Wind, unit: speedUnit, decimals: 1 },
+const GROUPS: GroupDef[] = [
   {
-    key: "precipitationProbability",
-    label: "Rain chance",
-    short: "Rain %",
-    icon: Gauge,
-    unit: () => "%",
-    decimals: 0,
+    id: "comfort",
+    label: "Temperature & comfort",
+    short: "Comfort",
+    icon: Thermometer,
+    series: [
+      { key: "temperature", label: "Temperature", color: "#22d3ee", unit: tempUnit, decimals: 1 },
+      { key: "apparentTemperature", label: "Feels like", color: "#e879f9", unit: tempUnit, decimals: 1 },
+      { key: "humidity", label: "Humidity", color: "#818cf8", unit: () => "%", decimals: 0 },
+    ],
+  },
+  {
+    id: "wind",
+    label: "Wind & air",
+    short: "Wind",
+    icon: Wind,
+    series: [
+      { key: "windGusts", label: "Wind gusts", color: "#a3e635", unit: speedUnit, decimals: 1, emphasize: true },
+      { key: "windSpeed", label: "Wind speed", color: "#f472b6", unit: speedUnit, decimals: 1 },
+      { key: "windDirection", label: "Wind direction", color: "#f5b642", unit: () => "°", decimals: 0 },
+    ],
+  },
+  {
+    id: "sky",
+    label: "Sky & rainfall",
+    short: "Sky",
+    icon: CloudRain,
+    series: [
+      { key: "precipitationProbability", label: "Rain chance", color: "#38bdf8", unit: () => "%", decimals: 0 },
+      { key: "precipitation", label: "Precipitation", color: "#34d399", unit: () => "mm", decimals: 1 },
+      { key: "weatherCode", label: "Weather code", color: "#fb923c", unit: () => "", decimals: 0 },
+    ],
   },
 ]
+
+function gustThreshold(units: Units) {
+  // Gale-force gust warning: ~40 km/h metric, ~25 mph imperial.
+  return units === "imperial" ? 25 : 40
+}
 
 export function AiPrediction() {
   const { payload, isLoading } = useWeather()
   const gid = useId()
-  const [param, setParam] = useState<ParamKey>("temperature")
+  const [groupId, setGroupId] = useState<string>("comfort")
   const [hover, setHover] = useState<number | null>(null)
 
   const units = payload?.units ?? "metric"
   const hours: HourlyReading[] = payload?.hourly ?? []
   const nowIdx = Math.min(Math.max(payload?.currentHourIndex ?? 0, 0), Math.max(hours.length - 1, 0))
-  const def = PARAMS.find((p) => p.key === param) ?? PARAMS[0]
-  const unitLabel = def.unit(units)
-
-  const fmt = (v: number) => `${v.toFixed(def.decimals)}${unitLabel === "%" ? "" : ""}`
+  const group = GROUPS.find((g) => g.id === groupId) ?? GROUPS[0]
 
   const model = useMemo(() => {
     if (hours.length === 0) return null
-    const values = hours.map((h) => Number(h[param] ?? 0))
+    const n = hours.length
     const labels = hours.map((h) => h.time.slice(11, 16))
-    const lo = Math.min(...values)
-    const hi = Math.max(...values)
-    const span = hi - lo || 1
-    const pad = span * 0.15
-    const yMin = lo - pad
-    const yMax = hi + pad
-    const range = yMax - yMin || 1
-    const n = values.length
     const W = 1000
     const H = 300
-    const x = (i: number) => (n > 1 ? (i / (n - 1)) * W : W / 2)
-    const y = (v: number) => H - ((v - yMin) / range) * H
-    const pts = values.map((v, i) => ({ x: x(i), y: y(v), v, label: labels[i], i }))
+    const xf = (i: number) => (n > 1 ? (i / (n - 1)) * W : W / 2)
 
-    const toPath = (slice: typeof pts) =>
-      slice.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ")
-
-    const observed = pts.slice(0, nowIdx + 1)
-    const projected = pts.slice(nowIdx)
-    const obsArea = observed.length
-      ? `${toPath(observed)} L${observed[observed.length - 1].x.toFixed(1)},${H} L${observed[0].x.toFixed(1)},${H} Z`
-      : ""
-    const projArea = projected.length
-      ? `${toPath(projected)} L${projected[projected.length - 1].x.toFixed(1)},${H} L${projected[0].x.toFixed(1)},${H} Z`
-      : ""
-
-    // Gridlines: 4 horizontal bands with value labels.
-    const ticks = Array.from({ length: 5 }, (_, i) => {
-      const val = yMax - (range / 4) * i
-      return { y: y(val), val }
+    const series = group.series.map((s) => {
+      const vals = hours.map((h) => Number(h[s.key] ?? 0))
+      const lo = Math.min(...vals)
+      const hi = Math.max(...vals)
+      const span = hi - lo || 1
+      const yf = (v: number) => H - ((v - lo) / span) * H
+      const pts = vals.map((v, i) => ({ x: xf(i), y: yf(v), v, i }))
+      const toPath = (slice: typeof pts) =>
+        slice.map((p, k) => `${k === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ")
+      const obs = pts.slice(0, nowIdx + 1)
+      const proj = pts.slice(nowIdx)
+      const now = vals[nowIdx] ?? vals[0]
+      const future = vals.slice(nowIdx)
+      const peak = Math.max(...future)
+      const trough = Math.min(...future)
+      const peakI = nowIdx + future.indexOf(peak)
+      // Largest deviation from "now" across the forecast horizon.
+      const dev = future.map((v) => Math.abs(v - now))
+      const exRel = dev.indexOf(Math.max(...dev))
+      const extreme = future[exRel]
+      const extremeOffset = exRel
+      return {
+        ...s,
+        vals,
+        pts,
+        obsPath: toPath(obs),
+        projPath: toPath(proj),
+        now,
+        peak,
+        trough,
+        peakOffset: peakI - nowIdx,
+        extreme,
+        extremeOffset,
+      }
     })
 
-    const current = values[nowIdx] ?? values[0]
-    const futureVals = values.slice(nowIdx)
-    const peak = Math.max(...futureVals)
-    const trough = Math.min(...futureVals)
-    const peakIdx = nowIdx + futureVals.indexOf(peak)
-    const troughIdx = nowIdx + futureVals.indexOf(trough)
-    const endVal = values[values.length - 1]
-    const delta = endVal - current
+    const ticks = [0, 25, 50, 75, 100].map((pct) => ({ y: H - (pct / 100) * H, pct }))
 
-    return {
-      pts,
-      observed,
-      projected,
-      obsPath: toPath(observed),
-      projPath: toPath(projected),
-      obsArea,
-      projArea,
-      ticks,
-      W,
-      H,
-      current,
-      peak,
-      trough,
-      peakLabel: labels[peakIdx],
-      troughLabel: labels[troughIdx],
-      delta,
-      nowX: x(nowIdx),
-      labels,
-      n,
-    }
-  }, [hours, param, nowIdx])
+    return { series, labels, W, H, nowX: xf(nowIdx), n, ticks }
+  }, [hours, group, nowIdx])
+
+  const active = hover ?? nowIdx
+  const gust = model?.series.find((s) => s.key === "windGusts")
+  const gustHigh = gust ? gust.peak >= gustThreshold(units) : false
 
   return (
     <Panel>
@@ -134,18 +155,18 @@ export function AiPrediction() {
       />
 
       <div className="p-4">
-        {/* Parameter tabs */}
-        <div role="tablist" aria-label="Prediction parameter" className="flex flex-wrap gap-1.5">
-          {PARAMS.map((p) => {
-            const Icon = p.icon
-            const on = p.key === param
+        {/* Group tabs */}
+        <div role="tablist" aria-label="Prediction group" className="flex flex-wrap gap-1.5">
+          {GROUPS.map((g) => {
+            const Icon = g.icon
+            const on = g.id === groupId
             return (
               <button
-                key={p.key}
+                key={g.id}
                 role="tab"
                 aria-selected={on}
                 onClick={() => {
-                  setParam(p.key)
+                  setGroupId(g.id)
                   setHover(null)
                 }}
                 className={cn(
@@ -156,42 +177,85 @@ export function AiPrediction() {
                 )}
               >
                 <Icon className="h-3.5 w-3.5" aria-hidden="true" />
-                <span className="hidden sm:inline">{p.label}</span>
-                <span className="sm:hidden">{p.short}</span>
+                <span className="hidden sm:inline">{g.label}</span>
+                <span className="sm:hidden">{g.short}</span>
               </button>
             )
           })}
         </div>
 
         {!model || isLoading ? (
-          <div className="mt-4 flex h-[300px] animate-pulse items-center justify-center rounded-lg border border-border bg-secondary/30 text-sm text-muted-foreground">
+          <div className="mt-4 flex h-[320px] animate-pulse items-center justify-center rounded-lg border border-border bg-secondary/30 text-sm text-muted-foreground">
             Building 24-hour projection…
           </div>
         ) : (
           <>
-            {/* Stat strip */}
-            <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Stat label="Now" value={fmt(model.current)} unit={unitLabel} tone="observed" />
-              <Stat
-                label="Projected end"
-                value={fmt(model.current + model.delta)}
-                unit={unitLabel}
-                delta={model.delta}
-                decimals={def.decimals}
-              />
-              <Stat label={`Peak · ${model.peakLabel}`} value={fmt(model.peak)} unit={unitLabel} tone="projected" />
-              <Stat label={`Low · ${model.troughLabel}`} value={fmt(model.trough)} unit={unitLabel} tone="projected" />
+            {/* High wind-gust prediction callout (wind group) */}
+            {group.id === "wind" && gust ? (
+              <div
+                className={cn(
+                  "mt-4 flex items-center gap-3 rounded-lg border px-3.5 py-2.5",
+                  gustHigh
+                    ? "border-destructive/50 bg-destructive/10 text-destructive"
+                    : "border-accent/40 bg-accent/10 text-accent",
+                )}
+              >
+                <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <p className="text-sm font-medium text-foreground">
+                  {gustHigh ? "High wind-gust warning — " : "Peak gust forecast — "}
+                  <span className="font-mono font-semibold">
+                    {gust.peak.toFixed(gust.decimals)} {gust.unit(units)}
+                  </span>{" "}
+                  expected at <span className="font-mono font-semibold">+{gust.peakOffset}h</span>
+                  <span className="text-muted-foreground">
+                    {" "}
+                    ({model.labels[Math.min(nowIdx + gust.peakOffset, model.n - 1)]})
+                  </span>
+                </p>
+              </div>
+            ) : null}
+
+            {/* Per-series stat strip */}
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              {model.series.map((s) => (
+                <div
+                  key={s.key}
+                  className={cn(
+                    "rounded-lg border bg-card/60 px-3 py-2.5",
+                    s.emphasize ? "border-2" : "border-border",
+                  )}
+                  style={s.emphasize ? { borderColor: s.color } : undefined}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span className="h-2 w-2 rounded-full" style={{ background: s.color }} aria-hidden="true" />
+                    <span className="label-caps truncate text-muted-foreground">{s.label}</span>
+                  </div>
+                  <p className="mt-1 font-mono text-xl font-semibold leading-none tabular-nums text-foreground">
+                    {s.now.toFixed(s.decimals)}
+                    <span className="ml-1 text-xs font-normal text-muted-foreground">{s.unit(units)}</span>
+                  </p>
+                  <p
+                    className={cn(
+                      "mt-1 font-mono text-[0.625rem] tabular-nums",
+                      s.extreme >= s.now ? "text-accent" : "text-destructive",
+                    )}
+                  >
+                    {s.extreme >= s.now ? "▲" : "▼"} {s.extreme.toFixed(s.decimals)} {s.unit(units)} at +
+                    {s.extremeOffset}h
+                  </p>
+                </div>
+              ))}
             </div>
 
             {/* Chart */}
             <figure className="mt-4">
               <div className="relative overflow-hidden rounded-lg border border-border bg-gradient-to-b from-secondary/20 to-transparent">
                 <div className="flex">
-                  {/* Y axis labels */}
-                  <div className="flex w-11 shrink-0 flex-col justify-between py-3 pr-1 text-right">
-                    {model.ticks.map((t, i) => (
-                      <span key={i} className="font-mono text-[0.625rem] tabular-nums text-muted-foreground">
-                        {t.val.toFixed(def.decimals)}
+                  {/* Y axis (normalized %) — top is 100% (max), bottom is 0% (min) */}
+                  <div className="flex w-10 shrink-0 flex-col justify-between py-3 pr-1 text-right">
+                    {[...model.ticks].reverse().map((t) => (
+                      <span key={t.pct} className="font-mono text-[0.625rem] tabular-nums text-muted-foreground">
+                        {t.pct}%
                       </span>
                     ))}
                   </div>
@@ -200,25 +264,14 @@ export function AiPrediction() {
                     <svg
                       viewBox={`0 0 ${model.W} ${model.H}`}
                       preserveAspectRatio="none"
-                      className="h-[240px] w-full overflow-visible sm:h-[300px]"
+                      className="h-[260px] w-full overflow-visible sm:h-[320px]"
                       role="img"
-                      aria-label={`24-hour AI prediction for ${def.label}`}
+                      aria-label={`24-hour AI prediction — ${group.label}`}
                     >
-                      <defs>
-                        <linearGradient id={`${gid}-obs`} x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor={OBSERVED} stopOpacity="0.28" />
-                          <stop offset="100%" stopColor={OBSERVED} stopOpacity="0" />
-                        </linearGradient>
-                        <linearGradient id={`${gid}-proj`} x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor={PROJECTED} stopOpacity="0.26" />
-                          <stop offset="100%" stopColor={PROJECTED} stopOpacity="0" />
-                        </linearGradient>
-                      </defs>
-
                       {/* Horizontal gridlines */}
-                      {model.ticks.map((t, i) => (
+                      {model.ticks.map((t) => (
                         <line
-                          key={i}
+                          key={t.pct}
                           x1={0}
                           y1={t.y}
                           x2={model.W}
@@ -230,121 +283,127 @@ export function AiPrediction() {
                         />
                       ))}
 
-                      {/* Projection shaded region background */}
+                      {/* Shaded AI-projection region */}
                       <rect
                         x={model.nowX}
                         y={0}
                         width={model.W - model.nowX}
                         height={model.H}
-                        fill={PROJECTED}
-                        opacity={0.04}
+                        fill="#f5b642"
+                        opacity={0.05}
                       />
 
-                      {/* Areas */}
-                      {model.obsArea ? <path d={model.obsArea} fill={`url(#${gid}-obs)`} /> : null}
-                      {model.projArea ? <path d={model.projArea} fill={`url(#${gid}-proj)`} /> : null}
-
-                      {/* Lines */}
-                      <path
-                        d={model.obsPath}
-                        fill="none"
-                        stroke={OBSERVED}
-                        strokeWidth={2.5}
-                        strokeLinejoin="round"
-                        strokeLinecap="round"
-                        vectorEffect="non-scaling-stroke"
-                      />
-                      <path
-                        d={model.projPath}
-                        fill="none"
-                        stroke={PROJECTED}
-                        strokeWidth={2.5}
-                        strokeDasharray="6 5"
-                        strokeLinejoin="round"
-                        strokeLinecap="round"
-                        vectorEffect="non-scaling-stroke"
-                      />
-
-                      {/* NOW divider */}
-                      <line
-                        x1={model.nowX}
-                        y1={0}
-                        x2={model.nowX}
-                        y2={model.H}
-                        stroke={PROJECTED}
-                        strokeWidth={1.5}
-                        strokeDasharray="3 3"
-                        vectorEffect="non-scaling-stroke"
-                      />
-
-                      {/* Hover hit-areas + dot */}
-                      {model.pts.map((p) => (
-                        <g key={p.i}>
-                          <rect
-                            x={p.x - model.W / model.n / 2}
-                            y={0}
-                            width={model.W / model.n}
-                            height={model.H}
-                            fill="transparent"
-                            onMouseEnter={() => setHover(p.i)}
-                            onMouseLeave={() => setHover(null)}
+                      {/* Series lines: solid observed + dashed projection */}
+                      {model.series.map((s) => (
+                        <g key={s.key}>
+                          <path
+                            d={s.obsPath}
+                            fill="none"
+                            stroke={s.color}
+                            strokeWidth={s.emphasize ? 3.5 : 2}
+                            strokeLinejoin="round"
+                            strokeLinecap="round"
+                            vectorEffect="non-scaling-stroke"
+                            opacity={0.95}
                           />
-                          {hover === p.i ? (
-                            <>
-                              <line
-                                x1={p.x}
-                                y1={0}
-                                x2={p.x}
-                                y2={model.H}
-                                stroke="currentColor"
-                                strokeWidth={1}
-                                className="text-muted-foreground/40"
-                                vectorEffect="non-scaling-stroke"
-                              />
-                              <circle
-                                cx={p.x}
-                                cy={p.y}
-                                r={4}
-                                fill={p.i <= nowIdx ? OBSERVED : PROJECTED}
-                                stroke="var(--color-background)"
-                                strokeWidth={2}
-                                vectorEffect="non-scaling-stroke"
-                              />
-                            </>
-                          ) : null}
+                          <path
+                            d={s.projPath}
+                            fill="none"
+                            stroke={s.color}
+                            strokeWidth={s.emphasize ? 3.5 : 2}
+                            strokeDasharray="6 5"
+                            strokeLinejoin="round"
+                            strokeLinecap="round"
+                            vectorEffect="non-scaling-stroke"
+                            opacity={0.9}
+                          />
                         </g>
+                      ))}
+
+                      {/* Live "+Nh" cursor */}
+                      <line
+                        x1={model.series[0].pts[active].x}
+                        y1={0}
+                        x2={model.series[0].pts[active].x}
+                        y2={model.H}
+                        stroke="#4ade80"
+                        strokeWidth={1.5}
+                        strokeDasharray="4 3"
+                        vectorEffect="non-scaling-stroke"
+                      />
+
+                      {/* Dots on each series at the active hour */}
+                      {model.series.map((s) => (
+                        <circle
+                          key={`dot-${s.key}`}
+                          cx={s.pts[active].x}
+                          cy={s.pts[active].y}
+                          r={4}
+                          fill={s.color}
+                          stroke="var(--color-background)"
+                          strokeWidth={2}
+                          vectorEffect="non-scaling-stroke"
+                        />
+                      ))}
+
+                      {/* Hover hit-areas */}
+                      {model.series[0].pts.map((p) => (
+                        <rect
+                          key={p.i}
+                          x={p.x - model.W / model.n / 2}
+                          y={0}
+                          width={model.W / model.n}
+                          height={model.H}
+                          fill="transparent"
+                          onMouseEnter={() => setHover(p.i)}
+                          onMouseLeave={() => setHover(null)}
+                        />
                       ))}
                     </svg>
 
-                    {/* NOW label */}
+                    {/* "+Nh" cursor label */}
                     <span
-                      className="pointer-events-none absolute top-1 -translate-x-1/2 rounded bg-signal px-1.5 py-0.5 text-[0.5625rem] font-bold uppercase text-signal-foreground"
-                      style={{ left: `${(model.nowX / model.W) * 100}%` }}
+                      className="pointer-events-none absolute top-1 -translate-x-1/2 rounded bg-[#4ade80] px-1.5 py-0.5 text-[0.5625rem] font-bold text-black"
+                      style={{ left: `${(model.series[0].pts[active].x / model.W) * 100}%` }}
                     >
-                      Now
+                      +{active}h
                     </span>
 
-                    {/* Hover tooltip */}
-                    {hover != null ? (
-                      <div
-                        className="pointer-events-none absolute top-1 -translate-x-1/2 rounded-md border border-border bg-card px-2 py-1 text-center shadow-lg"
-                        style={{
-                          left: `${(model.pts[hover].x / model.W) * 100}%`,
-                        }}
-                      >
-                        <p className="font-mono text-xs font-bold tabular-nums text-foreground">
-                          {fmt(model.pts[hover].v)} {unitLabel}
-                        </p>
-                        <p className="font-mono text-[0.5625rem] text-muted-foreground">
-                          {model.labels[hover]} · {hover <= nowIdx ? "observed" : "AI"}
-                        </p>
-                      </div>
-                    ) : null}
+                    {/* Multi-series tooltip */}
+                    <div
+                      className={cn(
+                        "pointer-events-none absolute top-6 min-w-[10rem] rounded-md border border-signal/50 bg-card/95 px-2.5 py-2 shadow-lg backdrop-blur",
+                        model.series[0].pts[active].x > model.W * 0.6
+                          ? "-translate-x-full"
+                          : "translate-x-2",
+                      )}
+                      style={{ left: `${(model.series[0].pts[active].x / model.W) * 100}%` }}
+                    >
+                      <p className="mb-1 flex items-center gap-1.5 font-mono text-[0.625rem] font-semibold text-foreground">
+                        <span className="h-1.5 w-1.5 rounded-full bg-[#4ade80]" aria-hidden="true" />+{active}h ·{" "}
+                        {active <= nowIdx ? "live" : "AI forecast"} · {model.labels[active]}
+                      </p>
+                      <ul className="space-y-0.5">
+                        {model.series.map((s) => (
+                          <li key={s.key} className="flex items-center gap-1.5 font-mono text-[0.625rem]">
+                            <span
+                              className="h-1.5 w-1.5 shrink-0 rounded-full"
+                              style={{ background: s.color }}
+                              aria-hidden="true"
+                            />
+                            <span className="text-muted-foreground">{s.label}:</span>
+                            <span className="ml-auto font-semibold tabular-nums text-foreground">
+                              {s.vals[active].toFixed(s.decimals)} {s.unit(units)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   </div>
                 </div>
 
                 {/* X axis labels */}
-                <div className="flex pl-11 pr-3 pb-2">
+                <div className="flex pl-10 pr-3 pb-2">
                   <div className="flex flex-1 justify-between font-mono text-[0.5625rem] tabular-nums text-muted-foreground">
                     {model.labels.map((l, i) =>
                       i % 3 === 0 || i === model.labels.length - 1 ? <span key={i}>{l}</span> : null,
@@ -353,23 +412,25 @@ export function AiPrediction() {
                 </div>
               </div>
 
+              {/* Legend + footnote */}
               <figcaption className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
-                <span className="flex items-center gap-4">
-                  <span className="flex items-center gap-1.5">
-                    <span className="h-2 w-4 rounded-full" style={{ background: OBSERVED }} />
-                    Observed
-                  </span>
+                <span className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+                  {model.series.map((s) => (
+                    <span key={s.key} className="flex items-center gap-1.5">
+                      <span className="h-2 w-4 rounded-full" style={{ background: s.color }} aria-hidden="true" />
+                      {s.label}
+                    </span>
+                  ))}
                   <span className="flex items-center gap-1.5">
                     <span
-                      className="h-0 w-4 border-t-2 border-dashed"
-                      style={{ borderColor: PROJECTED }}
+                      className="h-0 w-4 border-t-2 border-dashed border-muted-foreground"
                       aria-hidden="true"
                     />
                     AI projection
                   </span>
                 </span>
                 <span className="font-mono text-[0.625rem]">
-                  Open-Meteo · normalized to local 00:00–23:00 · updates every 5 min
+                  Open-Meteo · each line normalized to its own 24h range · updates every 5 min
                 </span>
               </figcaption>
             </figure>
@@ -377,45 +438,5 @@ export function AiPrediction() {
         )}
       </div>
     </Panel>
-  )
-}
-
-function Stat({
-  label,
-  value,
-  unit,
-  tone = "default",
-  delta,
-  decimals = 0,
-}: {
-  label: string
-  value: string
-  unit: string
-  tone?: "default" | "observed" | "projected"
-  delta?: number
-  decimals?: number
-}) {
-  const dotColor = tone === "observed" ? OBSERVED : tone === "projected" ? PROJECTED : "var(--color-muted-foreground)"
-  return (
-    <div className="rounded-lg border border-border bg-card/60 px-3 py-2.5">
-      <div className="flex items-center gap-1.5">
-        <span className="h-1.5 w-1.5 rounded-full" style={{ background: dotColor }} aria-hidden="true" />
-        <span className="label-caps truncate text-muted-foreground">{label}</span>
-      </div>
-      <p className="mt-1 font-mono text-xl font-semibold leading-none tabular-nums text-foreground">
-        {value}
-        <span className="ml-1 text-xs font-normal text-muted-foreground">{unit}</span>
-      </p>
-      {delta != null ? (
-        <p
-          className={cn(
-            "mt-1 font-mono text-[0.625rem] tabular-nums",
-            delta > 0 ? "text-accent" : delta < 0 ? "text-destructive" : "text-muted-foreground",
-          )}
-        >
-          {delta > 0 ? "▲" : delta < 0 ? "▼" : "■"} {Math.abs(delta).toFixed(decimals)} {unit} over 24h
-        </p>
-      ) : null}
-    </div>
   )
 }
