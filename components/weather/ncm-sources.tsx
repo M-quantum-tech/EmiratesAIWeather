@@ -92,6 +92,10 @@ const BANNER_TONE: Record<WarnLevel, string> = {
 }
 
 export function NcmSources() {
+  const { units } = useWeather()
+  const unitsRef = useRef(units)
+  unitsRef.current = units
+
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<any>(null)
   const overlayRef = useRef<any>(null)
@@ -537,10 +541,10 @@ export function NcmSources() {
   useEffect(() => {
     const L = leafletRef.current
     const map = mapRef.current
-    const { units } = useWeather()
     if (!L || !map) return
     function onClick(e: any) {
       try {
+        const units = unitsRef.current
         const lat = e.latlng.lat
         const lon = e.latlng.lng
         const point = { lat, lon }
