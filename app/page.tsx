@@ -1,6 +1,7 @@
 import type { Metadata } from "next"
 import { SiteNav } from "@/components/site-nav"
 import { LeftNav } from "@/components/left-nav"
+import { HeroIntro } from "@/components/hero-intro"
 import { WeatherProvider } from "@/components/weather/weather-provider"
 import { AlertBanner } from "@/components/weather/alert-banner"
 import { ForecastStrip } from "@/components/forecast/forecast-strip"
@@ -38,8 +39,13 @@ export default function Page() {
           </aside>
 
           <main className="min-w-0 flex-1">
-            {/* Live alert */}
-            <AlertBanner />
+            {/* Marketing hero */}
+            <HeroIntro />
+
+            {/* Live alert / AI safety model */}
+            <div className="mt-6">
+              <AlertBanner />
+            </div>
 
             {/* Hero / landing */}
             <section id="hero" className="mt-3 scroll-mt-6">

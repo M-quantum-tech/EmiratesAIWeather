@@ -86,30 +86,59 @@ function describe(gust: number, precip: number, code: number): { hazards: string
   return { hazards, headline, description }
 }
 
-/** Fetch live current conditions for the 7 emirates in one call and build warnings. */
-export async function fetchEmirateWarnings(signal?: AbortSignal): Promise<EmirateWarning[]> {
+export type WarningFrames = {
+  /** One entry per hour: the emirates under warning at that hour (sorted by severity). */
+  frames: EmirateWarning[][]
+  /** Local ISO time (Asia/Dubai) for each frame, e.g. "2026-08-26T13:00". */
+  times: string[]
+  /** When the forecast was fetched (ms epoch). */
+  issued: number
+}
+
+/**
+ * Fetch the real Open-Meteo hourly forecast for the 7 emirates and build a
+ * per-hour warning timeline (next `hours` hours). No fabricated data — an hour
+ * with no hazards simply yields an empty frame. Designed to be played back like
+ * the NCM Al Bahar animated warnings map.
+ */
+export async function fetchWarningFrames(signal?: AbortSignal, hours = 24): Promise<WarningFrames> {
   const lat = EMIRATES.map((e) => e.lat).join(",")
   const lon = EMIRATES.map((e) => e.lon).join(",")
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=wind_speed_10m,wind_gusts_10m,precipitation,weather_code&wind_speed_unit=kmh&timezone=Asia%2FDubai`
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=wind_gusts_10m,wind_speed_10m,precipitation,weather_code&wind_speed_unit=kmh&timezone=Asia%2FDubai&forecast_days=2`
   const res = await fetch(url, { signal })
   if (!res.ok) throw new Error("warnings fetch failed")
   const json = await res.json()
   const list: any[] = Array.isArray(json) ? json : [json]
 
-  const now = new Date()
-  const to = new Date(now.getTime() + 8 * 60 * 60 * 1000)
-  const fromStr = fmt(now)
-  const toStr = fmt(to)
+  const timeAxis: string[] = list[0]?.hourly?.time ?? []
+  const nowMs = Date.now()
+  let start = timeAxis.findIndex((t) => new Date(t).getTime() >= nowMs - 60 * 60 * 1000)
+  if (start < 0) start = 0
+  const end = Math.min(timeAxis.length, start + hours)
 
-  return EMIRATES.map((e, i) => {
-    const cur = list[i]?.current ?? {}
-    const gust = Number(cur.wind_gusts_10m ?? cur.wind_speed_10m ?? 0)
-    const precip = Number(cur.precipitation ?? 0)
-    const code = Number(cur.weather_code ?? 0)
-    const { level, score } = classify(gust, precip, code)
-    const { hazards, headline, description } = describe(gust, precip, code)
-    return { name: e.name, level, score, gust, precip, hazards, headline, description, from: fromStr, to: toStr }
-  }).sort((a, b) => b.score - a.score)
+  const frames: EmirateWarning[][] = []
+  const times: string[] = []
+
+  for (let j = start; j < end; j++) {
+    const fromStr = fmt(new Date(timeAxis[j]))
+    const toStr = fmt(new Date(timeAxis[Math.min(j + 1, timeAxis.length - 1)]))
+    const frame: EmirateWarning[] = []
+    EMIRATES.forEach((e, i) => {
+      const h = list[i]?.hourly ?? {}
+      const gust = Number(h.wind_gusts_10m?.[j] ?? h.wind_speed_10m?.[j] ?? 0)
+      const precip = Number(h.precipitation?.[j] ?? 0)
+      const code = Number(h.weather_code?.[j] ?? 0)
+      const { level, score } = classify(gust, precip, code)
+      if (level === "green") return
+      const { hazards, headline, description } = describe(gust, precip, code)
+      frame.push({ name: e.name, level, score, gust, precip, hazards, headline, description, from: fromStr, to: toStr })
+    })
+    frame.sort((a, b) => b.score - a.score)
+    frames.push(frame)
+    times.push(timeAxis[j])
+  }
+
+  return { frames, times, issued: nowMs }
 }
 
 export const WARN_FILL: Record<WarnLevel, string> = {
@@ -125,47 +154,3 @@ export const WARN_LEGEND: { level: WarnLevel; label: string; note: string }[] = 
   { level: "red", label: "Take Action", note: "Hazardous weather of exceptional severity is forecast." },
 ]
 
-/**
- * Illustrative warning set shown ONLY when there are no live warnings, so the
- * NCM-style map still demonstrates the alert look. Always tagged "SAMPLE" in the UI.
- */
-export function sampleWarnings(): EmirateWarning[] {
-  const now = new Date()
-  const from = new Date(now.getTime() + 30 * 60 * 1000)
-  const to = new Date(now.getTime() + 8 * 60 * 60 * 1000)
-  const win = { from: fmt(from), to: fmt(to) }
-  const mk = (name: string, level: WarnLevel, score: number, hazards: string[], description: string): EmirateWarning => ({
-    name,
-    level,
-    score,
-    gust: level === "orange" ? 62 : 48,
-    precip: 0,
-    hazards,
-    description,
-    headline: hazards.join(", "),
-    ...win,
-  })
-  return [
-    mk(
-      "Abu Dhabi",
-      "yellow",
-      30,
-      ["Dust or Sand", "Wind", "Thunder rain", "Cumulonimbus clouds"],
-      "A chance of convective cloud formation associated with rainfall and fresh to strong winds exceeding 55 km/h causing blowing dust and sand over Al Ain and southern areas.",
-    ),
-    mk(
-      "Ras al-Khaimah",
-      "yellow",
-      26,
-      ["Dust or Sand", "Wind"],
-      "Fresh to strong northwesterly winds exceeding 45 km/h over exposed areas, causing blowing dust and reduced visibility.",
-    ),
-    mk(
-      "Fujairah",
-      "orange",
-      44,
-      ["Thunder rain", "Cumulonimbus clouds", "Wind"],
-      "Convective cumulonimbus clouds bringing thundery showers with strong gusty winds over the eastern mountains and coast.",
-    ),
-  ]
-}

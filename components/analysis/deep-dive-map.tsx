@@ -1,8 +1,9 @@
 "use client"
 
 import { useMemo, useState } from "react"
-import { CloudRain, Compass, Droplets, Gauge, Thermometer, Umbrella, Waves, Wind } from "lucide-react"
+import { CloudRain, Compass, Droplets, Gauge, Navigation, Thermometer, Umbrella, Waves } from "lucide-react"
 import { Panel } from "@/components/station/panel"
+import { WeatherIcon } from "@/components/weather/weather-icon"
 import { useWeather } from "@/components/weather/weather-provider"
 import {
   compass,
@@ -26,6 +27,7 @@ type Column = {
   /** Longer label for tooltips/aria, e.g. "07:00". */
   full: string
   isDay: boolean
+  code: number
   emoji: string
   condition: string
   temp: number
@@ -85,6 +87,7 @@ function buildColumns(
         label: h.time.slice(11, 13),
         full: h.time.slice(11, 16),
         isDay: h.isDay,
+        code: h.weatherCode,
         emoji: weatherEmoji(h.weatherCode, h.isDay),
         condition: cond.short,
         temp: h.temperature,
@@ -106,6 +109,7 @@ function buildColumns(
       label: formatWeekday(d.date),
       full: formatWeekday(d.date),
       isDay: true,
+      code: d.weatherCode,
       emoji: weatherEmoji(d.weatherCode, true),
       condition: cond.short,
       temp: d.max,
@@ -168,14 +172,14 @@ export function DeepDiveMap() {
             <Thermometer className="h-3.5 w-3.5 text-signal" aria-hidden="true" />
             Meteogram · every parameter in one view
           </span>
-          <h2 className="mt-1 text-balance text-xl font-semibold tracking-tight text-foreground">
+          <h2 className="mt-1.5 text-balance text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
             {range === "day" ? `${dayName} · hourly breakdown` : "7-day graphical breakdown"}
           </h2>
         </div>
         <div
           role="tablist"
           aria-label="Forecast range"
-          className="inline-flex rounded-md border border-border bg-card/60 p-0.5 text-xs font-medium"
+          className="inline-flex rounded-lg border border-border bg-card/60 p-1 text-sm font-medium"
         >
           {(["day", "week"] as Range[]).map((r) => (
             <button
@@ -187,8 +191,8 @@ export function DeepDiveMap() {
                 setActive(null)
               }}
               className={cn(
-                "rounded px-3 py-1.5 transition-colors",
-                range === r ? "bg-signal text-signal-foreground" : "text-muted-foreground hover:text-foreground",
+                "rounded-md px-4 py-2 transition-colors",
+                range === r ? "bg-signal text-signal-foreground shadow" : "text-muted-foreground hover:text-foreground",
               )}
             >
               {r === "day" ? "Full day · 24h" : "Full week · 7d"}
@@ -199,7 +203,7 @@ export function DeepDiveMap() {
 
       <Panel className="overflow-hidden p-0">
         <div className="overflow-x-auto">
-          <div style={{ minWidth: n > 12 ? `${n * 2.6 + 3}rem` : undefined }}>
+          <div style={{ minWidth: n > 12 ? `${n * 3.4 + 4}rem` : undefined }}>
             {/* Hour / day axis */}
             <MeteoRow>
               <RowLabel>{range === "day" ? "Time" : "Day"}</RowLabel>
@@ -208,7 +212,7 @@ export function DeepDiveMap() {
                   <Cell key={c.key} i={i} active={active} nowIdx={nowIdx} setActive={setActive}>
                     <span
                       className={cn(
-                        "font-mono text-[0.625rem] tabular-nums",
+                        "font-mono text-xs tabular-nums sm:text-sm",
                         i === nowIdx ? "font-bold text-signal" : "text-muted-foreground",
                       )}
                     >
@@ -225,8 +229,9 @@ export function DeepDiveMap() {
               <Cells>
                 {columns.map((c, i) => (
                   <Cell key={c.key} i={i} active={active} nowIdx={nowIdx} setActive={setActive}>
-                    <span className="text-base leading-none" title={`${c.full} · ${c.condition}`}>
-                      {c.emoji}
+                    <span title={`${c.full} · ${c.condition}`}>
+                      <WeatherIcon code={c.code} className="h-5 w-5 sm:h-6 sm:w-6" />
+                      <span className="sr-only">{c.condition}</span>
                     </span>
                   </Cell>
                 ))}
@@ -237,9 +242,9 @@ export function DeepDiveMap() {
             <div className="flex items-stretch border-b border-border">
               <RowLabel className="items-center">
                 <Thermometer className="h-3.5 w-3.5" aria-hidden="true" />
-                <span className="font-mono text-[0.5rem]">{tempUnit(units)}</span>
+                <span className="font-mono text-[0.625rem]">{tempUnit(units)}</span>
               </RowLabel>
-              <div className="relative h-[132px] flex-1">
+              <div className="relative h-[200px] flex-1 sm:h-[230px]">
                 {/* Sky background per column (day = light blue, night = deep navy) */}
                 <div className="absolute inset-0 flex">
                   {columns.map((c) => (
@@ -272,32 +277,60 @@ export function DeepDiveMap() {
                         />
                       ))}
                     </linearGradient>
+                    <filter id={`${gradId}-glow`} x="-20%" y="-20%" width="140%" height="140%">
+                      <feGaussianBlur stdDeviation="2.5" result="blur" />
+                      <feMerge>
+                        <feMergeNode in="blur" />
+                        <feMergeNode in="SourceGraphic" />
+                      </feMerge>
+                    </filter>
                   </defs>
+                  {/* Soft glow underlay */}
                   <path
                     d={ribbonPath}
                     fill="none"
                     stroke={`url(#${gradId})`}
-                    strokeWidth={13}
+                    strokeWidth={22}
+                    strokeOpacity={0.28}
+                    strokeLinejoin="round"
+                    strokeLinecap="round"
+                    vectorEffect="non-scaling-stroke"
+                    filter={`url(#${gradId}-glow)`}
+                  />
+                  {/* Main ribbon */}
+                  <path
+                    d={ribbonPath}
+                    fill="none"
+                    stroke={`url(#${gradId})`}
+                    strokeWidth={18}
                     strokeLinejoin="round"
                     strokeLinecap="round"
                     vectorEffect="non-scaling-stroke"
                   />
                 </svg>
-                {/* Temperature labels riding the curve */}
+                {/* Temperature labels riding the curve as pill chips */}
                 <div className="absolute inset-0">
                   {columns.map((c, i) => (
                     <span
                       key={c.key}
-                      className="absolute -translate-x-1/2 -translate-y-1/2 font-mono text-[0.625rem] font-bold tabular-nums text-white"
-                      style={{
-                        left: `${cx(i)}%`,
-                        top: `${yFrac(c.temp) * 100}%`,
-                        textShadow: "0 1px 2px rgba(0,0,0,0.55)",
-                      }}
+                      className="absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center"
+                      style={{ left: `${cx(i)}%`, top: `${yFrac(c.temp) * 100}%` }}
                     >
-                      {Math.round(c.temp)}
+                      <span
+                        className="rounded-full px-1.5 py-0.5 font-mono text-xs font-bold leading-none tabular-nums text-white ring-1 ring-white/25 sm:text-sm"
+                        style={{
+                          background: tempColorC(toC(c.temp)),
+                          boxShadow: "0 1px 3px rgba(0,0,0,0.35)",
+                        }}
+                      >
+                        {Math.round(c.temp)}°
+                      </span>
                       {range === "week" && c.tempMin != null ? (
-                        <span className="block text-[0.5rem] font-medium opacity-80">{Math.round(c.tempMin)}</span>
+                        <span
+                          className="mt-1 rounded-full bg-black/35 px-1.5 py-0.5 font-mono text-[0.625rem] font-medium leading-none tabular-nums text-white/85"
+                        >
+                          {Math.round(c.tempMin)}°
+                        </span>
                       ) : null}
                     </span>
                   ))}
@@ -305,7 +338,7 @@ export function DeepDiveMap() {
                 {/* Now marker */}
                 {nowIdx >= 0 ? (
                   <div
-                    className="absolute top-0 bottom-0 w-px bg-signal"
+                    className="absolute top-0 bottom-0 w-0.5 bg-signal shadow-[0_0_8px_var(--color-signal)]"
                     style={{ left: `${cx(nowIdx)}%` }}
                     aria-hidden="true"
                   />
@@ -317,7 +350,7 @@ export function DeepDiveMap() {
             <div className="flex items-stretch border-b border-border">
               <RowLabel className="items-center">
                 <CloudRain className="h-3.5 w-3.5" aria-hidden="true" />
-                <span className="font-mono text-[0.5rem]">{precipUnit(units)}</span>
+                <span className="font-mono text-[0.625rem]">{precipUnit(units)}</span>
               </RowLabel>
               {noPrecip ? (
                 <div className="flex flex-1 items-center justify-center py-2 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
@@ -329,7 +362,7 @@ export function DeepDiveMap() {
                     <Cell key={c.key} i={i} active={active} nowIdx={nowIdx} setActive={setActive}>
                       <span
                         className={cn(
-                          "font-mono text-[0.5625rem] tabular-nums",
+                          "font-mono text-xs tabular-nums",
                           c.precip > 0 ? "font-semibold text-accent" : "text-muted-foreground/50",
                         )}
                       >
@@ -345,14 +378,14 @@ export function DeepDiveMap() {
             <MeteoRow>
               <RowLabel className="items-center">
                 <Umbrella className="h-3.5 w-3.5" aria-hidden="true" />
-                <span className="font-mono text-[0.5rem]">%</span>
+                <span className="font-mono text-[0.625rem]">%</span>
               </RowLabel>
               <Cells>
                 {columns.map((c, i) => (
                   <Cell key={c.key} i={i} active={active} nowIdx={nowIdx} setActive={setActive}>
                     <span
                       className={cn(
-                        "font-mono text-[0.5625rem] tabular-nums",
+                        "font-mono text-xs tabular-nums",
                         c.precipProb >= 50 ? "font-semibold text-accent" : "text-muted-foreground",
                       )}
                     >
@@ -367,13 +400,13 @@ export function DeepDiveMap() {
             <MeteoRow>
               <RowLabel className="items-center">
                 <Thermometer className="h-3.5 w-3.5" aria-hidden="true" />
-                <span className="font-mono text-[0.5rem]">feels</span>
+                <span className="font-mono text-[0.625rem]">feels</span>
               </RowLabel>
               <Cells>
                 {columns.map((c, i) => (
                   <Cell key={c.key} i={i} active={active} nowIdx={nowIdx} setActive={setActive}>
                     <span
-                      className="font-mono text-[0.5625rem] font-semibold tabular-nums"
+                      className="font-mono text-xs font-semibold tabular-nums"
                       style={{ color: tempColorC(toC(c.feels)) }}
                     >
                       {Math.round(c.feels)}°
@@ -387,7 +420,7 @@ export function DeepDiveMap() {
             <div className="flex items-stretch border-b border-border">
               <RowLabel className="items-center">
                 <Waves className="h-3.5 w-3.5" aria-hidden="true" />
-                <span className="font-mono text-[0.5rem]">RH%</span>
+                <span className="font-mono text-[0.625rem]">RH%</span>
               </RowLabel>
               <div className="flex flex-1">
                 {columns.map((c, i) => (
@@ -397,12 +430,12 @@ export function DeepDiveMap() {
                     onMouseEnter={() => setActive(i)}
                     onMouseLeave={() => setActive(null)}
                     className={cn(
-                      "flex flex-1 items-center justify-center py-1.5",
+                      "flex flex-1 items-center justify-center py-2.5",
                       i === nowIdx && "ring-1 ring-inset ring-signal",
                     )}
                     style={{ background: humidityTint(c.humidity) }}
                   >
-                    <span className="font-mono text-[0.5625rem] font-semibold tabular-nums text-foreground">
+                    <span className="font-mono text-xs font-semibold tabular-nums text-foreground">
                       {Math.round(c.humidity)}
                     </span>
                   </button>
@@ -414,21 +447,19 @@ export function DeepDiveMap() {
             <MeteoRow>
               <RowLabel className="items-center">
                 <Compass className="h-3.5 w-3.5" aria-hidden="true" />
-                <span className="font-mono text-[0.5rem]">{speedUnit(units)}</span>
+                <span className="font-mono text-[0.625rem]">{speedUnit(units)}</span>
               </RowLabel>
               <Cells>
                 {columns.map((c, i) => (
                   <Cell key={c.key} i={i} active={active} nowIdx={nowIdx} setActive={setActive}>
-                    <span className="flex flex-col items-center gap-0.5">
-                      <span
+                    <span className="flex flex-col items-center gap-1">
+                      <Navigation
                         aria-hidden="true"
-                        className="text-xs leading-none text-accent"
-                        style={{ display: "inline-block", transform: `rotate(${c.windDir}deg)` }}
-                        title={`${Math.round(c.windDir)}° ${compass(c.windDir)}`}
-                      >
-                        ↓
-                      </span>
-                      <span className="font-mono text-[0.5625rem] tabular-nums text-foreground">
+                        className="h-3.5 w-3.5 fill-accent text-accent"
+                        style={{ transform: `rotate(${c.windDir + 180}deg)` }}
+                      />
+                      <span className="sr-only">{`${Math.round(c.windDir)}° ${compass(c.windDir)}`}</span>
+                      <span className="font-mono text-xs tabular-nums text-foreground">
                         {c.windSpeed.toFixed(isMetric ? 1 : 0)}
                       </span>
                     </span>
@@ -441,12 +472,12 @@ export function DeepDiveMap() {
             <div className="flex items-stretch">
               <RowLabel className="items-center">
                 <Gauge className="h-3.5 w-3.5" aria-hidden="true" />
-                <span className="font-mono text-[0.5rem]">gust</span>
+                <span className="font-mono text-[0.625rem]">gust</span>
               </RowLabel>
               <Cells>
                 {columns.map((c, i) => (
                   <Cell key={c.key} i={i} active={active} nowIdx={nowIdx} setActive={setActive} last>
-                    <span className="font-mono text-[0.5625rem] tabular-nums text-muted-foreground">
+                    <span className="font-mono text-xs tabular-nums text-muted-foreground">
                       {c.windGust.toFixed(isMetric ? 1 : 0)}
                     </span>
                   </Cell>
@@ -489,7 +520,7 @@ function RowLabel({ children, className }: { children: React.ReactNode; classNam
   return (
     <div
       className={cn(
-        "flex w-14 shrink-0 flex-col justify-center gap-0.5 border-r border-border bg-secondary/40 px-2 py-1 text-muted-foreground",
+        "flex w-16 shrink-0 flex-col justify-center gap-0.5 border-r border-border bg-secondary/40 px-2 py-1 text-muted-foreground sm:w-20 [&_svg]:h-4 [&_svg]:w-4",
         className,
       )}
     >
@@ -522,7 +553,7 @@ function Cell({
       onMouseEnter={() => setActive(i)}
       onMouseLeave={() => setActive(null)}
       className={cn(
-        "flex flex-1 items-center justify-center py-1",
+        "flex flex-1 items-center justify-center py-2",
         !last && "",
         i === nowIdx && "bg-signal/10",
         active === i && "bg-foreground/[0.06]",

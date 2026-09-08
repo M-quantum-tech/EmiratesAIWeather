@@ -5,17 +5,17 @@
 
 import type { WindGrid } from "./wind-field"
 
-// Windy-like speed palette (m/s): deep blue calm → teal → green → yellow → orange → red → magenta.
+// NCM Cosmo-UAE speed palette (m/s): rich royal blue calm → teal → green → yellow → orange → red → magenta.
 const STOPS: Array<[number, [number, number, number]]> = [
-  [0, [26, 58, 120]],
-  [3, [32, 96, 176]],
-  [6, [26, 150, 190]],
-  [9, [42, 182, 150]],
-  [12, [120, 200, 104]],
-  [15, [224, 208, 86]],
-  [18, [240, 150, 60]],
-  [23, [228, 72, 58]],
-  [30, [150, 42, 120]],
+  [0, [38, 66, 168]],
+  [3, [40, 110, 205]],
+  [6, [30, 165, 205]],
+  [9, [46, 195, 158]],
+  [12, [128, 210, 108]],
+  [15, [232, 214, 88]],
+  [18, [246, 156, 60]],
+  [23, [232, 74, 58]],
+  [30, [156, 44, 126]],
 ]
 
 export function windColor(s: number): [number, number, number] {
@@ -129,7 +129,7 @@ export function createWindLayer(L: any, grid: WindGrid) {
       const se = map.latLngToContainerPoint([g.la2, g.lo2])
       ctx.imageSmoothingEnabled = true
       ctx.imageSmoothingQuality = "high"
-      ctx.globalAlpha = 0.6
+      ctx.globalAlpha = 0.85
       ctx.drawImage(off, nw.x, nw.y, se.x - nw.x, se.y - nw.y)
       ctx.globalAlpha = 1
 
