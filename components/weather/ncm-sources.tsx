@@ -125,17 +125,24 @@ export function NcmSources() {
 
   const frameUrl = (f: Frame) => {
     const host = maps?.host ?? "https://tilecache.rainviewer.com"
-    return layer === "radar"
+    // RainViewer reuses tile paths for refreshed satellite/radar frames in
+    // some caches. Include the frame timestamp so Leaflet requests the new
+    // image instead of retaining a stale tile response.
+    const path = layer === "radar"
       ? `${host}${f.path}/512/{z}/{x}/{y}/7/1_1.png`
       : `${host}${f.path}/512/{z}/{x}/{y}/0/0_0.png`
+    return `${path}?frame=${f.time}`
   }
 
-  // Load and refresh RainViewer frame catalogue every 5 minutes.
+  // Load and refresh the RainViewer catalogue frequently enough for the
+  // 15-minute satellite product used by the NCM viewer.
   useEffect(() => {
     let cancelled = false
     async function load() {
       try {
-        const res = await fetch("https://api.rainviewer.com/public/weather-maps.json")
+        const res = await fetch(`https://api.rainviewer.com/public/weather-maps.json?ts=${Date.now()}`, {
+          cache: "no-store",
+        })
         if (!res.ok) return
         const json = await res.json()
         const radar: Frame[] = [...(json.radar?.past ?? []), ...(json.radar?.nowcast ?? [])].map((f: any) => ({
@@ -149,7 +156,7 @@ export function NcmSources() {
       }
     }
     load()
-    const id = setInterval(load, 5 * 60 * 1000)
+    const id = setInterval(load, 60 * 1000)
     return () => {
       cancelled = true
       clearInterval(id)
