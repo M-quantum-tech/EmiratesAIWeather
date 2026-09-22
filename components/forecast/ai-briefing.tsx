@@ -5,6 +5,7 @@ import {
   ArrowDown,
   ArrowUp,
   CalendarDays,
+  ChevronRight,
   Clock,
   CloudRain,
   Droplets,
@@ -417,6 +418,52 @@ export function AiBriefing() {
         </span>
       </div>
 
+      {/* 14-day highlights — outlook strip in the header; each opens that day's breakdown */}
+      {highlights.length > 0 ? (
+        <div className="border-b border-border bg-card/30 px-4 py-3">
+          <div className="mb-2.5 flex items-center gap-1.5">
+            <CalendarDays className="h-3 w-3 text-signal" aria-hidden="true" />
+            <span className="label-caps text-foreground/80">14-day highlights</span>
+            <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground/60">
+              · tap to open a day
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+            {highlights.map((h) => {
+              const tone = TONE[h.tone]
+              const Icon = h.icon
+              return (
+                <button
+                  key={h.id}
+                  type="button"
+                  onClick={() => jumpToDay(h.index)}
+                  aria-label={`${h.label}: ${h.weekday}, ${h.value}. Open this day's hourly breakdown.`}
+                  className="group relative flex items-center gap-2.5 overflow-hidden rounded-lg border border-border bg-card px-3 py-2.5 text-left transition-colors hover:border-signal/40 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-signal"
+                >
+                  <span aria-hidden="true" className={cn("absolute inset-y-2 left-0 w-0.5 rounded-full", tone.rail)} />
+                  <span className={cn("grid h-8 w-8 shrink-0 place-items-center rounded-md border", tone.chip)}>
+                    <Icon className="h-4 w-4" aria-hidden="true" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+                      {h.label}
+                    </span>
+                    <span className="mt-0.5 flex items-baseline gap-1.5">
+                      <span className="text-sm font-semibold leading-none text-foreground">{h.weekday}</span>
+                      <span className={cn("text-xs font-bold leading-none tabular-nums", tone.text)}>{h.value}</span>
+                    </span>
+                  </span>
+                  <ChevronRight
+                    className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5 group-hover:text-signal"
+                    aria-hidden="true"
+                  />
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      ) : null}
+
       {/* Timed advisory cards */}
       <div className="grid gap-px bg-border sm:grid-cols-2 xl:grid-cols-4">
         {briefs.map((b) => {
@@ -474,45 +521,11 @@ export function AiBriefing() {
         })}
       </div>
 
-      {/* 14-day highlights — each selects that day and drives the breakdown below */}
-      <div className="flex flex-col gap-2 border-t border-border px-4 py-3">
-        <span className="flex items-center gap-1.5 label-caps text-muted-foreground">
-          <CalendarDays className="h-3 w-3" aria-hidden="true" />
-          14-day highlights · tap to open a day
-        </span>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {highlights.map((h) => {
-            const tone = TONE[h.tone]
-            const Icon = h.icon
-            return (
-              <button
-                key={h.id}
-                type="button"
-                onClick={() => jumpToDay(h.index)}
-                aria-label={`${h.label}: ${h.weekday}, ${h.value}. Open this day's hourly breakdown.`}
-                className="group flex items-center gap-2.5 rounded-lg border border-border bg-card px-3 py-2 text-left transition-colors hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-signal"
-              >
-                <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-md border", tone.chip)}>
-                  <Icon className="h-3.5 w-3.5" aria-hidden="true" />
-                </span>
-                <span className="min-w-0">
-                  <span className="block truncate font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-                    {h.label}
-                  </span>
-                  <span className="flex items-baseline gap-1.5">
-                    <span className="text-sm font-semibold text-foreground">{h.weekday}</span>
-                    <span className={cn("text-xs font-bold tabular-nums", tone.text)}>{h.value}</span>
-                  </span>
-                </span>
-              </button>
-            )
-          })}
-        </div>
-        <p className="text-[0.625rem] leading-relaxed text-muted-foreground">
-          Advisories are derived live from the 24-hour curve and the 14-day multi-model blend (ECMWF, DWD, NOAA,
-          Météo-France, JMA, KMA, UK Met Office, BOM). Times are local; values update every few minutes.
-        </p>
-      </div>
+      {/* Model provenance */}
+      <p className="border-t border-border px-4 py-3 text-[0.625rem] leading-relaxed text-muted-foreground">
+        Advisories are derived live from the 24-hour curve and the 14-day multi-model blend (ECMWF, DWD, NOAA,
+        Météo-France, JMA, KMA, UK Met Office, BOM). Times are local; values update every few minutes.
+      </p>
     </Panel>
   )
 }

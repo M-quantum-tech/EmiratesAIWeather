@@ -806,7 +806,7 @@ function TrendChart({
           <>
             <line
               x1={px(activeIdx)}
-              y1={0}
+              y1={TOP - 8}
               x2={px(activeIdx)}
               y2={H}
               stroke="var(--foreground)"
@@ -814,17 +814,22 @@ function TrendChart({
               opacity="0.4"
               vectorEffect="non-scaling-stroke"
             />
+            {/* cap at the top of the guide */}
+            <circle cx={px(activeIdx)} cy={TOP - 8} r="2.5" fill="var(--foreground)" opacity="0.5" />
             {normed.map((ys, si) => (
-              <circle
-                key={series[si].label}
-                cx={px(activeIdx)}
-                cy={ys[activeIdx]}
-                r="3.5"
-                fill="var(--background)"
-                stroke={series[si].color}
-                strokeWidth="2"
-                vectorEffect="non-scaling-stroke"
-              />
+              <g key={series[si].label}>
+                {/* halo */}
+                <circle cx={px(activeIdx)} cy={ys[activeIdx]} r="7" fill={series[si].color} opacity="0.15" />
+                <circle
+                  cx={px(activeIdx)}
+                  cy={ys[activeIdx]}
+                  r="3.5"
+                  fill="var(--background)"
+                  stroke={series[si].color}
+                  strokeWidth="2"
+                  vectorEffect="non-scaling-stroke"
+                />
+              </g>
             ))}
           </>
         ) : null}
@@ -860,28 +865,60 @@ function TrendChart({
         ))}
       </div>
 
-      {/* floating tooltip */}
-      {activeIdx !== null ? (
-        <div
-          className="pointer-events-none absolute top-2 z-10 -translate-x-1/2 rounded-lg border border-border bg-popover/95 px-3 py-2 shadow-xl backdrop-blur"
-          style={{ left: `${Math.min(88, Math.max(12, tooltipLeft))}%` }}
-        >
-          <p className="font-mono text-[0.625rem] font-semibold uppercase tracking-wider text-foreground">
-            {view.tooltipHead(activeIdx)}
-          </p>
-          <div className="mt-1 flex flex-col gap-0.5">
-            {series.map((serie) => (
-              <span key={serie.label} className="flex items-center justify-between gap-3 font-mono text-[0.625rem] tabular-nums">
-                <span className="flex items-center gap-1.5 text-muted-foreground">
-                  <span className="inline-block h-0.5 w-3 rounded-sm" style={{ background: serie.color }} />
-                  {serie.label}
-                </span>
-                <span className="font-semibold text-foreground">{serie.format(serie.values[activeIdx])}</span>
-              </span>
-            ))}
-          </div>
-        </div>
-      ) : null}
+      {/* floating tooltip — aligns the scrubbed point with the trend's peak / trough */}
+      {activeIdx !== null
+        ? (() => {
+            const headLabel = view.tooltipHead(activeIdx).split(" · ")[0]
+            const status =
+              activeIdx === nowIndex
+                ? { label: "Live", text: "text-signal", dot: "bg-signal" }
+                : activeIdx > boundary
+                  ? { label: n > 24 ? "Extended" : "Projected", text: "text-accent", dot: "bg-accent" }
+                  : { label: "Forecast", text: "text-muted-foreground", dot: "bg-muted-foreground" }
+            const atPeak = headLabel === view.peak.when
+            const atTrough = headLabel === view.trough.when
+            return (
+              <div
+                className="pointer-events-none absolute top-2 z-10 w-max min-w-[9.5rem] -translate-x-1/2 rounded-lg border border-border bg-popover/95 px-3 py-2 shadow-xl backdrop-blur"
+                style={{ left: `${Math.min(84, Math.max(16, tooltipLeft))}%` }}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="font-mono text-[0.625rem] font-semibold uppercase tracking-wider text-foreground">
+                    {headLabel}
+                  </p>
+                  <span className={cn("flex items-center gap-1 font-mono text-[0.5rem] uppercase tracking-wider", status.text)}>
+                    <span className={cn("h-1.5 w-1.5 rounded-full", status.dot)} aria-hidden="true" />
+                    {status.label}
+                  </span>
+                </div>
+                <div className="mt-1.5 flex flex-col gap-0.5">
+                  {series.map((serie) => (
+                    <span
+                      key={serie.label}
+                      className="flex items-center justify-between gap-3 font-mono text-[0.625rem] tabular-nums"
+                    >
+                      <span className="flex items-center gap-1.5 text-muted-foreground">
+                        <span className="inline-block h-0.5 w-3 rounded-sm" style={{ background: serie.color }} />
+                        {serie.label}
+                      </span>
+                      <span className="font-semibold text-foreground">{serie.format(serie.values[activeIdx])}</span>
+                    </span>
+                  ))}
+                </div>
+                <div className="mt-1.5 flex items-center justify-between gap-3 border-t border-border pt-1.5 font-mono text-[0.5rem] uppercase tracking-wider">
+                  <span className={cn("flex items-center gap-1", atPeak ? "text-signal" : "text-muted-foreground")}>
+                    <ArrowUpRight className="h-2.5 w-2.5" aria-hidden="true" />
+                    {view.peak.value} · {view.peak.when}
+                  </span>
+                  <span className={cn("flex items-center gap-1", atTrough ? "text-accent" : "text-muted-foreground")}>
+                    <ArrowDownRight className="h-2.5 w-2.5" aria-hidden="true" />
+                    {view.trough.value} · {view.trough.when}
+                  </span>
+                </div>
+              </div>
+            )
+          })()
+        : null}
     </div>
   )
 }
