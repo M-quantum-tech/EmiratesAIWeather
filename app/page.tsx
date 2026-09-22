@@ -5,7 +5,7 @@ import { WeatherProvider } from "@/components/weather/weather-provider"
 import { AlertBanner } from "@/components/weather/alert-banner"
 import { ForecastStrip } from "@/components/forecast/forecast-strip"
 import { DniForecast } from "@/components/solar/dni-forecast"
-import { WeekMeteogram } from "@/components/forecast/week-meteogram"
+import { Outlook14Day } from "@/components/forecast/outlook-14day"
 import { HourlyBreakdown } from "@/components/forecast/hourly-breakdown"
 import { MeasureMap } from "@/components/weather/measure-map"
 import { NcmSources } from "@/components/weather/ncm-sources"
@@ -65,10 +65,10 @@ export default function Page() {
               </div>
             </section>
 
-            {/* 7-day multi-panel meteogram */}
-            <div className="mt-6">
-              <WeekMeteogram />
-            </div>
+            {/* 14-day multi-model outlook — synced to the shared selected day */}
+            <section id="outlook" className="mt-6 scroll-mt-6">
+              <Outlook14Day />
+            </section>
 
             {/* 3 · Live observations */}
             <section id="observations" className="mt-6 scroll-mt-6">
