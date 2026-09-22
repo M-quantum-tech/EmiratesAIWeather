@@ -12,7 +12,7 @@ const TIERS: { level: AlertLevel; label: string; ring: string; dot: string; text
   { level: "red", label: "RED", ring: "border-alert-red/70", dot: "bg-alert-red", text: "text-alert-red" },
 ]
 
-const MAX_PX = 232 // diameter of the outermost (green) ring
+const MAX_PX = 300 // diameter of the outermost (green) ring
 const RANK: Record<AlertLevel, number> = { green: 0, yellow: 1, orange: 2, red: 3 }
 
 /**
@@ -49,7 +49,7 @@ export function ProximityRings({ active, showFarSite = false }: { active: AlertL
             <div
               key={tier.level}
               className={cn(
-                "absolute rounded-full border-2 transition-all",
+                "absolute rounded-full border-[3px] transition-all",
                 tier.ring,
                 isActive ? "opacity-100" : isInsideActive ? "opacity-95" : "opacity-45",
                 isActive && tier.level === "red" && "alert-glow",
@@ -59,7 +59,7 @@ export function ProximityRings({ active, showFarSite = false }: { active: AlertL
               {/* distance tick */}
               <span
                 className={cn(
-                  "absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2 rounded-full bg-background px-1 font-mono text-[0.5rem] font-bold tabular-nums",
+                  "absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2 rounded-full bg-background px-1.5 font-mono text-xs font-bold tabular-nums",
                   isActive ? tier.text : "text-muted-foreground/70",
                 )}
               >
@@ -67,8 +67,8 @@ export function ProximityRings({ active, showFarSite = false }: { active: AlertL
               </span>
               {isActive ? (
                 <span className="absolute bottom-1 left-1/2 flex -translate-x-1/2 translate-y-1/2">
-                  <span className={cn("absolute inline-flex h-3 w-3 animate-ping rounded-full opacity-75", tier.dot)} />
-                  <span className={cn("relative inline-flex h-3 w-3 rounded-full", tier.dot)} />
+                  <span className={cn("absolute inline-flex h-4 w-4 animate-ping rounded-full opacity-75", tier.dot)} />
+                  <span className={cn("relative inline-flex h-4 w-4 rounded-full", tier.dot)} />
                 </span>
               ) : null}
             </div>
@@ -81,22 +81,22 @@ export function ProximityRings({ active, showFarSite = false }: { active: AlertL
             className="absolute z-10 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center"
             style={{ top: "50%", left: `calc(50% + ${yellowSize / 2}px)` }}
           >
-            <span className="relative flex h-2.5 w-2.5">
+            <span className="relative flex h-3.5 w-3.5">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-alert-yellow opacity-75" />
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-alert-yellow" />
+              <span className="relative inline-flex h-3.5 w-3.5 rounded-full bg-alert-yellow" />
             </span>
-            <span className="mt-0.5 rounded bg-background px-1 font-mono text-[0.5rem] font-bold uppercase tracking-wide text-alert-yellow">
+            <span className="mt-1 rounded bg-background px-1.5 py-0.5 font-mono text-[0.625rem] font-bold uppercase tracking-wide text-alert-yellow">
               Far 50km
             </span>
           </span>
         ) : null}
 
         {/* user pin */}
-        <span className="relative z-10 grid h-8 w-8 place-items-center rounded-full border border-signal/50 bg-background text-signal shadow">
-          <MapPin className="h-4 w-4" aria-hidden="true" />
+        <span className="relative z-10 grid h-10 w-10 place-items-center rounded-full border-2 border-signal/50 bg-background text-signal shadow">
+          <MapPin className="h-5 w-5" aria-hidden="true" />
         </span>
       </div>
-      <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+      <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
         Distance from your location (km)
       </span>
     </div>
