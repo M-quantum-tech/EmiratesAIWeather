@@ -3,7 +3,7 @@ import { SiteNav } from "@/components/site-nav"
 import { LeftNav } from "@/components/left-nav"
 import { WeatherProvider } from "@/components/weather/weather-provider"
 import { AlertBanner } from "@/components/weather/alert-banner"
-import { ForecastStrip } from "@/components/forecast/forecast-strip"
+import { AiPrediction } from "@/components/forecast/ai-prediction"
 import { DniForecast } from "@/components/solar/dni-forecast"
 import { Outlook14Day } from "@/components/forecast/outlook-14day"
 import { HourlyBreakdown } from "@/components/forecast/hourly-breakdown"
@@ -20,9 +20,9 @@ import { TipsPopup } from "@/components/wellness/tips-popup"
 import { Hero } from "@/components/hero"
 
 export const metadata: Metadata = {
-  title: "EmiratesAIWeather — 7-Day Forecast, EmiratesConsensus Model & Live Radar",
+  title: "EmiratesAIWeather — AI Prediction, EmiratesConsensus Model & Live Radar",
   description:
-    "Free 7-day forecast with a selectable hourly meteogram, live UAE radar & satellite loops with zoom and a time slider, a large multi-model measure & forecast map with location search and the EmiratesConsensus blend, official NCM Al Bahar sources, name + phone player registration, and pass-and-play chess.",
+    "AI weather prediction with a trendable 24-hour and 14-day multi-model outlook (ECMWF, DWD, NOAA, Météo-France, JMA, KMA, UK Met Office, BOM), a selectable hourly breakdown, live UAE radar & satellite loops, a multi-model measure & forecast map, official NCM Al Bahar sources, player registration, and pass-and-play chess.",
 }
 
 export default function Page() {
@@ -49,9 +49,9 @@ export default function Page() {
               <AlertBanner />
             </div>
 
-            {/* 1 · 7-day forecast (drives the hourly meteogram) */}
+            {/* 1 · AI prediction — trendable multi-model forecast (24H / 14-day) that drives the breakdown below */}
             <section id="forecast" className="mt-6 scroll-mt-6">
-              <ForecastStrip />
+              <AiPrediction />
             </section>
 
             {/* 1b · DNI solar forecast + the selected day's 24-hour breakdown, merged into one block.
