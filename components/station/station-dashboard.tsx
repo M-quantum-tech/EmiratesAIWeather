@@ -85,7 +85,7 @@ export function StationDashboard() {
       <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-4 font-mono text-[0.6875rem] text-muted-foreground">
         <span className="flex items-center gap-2">
           <Radio className="h-3.5 w-3.5 text-signal" aria-hidden="true" />
-          Auto-polling every 5 minutes
+          Auto-polling every 3 minutes
           {payload ? ` · times in ${payload.timezone}` : ""}
         </span>
         <span>EmiratesAIWeather · a platform by M-Quantum-Tech · data via Open-Meteo</span>

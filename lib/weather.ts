@@ -339,6 +339,37 @@ export function attenuationBand(dbPerKm: number) {
   return { label: "Severe fade", tone: "bad" as const }
 }
 
+export type SolarDay = {
+  date: string
+  /** Peak direct normal irradiance reached during the day (W/m²). */
+  peakDni: number
+  /** Direct normal irradiance daily energy yield (kWh/m²/day). */
+  dniEnergy: number
+  /** Global horizontal irradiance daily energy yield (kWh/m²/day) for context. */
+  ghiEnergy: number
+  /** Local hour (0–23) of the DNI peak. */
+  peakHour: number
+  /** Number of hours with usable DNI (≥ 120 W/m²). */
+  sunHours: number
+}
+
+export type SolarPayload = {
+  timezone: string
+  latitude: number
+  longitude: number
+  /** Up to 14 daily aggregates, ordered from today forward. */
+  days: SolarDay[]
+  fetchedAt: string
+}
+
+/** Qualitative band for a DNI daily energy yield (kWh/m²/day) — solar-resource grading. */
+export function dniBand(energy: number): { label: string; tone: "bad" | "warn" | "moderate" | "good" } {
+  if (energy < 3) return { label: "Poor", tone: "bad" }
+  if (energy < 5) return { label: "Fair", tone: "warn" }
+  if (energy < 7) return { label: "Good", tone: "moderate" }
+  return { label: "Excellent", tone: "good" }
+}
+
 export type AlertLevel = "green" | "yellow" | "orange" | "red"
 
 /** Proximity radius (km) the danger buzzer scans for severe conditions. */
@@ -374,10 +405,10 @@ export type WeatherAlert = {
 }
 
 const ALERT_META: Record<AlertLevel, { code: string; emoji: string; title: string }> = {
-  green: { code: "GREEN", emoji: "🧍", title: "SAFE" },
-  yellow: { code: "YELLOW", emoji: "🧍‍♂️", title: "CAUTION" },
-  orange: { code: "ORANGE", emoji: "🏃", title: "SEVERE" },
-  red: { code: "RED", emoji: "🏃‍♂️💨", title: "DANGER" },
+  green: { code: "GREEN", emoji: "🧍", title: "GREEN" },
+  yellow: { code: "YELLOW", emoji: "🧍‍♂️", title: "YELLOW" },
+  orange: { code: "ORANGE", emoji: "🏃", title: "ORANGE" },
+  red: { code: "RED", emoji: "🏃‍♂️💨", title: "RED" },
 }
 
 /**

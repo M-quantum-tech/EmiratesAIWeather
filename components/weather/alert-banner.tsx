@@ -41,10 +41,10 @@ const LEVEL_STYLES: Record<
 }
 
 const LADDER: { level: AlertLevel; label: string; solid: string }[] = [
-  { level: "green", label: "SAFE", solid: "bg-alert-green" },
-  { level: "yellow", label: "CAUTION", solid: "bg-alert-yellow" },
-  { level: "orange", label: "SEVERE", solid: "bg-alert-orange" },
-  { level: "red", label: "DANGER", solid: "bg-alert-red" },
+  { level: "green", label: "GREEN", solid: "bg-alert-green" },
+  { level: "yellow", label: "YELLOW", solid: "bg-alert-yellow" },
+  { level: "orange", label: "ORANGE", solid: "bg-alert-orange" },
+  { level: "red", label: "RED", solid: "bg-alert-red" },
 ]
 
 const HAZARD_ICON: Record<HazardKey, typeof Wind> = {
@@ -198,14 +198,6 @@ export function AlertBanner() {
             <div className="flex items-baseline gap-2">
               <span className={cn("text-4xl font-black uppercase tracking-tight sm:text-5xl", styles.text)}>
                 {alert.title}
-              </span>
-              <span
-                className={cn(
-                  "rounded border px-1.5 py-0.5 font-mono text-[0.625rem] font-bold uppercase tracking-widest",
-                  styles.chip,
-                )}
-              >
-                {alert.code}
               </span>
             </div>
             <h3 className={cn("mt-1 text-balance text-base font-semibold tracking-tight", styles.text)}>

@@ -5,6 +5,7 @@ import { HeroIntro } from "@/components/hero-intro"
 import { WeatherProvider } from "@/components/weather/weather-provider"
 import { AlertBanner } from "@/components/weather/alert-banner"
 import { ForecastStrip } from "@/components/forecast/forecast-strip"
+import { DniForecast } from "@/components/solar/dni-forecast"
 import { WeekMeteogram } from "@/components/forecast/week-meteogram"
 import { MeasureMap } from "@/components/weather/measure-map"
 import { NcmSources } from "@/components/weather/ncm-sources"
@@ -55,6 +56,11 @@ export default function Page() {
             {/* 1 · 7-day forecast (drives the hourly meteogram) */}
             <section id="forecast" className="mt-6 scroll-mt-6">
               <ForecastStrip />
+            </section>
+
+            {/* 1b · DNI (Direct Normal Irradiance) 7 & 14-day solar-resource forecast */}
+            <section id="solar" className="mt-6 scroll-mt-6">
+              <DniForecast />
             </section>
 
             {/* 2 · Hourly breakdown / meteogram for the selected day */}

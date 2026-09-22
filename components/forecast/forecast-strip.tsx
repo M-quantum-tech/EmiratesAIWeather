@@ -16,10 +16,10 @@ import {
 import { cn } from "@/lib/utils"
 
 const SAFETY_META: Record<AlertLevel, { label: string; dot: string; chip: string }> = {
-  green: { label: "SAFE", dot: "bg-alert-green", chip: "bg-alert-green/15 text-alert-green border-alert-green/40" },
-  yellow: { label: "CAUTION", dot: "bg-alert-yellow", chip: "bg-alert-yellow/15 text-alert-yellow border-alert-yellow/40" },
-  orange: { label: "SEVERE", dot: "bg-alert-orange", chip: "bg-alert-orange/15 text-alert-orange border-alert-orange/40" },
-  red: { label: "DANGER", dot: "bg-alert-red", chip: "bg-alert-red/15 text-alert-red border-alert-red/50" },
+  green: { label: "GREEN", dot: "bg-alert-green", chip: "bg-alert-green/15 text-alert-green border-alert-green/40" },
+  yellow: { label: "YELLOW", dot: "bg-alert-yellow", chip: "bg-alert-yellow/15 text-alert-yellow border-alert-yellow/40" },
+  orange: { label: "ORANGE", dot: "bg-alert-orange", chip: "bg-alert-orange/15 text-alert-orange border-alert-orange/40" },
+  red: { label: "RED", dot: "bg-alert-red", chip: "bg-alert-red/15 text-alert-red border-alert-red/50" },
 }
 
 function DaySafetyBadge({ day, units }: { day: DailyReading; units: Units }) {
