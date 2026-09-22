@@ -351,6 +351,8 @@ export type SolarDay = {
   peakHour: number
   /** Number of hours with usable DNI (≥ 120 W/m²). */
   sunHours: number
+  /** Direct normal irradiance per local hour (W/m²), always 24 entries 00:00 → 23:00. */
+  hourlyDni: number[]
 }
 
 export type SolarPayload = {

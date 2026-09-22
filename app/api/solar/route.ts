@@ -46,7 +46,15 @@ export async function GET(request: NextRequest) {
 
     // Bucket hourly irradiance (W/m²) by local calendar date. Because each sample
     // represents one hour, W/m² summed over the day equals Wh/m²; /1000 → kWh/m²/day.
-    type Bucket = { peakDni: number; peakHour: number; dniWh: number; ghiWh: number; sunHours: number }
+    type Bucket = {
+      peakDni: number
+      peakHour: number
+      dniWh: number
+      ghiWh: number
+      sunHours: number
+      /** DNI per local hour (0–23), for the full-day irradiance curve. */
+      hourly: number[]
+    }
     const byDate = new Map<string, Bucket>()
     const order: string[] = []
 
@@ -57,7 +65,7 @@ export async function GET(request: NextRequest) {
       const ghiVal = num(ghi[index])
       let bucket = byDate.get(date)
       if (!bucket) {
-        bucket = { peakDni: 0, peakHour: 0, dniWh: 0, ghiWh: 0, sunHours: 0 }
+        bucket = { peakDni: 0, peakHour: 0, dniWh: 0, ghiWh: 0, sunHours: 0, hourly: new Array(24).fill(0) }
         byDate.set(date, bucket)
         order.push(date)
       }
@@ -65,6 +73,7 @@ export async function GET(request: NextRequest) {
         bucket.peakDni = dniVal
         bucket.peakHour = hour
       }
+      if (hour >= 0 && hour < 24) bucket.hourly[hour] = dniVal
       bucket.dniWh += dniVal
       bucket.ghiWh += ghiVal
       if (dniVal >= USABLE_DNI) bucket.sunHours += 1
@@ -79,6 +88,7 @@ export async function GET(request: NextRequest) {
         ghiEnergy: Math.round((b.ghiWh / 1000) * 100) / 100,
         peakHour: b.peakHour,
         sunHours: b.sunHours,
+        hourlyDni: b.hourly.map((v) => Math.round(v)),
       }
     })
 
