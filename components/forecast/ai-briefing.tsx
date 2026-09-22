@@ -4,8 +4,6 @@ import { useMemo } from "react"
 import {
   ArrowDown,
   ArrowUp,
-  CalendarDays,
-  ChevronRight,
   Clock,
   CloudRain,
   Droplets,
@@ -271,94 +269,12 @@ function buildBriefs(data: WeatherPayload): Brief[] {
   return briefs
 }
 
-type Highlight = { id: string; label: string; icon: LucideIcon; index: number; weekday: string; value: string; tone: Tone }
-
-/** Standout days across the 14-day model — each jumps the synced breakdown to that day. */
-function buildHighlights(data: WeatherPayload): Highlight[] {
-  const { daily, units } = data
-  const days = daily.slice(0, 14)
-  if (days.length === 0) return []
-  const u = tempUnit(units)
-  const label = (i: number) => (i === 0 ? "Today" : formatWeekday(days[i].date))
-
-  let hot = 0
-  let cool = 0
-  let windy = 0
-  let wet = -1
-  for (let i = 0; i < days.length; i++) {
-    if (days[i].max > days[hot].max) hot = i
-    if (days[i].min < days[cool].min) cool = i
-    if (days[i].windGustMax > days[windy].windGustMax) windy = i
-    if (days[i].precipitationProbability >= 40 && wet === -1) wet = i
-  }
-
-  const items: Highlight[] = [
-    {
-      id: "hot",
-      label: "Hottest day",
-      icon: Thermometer,
-      index: hot,
-      weekday: label(hot),
-      value: `${Math.round(days[hot].max)}${u}`,
-      tone: "warn",
-    },
-    {
-      id: "cool",
-      label: "Coolest day",
-      icon: ArrowDown,
-      index: cool,
-      weekday: label(cool),
-      value: `${Math.round(days[cool].min)}${u}`,
-      tone: "good",
-    },
-    {
-      id: "windy",
-      label: "Windiest day",
-      icon: Wind,
-      index: windy,
-      weekday: label(windy),
-      value: `${Math.round(days[windy].windGustMax)} ${speedUnit(units)}`,
-      tone: "moderate",
-    },
-  ]
-  if (wet !== -1) {
-    items.push({
-      id: "wet",
-      label: "Next wet day",
-      icon: Droplets,
-      index: wet,
-      weekday: label(wet),
-      value: `${days[wet].precipitationProbability}%`,
-      tone: "moderate",
-    })
-  } else {
-    items.push({
-      id: "dry",
-      label: "Rain outlook",
-      icon: Sun,
-      index: 0,
-      weekday: "14 days",
-      value: "Dry",
-      tone: "good",
-    })
-  }
-  return items
-}
-
 const ROW_ICON: Record<Row["kind"], LucideIcon> = { high: ArrowUp, low: ArrowDown, when: Clock }
 
 export function AiBriefing() {
-  const { payload, setSelectedDay, isLoading } = useWeather()
+  const { payload, isLoading } = useWeather()
 
   const briefs = useMemo(() => (payload ? buildBriefs(payload) : []), [payload])
-  const highlights = useMemo(() => (payload ? buildHighlights(payload) : []), [payload])
-
-  function jumpToDay(index: number) {
-    setSelectedDay(index)
-    if (typeof document !== "undefined") {
-      document.getElementById("hourly")?.scrollIntoView({ behavior: "smooth", block: "start" })
-    }
-  }
 
   if (isLoading && !payload) {
     return <div className="h-72 animate-pulse rounded-xl border border-border bg-panel" />
@@ -417,52 +333,6 @@ export function AiBriefing() {
           Updated {formatClock(current.time)}
         </span>
       </div>
-
-      {/* 14-day highlights — outlook strip in the header; each opens that day's breakdown */}
-      {highlights.length > 0 ? (
-        <div className="border-b border-border bg-card/30 px-4 py-3">
-          <div className="mb-2.5 flex items-center gap-1.5">
-            <CalendarDays className="h-3 w-3 text-signal" aria-hidden="true" />
-            <span className="label-caps text-foreground/80">14-day highlights</span>
-            <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground/60">
-              · tap to open a day
-            </span>
-          </div>
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-            {highlights.map((h) => {
-              const tone = TONE[h.tone]
-              const Icon = h.icon
-              return (
-                <button
-                  key={h.id}
-                  type="button"
-                  onClick={() => jumpToDay(h.index)}
-                  aria-label={`${h.label}: ${h.weekday}, ${h.value}. Open this day's hourly breakdown.`}
-                  className="group relative flex items-center gap-2.5 overflow-hidden rounded-lg border border-border bg-card px-3 py-2.5 text-left transition-colors hover:border-signal/40 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-signal"
-                >
-                  <span aria-hidden="true" className={cn("absolute inset-y-2 left-0 w-0.5 rounded-full", tone.rail)} />
-                  <span className={cn("grid h-8 w-8 shrink-0 place-items-center rounded-md border", tone.chip)}>
-                    <Icon className="h-4 w-4" aria-hidden="true" />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-                      {h.label}
-                    </span>
-                    <span className="mt-0.5 flex items-baseline gap-1.5">
-                      <span className="text-sm font-semibold leading-none text-foreground">{h.weekday}</span>
-                      <span className={cn("text-xs font-bold leading-none tabular-nums", tone.text)}>{h.value}</span>
-                    </span>
-                  </span>
-                  <ChevronRight
-                    className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5 group-hover:text-signal"
-                    aria-hidden="true"
-                  />
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      ) : null}
 
       {/* Timed advisory cards */}
       <div className="grid gap-px bg-border sm:grid-cols-2 xl:grid-cols-4">

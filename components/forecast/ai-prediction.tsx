@@ -66,6 +66,13 @@ const MEASURE_CHIP: Record<MeasureTone, string> = {
   bad: "border-alert-red/50 bg-alert-red/10 text-alert-red",
 }
 
+const MEASURE_TEXT: Record<MeasureTone, string> = {
+  good: "text-alert-green",
+  info: "text-signal",
+  warn: "text-alert-orange",
+  bad: "text-alert-red",
+}
+
 type Series = {
   label: string
   color: string
@@ -603,7 +610,7 @@ export function AiPrediction() {
       ) : (
         <>
           {/* Header trend — AI Briefing narrative for this metric; live per-point read while scrubbing */}
-          <HeaderTrend view={view} active={active} />
+          <HeaderTrend view={view} active={active} horizon={horizon} />
 
           {/* Stat cards */}
           <div className="grid grid-cols-3 gap-px bg-border">
@@ -718,9 +725,32 @@ export function AiPrediction() {
  * cursor scrubs the chart it swaps to a live read of the hovered point plus a
  * rising / easing / steady trend pill derived from the primary series.
  */
-function HeaderTrend({ view, active }: { view: View; active: number | null }) {
+function HeaderTrend({ view, active, horizon }: { view: View; active: number | null; horizon: Horizon }) {
   const tone = MEASURE_CHIP[view.headline.tone]
   const primary = view.series[0]
+  const unit = horizon === "14d" ? "d" : "h"
+
+  // Upcoming peak — "when it's going to be high". Anchor to the metric's semantic
+  // peak (matches the headline + timing card) by locating its label on the axis.
+  const peakIdx = (() => {
+    for (let i = 0; i < view.n; i++) {
+      if (view.tooltipHead(i).split(" · ")[0] === view.peak.when) return i
+    }
+    return argExtremes(primary.values).hi
+  })()
+  const peakValue = view.peak.value
+  const peakTime = view.peak.when
+  // Countdown label relative to "now" — reads naturally in the chip.
+  const peakLabel = (() => {
+    if (horizon === "14d") {
+      const d = peakIdx - view.nowIndex
+      return d <= 0 ? "Peaks today" : `Peaks in ${d}d`
+    }
+    if (view.nowIndex < 0) return "Peak" // projected future day — no live "now" anchor
+    const h = peakIdx - view.nowIndex
+    return h > 0 ? `Peaks in ${h}h` : h === 0 ? "Peaks now" : "Peaked"
+  })()
+
   const scrub =
     active === null
       ? null
@@ -729,7 +759,9 @@ function HeaderTrend({ view, active }: { view: View; active: number | null }) {
           const prev = active > 0 ? primary.values[active - 1] : cur
           const delta = cur - prev
           const dir: "up" | "down" | "flat" = Math.abs(delta) < 1e-6 ? "flat" : delta > 0 ? "up" : "down"
-          return { head: view.tooltipHead(active).split(" · ")[0], dir }
+          const peakRel =
+            active === peakIdx ? "at peak" : active < peakIdx ? `peak in ${peakIdx - active}${unit}` : "past peak"
+          return { head: view.tooltipHead(active).split(" · ")[0], dir, peakRel }
         })()
 
   return (
@@ -757,10 +789,35 @@ function HeaderTrend({ view, active }: { view: View; active: number | null }) {
             </span>
           ))}
           <TrendPill dir={scrub.dir} />
+          <span
+            className={cn(
+              "flex items-center gap-1 font-mono text-[0.625rem] uppercase tracking-wider",
+              scrub.peakRel === "past peak" ? "text-muted-foreground" : MEASURE_TEXT[view.headline.tone],
+            )}
+          >
+            {scrub.peakRel}
+          </span>
         </div>
       ) : (
         <p className="min-w-0 flex-1 text-pretty text-sm leading-snug text-foreground/90">{view.headline.comment}</p>
       )}
+
+      {/* Upcoming peak highlight — colour-coded to the metric's severity */}
+      <span
+        className={cn(
+          "ml-auto flex shrink-0 items-center gap-2 rounded-md border px-2.5 py-1",
+          MEASURE_CHIP[view.headline.tone],
+        )}
+        title={`Predicted peak: ${peakValue} at ${peakTime} (${peakLabel})`}
+      >
+        <ArrowUpRight className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        <span className="flex flex-col leading-none">
+          <span className="font-mono text-[0.5rem] uppercase tracking-wider opacity-80">{peakLabel}</span>
+          <span className="mt-0.5 font-mono text-xs font-bold tabular-nums">
+            {peakValue} · {peakTime}
+          </span>
+        </span>
+      </span>
     </div>
   )
 }
@@ -774,7 +831,7 @@ function TrendPill({ dir }: { dir: "up" | "down" | "flat" }) {
         : { Icon: Minus, text: "Steady", cls: "text-muted-foreground" }
   const { Icon } = cfg
   return (
-    <span className={cn("ml-auto flex items-center gap-1 font-mono text-[0.625rem] uppercase tracking-wider", cfg.cls)}>
+    <span className={cn("flex items-center gap-1 font-mono text-[0.625rem] uppercase tracking-wider", cfg.cls)}>
       <Icon className="h-3 w-3" aria-hidden="true" />
       {cfg.text}
     </span>
