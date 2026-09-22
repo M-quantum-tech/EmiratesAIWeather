@@ -6,7 +6,6 @@ import {
   CalendarDays,
   Camera,
   Gauge,
-  LineChart,
   type LucideIcon,
   Map as MapIcon,
   Satellite,
@@ -19,9 +18,8 @@ type NavItem = { id: string; label: string; icon: LucideIcon }
 
 export const NAV_ITEMS: NavItem[] = [
   { id: "briefing", label: "AI Briefing", icon: Sparkles },
-  { id: "forecast", label: "AI Prediction", icon: LineChart },
+  { id: "forecast", label: "Live Trend + AI", icon: Activity },
   { id: "hourly", label: "Hourly Breakdown", icon: CalendarDays },
-  { id: "live", label: "Live Trend", icon: Activity },
   { id: "observations", label: "Air Quality", icon: Gauge },
   { id: "radar", label: "Radar & Satellite", icon: Satellite },
   { id: "map", label: "Weather Map", icon: MapIcon },

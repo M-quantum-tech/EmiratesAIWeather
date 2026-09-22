@@ -4,7 +4,6 @@ import { LeftNav } from "@/components/left-nav"
 import { WeatherProvider } from "@/components/weather/weather-provider"
 import { AlertBanner } from "@/components/weather/alert-banner"
 import { AiBriefing } from "@/components/forecast/ai-briefing"
-import { AiPrediction } from "@/components/forecast/ai-prediction"
 import { HourlyBreakdown } from "@/components/forecast/hourly-breakdown"
 import { MeasureMap } from "@/components/weather/measure-map"
 import { NcmSources } from "@/components/weather/ncm-sources"
@@ -55,20 +54,16 @@ export default function Page() {
               <AiBriefing />
             </section>
 
-            {/* 2 · AI prediction — trendable multi-model forecast (24H / 14-day) that drives the breakdown below */}
+            {/* 2 · Live trend + AI projection — normalized multi-metric forecast (24H / 14-day)
+                    with predictive timing + measures, that drives the breakdown below */}
             <section id="forecast" className="mt-6 scroll-mt-6">
-              <AiPrediction />
+              <LiveTrend />
             </section>
 
             {/* 3 · The selected day's 24-hour breakdown. Scrub the trend or tap a day
-                    in AI Prediction above to drive this hour-by-hour panel. */}
+                    in the panel above to drive this hour-by-hour panel. */}
             <section id="hourly" className="mt-6 scroll-mt-6">
               <HourlyBreakdown />
-            </section>
-
-            {/* 3b · Live trend + AI projection — normalized temperature / feels-like / humidity */}
-            <section id="live" className="mt-6 scroll-mt-6">
-              <LiveTrend />
             </section>
 
             {/* 4 · Live observations */}
