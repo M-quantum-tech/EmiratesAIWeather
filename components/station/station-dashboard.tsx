@@ -1,9 +1,7 @@
 "use client"
 
 import { Radio, TriangleAlert } from "lucide-react"
-import { Advisories } from "@/components/station/advisories"
 import { AirQualityPanel } from "@/components/station/air-quality"
-import { CurrentConditions } from "@/components/station/current-conditions"
 import { Panel } from "@/components/station/panel"
 import { StationHeader } from "@/components/station/station-header"
 import { Button } from "@/components/ui/button"
@@ -60,26 +58,9 @@ export function StationDashboard() {
       ) : null}
 
       {!payload ? (
-        <div className="grid gap-6 lg:grid-cols-[1.6fr_1fr]">
-          <div className="flex flex-col gap-6">
-            <Panel className="h-64 animate-pulse" />
-            <Panel className="h-72 animate-pulse" />
-          </div>
-          <div className="flex flex-col gap-6">
-            <Panel className="h-80 animate-pulse" />
-            <Panel className="h-56 animate-pulse" />
-          </div>
-        </div>
+        <Panel className="h-72 animate-pulse" />
       ) : (
-        <div className="grid gap-6 lg:grid-cols-[1.6fr_1fr]">
-          <div className="flex flex-col gap-6">
-            <CurrentConditions data={payload} />
-          </div>
-          <div className="flex flex-col gap-6">
-            <Advisories data={payload} />
-            <AirQualityPanel air={payload.air} />
-          </div>
-        </div>
+        <AirQualityPanel air={payload.air} />
       )}
 
       <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-4 font-mono text-[0.6875rem] text-muted-foreground">

@@ -20,7 +20,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "briefing", label: "AI Briefing", icon: Sparkles },
   { id: "forecast", label: "AI Prediction", icon: LineChart },
   { id: "hourly", label: "Hourly Breakdown", icon: CalendarDays },
-  { id: "observations", label: "Live Observations", icon: Gauge },
+  { id: "observations", label: "Air Quality", icon: Gauge },
   { id: "radar", label: "Radar & Satellite", icon: Satellite },
   { id: "map", label: "Weather Map", icon: MapIcon },
   { id: "webcams", label: "Webcams", icon: Camera },
