@@ -1,19 +1,45 @@
 "use client"
 
-import Image from "next/image"
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Activity, BellRing, BellOff, CloudRain, Droplets, Gauge, ShieldCheck, Siren, Wind } from "lucide-react"
+import useSWR from "swr"
+import {
+  Activity,
+  BellRing,
+  BellOff,
+  CloudRain,
+  Droplets,
+  Gauge,
+  MapPin,
+  Navigation,
+  ShieldCheck,
+  Siren,
+  Timer,
+  Wind,
+} from "lucide-react"
 import {
   ALERT_RADII_KM,
   buildAlert,
+  compass,
   DANGER_RADIUS_KM,
   formatClock,
+  offsetLocation,
+  speedUnit,
   type AlertLevel,
   type HazardKey,
+  type WeatherPayload,
 } from "@/lib/weather"
 import { ProximityRings } from "@/components/weather/proximity-rings"
 import { useWeather } from "@/components/weather/weather-provider"
 import { cn } from "@/lib/utils"
+
+/** Header auto-refresh cadence (seconds) surfaced as a live countdown. */
+const REFRESH_SECONDS = 60
+
+async function farFetcher(url: string): Promise<Omit<WeatherPayload, "location">> {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error("Far-site reading failed.")
+  return res.json()
+}
 
 const LEVEL_STYLES: Record<
   AlertLevel,
@@ -114,9 +140,47 @@ function useBuzzer(active: boolean, muted: boolean) {
 }
 
 export function AlertBanner() {
-  const { payload, isValidating } = useWeather()
+  const { payload, isValidating, refresh } = useWeather()
   const alert = useMemo(() => (payload ? buildAlert(payload) : null), [payload])
   const [muted, setMuted] = useState(false)
+
+  // Live 60-second auto-refresh counter shown in the header ribbon.
+  const [countdown, setCountdown] = useState(REFRESH_SECONDS)
+  useEffect(() => {
+    const id = setInterval(() => {
+      setCountdown((c) => {
+        if (c <= 1) {
+          refresh()
+          return REFRESH_SECONDS
+        }
+        return c - 1
+      })
+    }, 1000)
+    return () => clearInterval(id)
+  }, [refresh])
+
+  // Far site: sample weather 50 km upwind (toward the wind's origin) so the model
+  // previews approaching gusts before they reach the user's on-site location.
+  const farPoint = useMemo(
+    () =>
+      payload
+        ? offsetLocation(
+            payload.location.latitude,
+            payload.location.longitude,
+            payload.current.windDirection,
+            ALERT_RADII_KM.yellow,
+          )
+        : null,
+    [payload],
+  )
+  const farKey =
+    farPoint && payload
+      ? `/api/weather?lat=${farPoint.lat.toFixed(3)}&lon=${farPoint.lon.toFixed(3)}&units=${payload.units}`
+      : null
+  const { data: farData } = useSWR(farKey, farFetcher, {
+    refreshInterval: 3 * 60 * 1000,
+    keepPreviousData: true,
+  })
 
   const danger = alert?.danger ?? false
   useBuzzer(danger, muted)
@@ -127,6 +191,22 @@ export function AlertBanner() {
 
   const styles = LEVEL_STYLES[alert.level]
   const activeIndex = LADDER.findIndex((l) => l.level === alert.level)
+
+  // On-site vs far-site (50 km upwind) wind-gust comparison.
+  const onGust = payload.current.windGusts
+  const farGust = farData?.current.windGusts ?? null
+  const gustDelta = farGust != null ? farGust - onGust : null
+  const approaching = gustDelta != null && gustDelta > 3
+  const easing = gustDelta != null && gustDelta < -3
+  const deltaTone = approaching ? "text-alert-orange" : easing ? "text-alert-green" : "text-muted-foreground"
+  const deltaBorder = approaching
+    ? "border-alert-orange/40 bg-alert-orange/10"
+    : easing
+      ? "border-alert-green/40 bg-alert-green/10"
+      : "border-border bg-background/50"
+  const deltaWord = gustDelta == null ? "Sampling" : approaching ? "Intensifying" : easing ? "Easing" : "Steady"
+  const mm = Math.floor(countdown / 60)
+  const ss = countdown % 60
   const rankedHazards = [...alert.hazards].sort((a, b) => {
     const order = { red: 3, orange: 2, yellow: 1, green: 0 } as const
     return order[b.level] - order[a.level]
@@ -154,6 +234,10 @@ export function AlertBanner() {
               <span className="relative inline-flex h-2 w-2 rounded-full bg-alert-green" />
             </span>
             Live · updated {formatClock(payload.current.time)}
+          </span>
+          <span className="flex items-center gap-1.5 rounded-md border border-signal/40 bg-signal/10 px-2 py-1 font-mono text-[0.625rem] uppercase tracking-wider text-signal">
+            <Timer className={cn("h-3 w-3", isValidating && "animate-spin")} aria-hidden="true" />
+            Refresh {mm}:{String(ss).padStart(2, "0")}
           </span>
           <button
             type="button"
@@ -258,42 +342,82 @@ export function AlertBanner() {
 
         {/* Proximity radar */}
         <div className="flex justify-center lg:justify-end">
-          <ProximityRings active={alert.level} />
+          <ProximityRings active={alert.level} showFarSite />
         </div>
       </div>
 
-      {/* How the 4 proximity tiers work — AI-generated legend */}
-      <div className="grid gap-4 border-t border-border/60 p-5 sm:p-7 lg:grid-cols-[auto_minmax(0,1fr)] lg:items-center">
-        <div className="overflow-hidden rounded-xl border border-border bg-background/60">
-          <Image
-            src="/safety/proximity-levels.png"
-            alt="Diagram of the four proximity alert rings: red within 20 km, orange within 30 km, yellow within 50 km, green beyond 60 km of your location"
-            width={420}
-            height={420}
-            className="h-auto w-full max-w-[16rem] object-contain"
-          />
+      {/* Approach tracker — on-site vs far-site (50 km upwind) gust + distance legend */}
+      <div className="border-t border-border/60 p-5 sm:p-7">
+        <span className="flex items-center gap-1.5 label-caps text-muted-foreground">
+          <Navigation className="h-3.5 w-3.5" aria-hidden="true" />
+          Approach tracker · wind gust on site vs 50 km upwind
+        </span>
+
+        <div className="mt-3 grid items-stretch gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+          {/* ON SITE (near) */}
+          <div className="rounded-xl border border-signal/40 bg-signal/5 p-4">
+            <span className="flex items-center gap-1.5 font-mono text-[0.625rem] uppercase tracking-widest text-signal">
+              <MapPin className="h-3 w-3" aria-hidden="true" /> On site · near
+            </span>
+            <div className="mt-1.5 flex items-baseline gap-1.5">
+              <span className="text-4xl font-black tabular-nums text-foreground">{Math.round(onGust)}</span>
+              <span className="text-sm text-muted-foreground">{speedUnit(payload.units)} gust</span>
+            </div>
+            <span className="mt-0.5 block font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+              Your location · {compass(payload.current.windDirection)} wind
+            </span>
+          </div>
+
+          {/* delta */}
+          <div className="flex flex-row items-center justify-center gap-2 sm:flex-col">
+            <span className={cn("grid h-11 w-11 place-items-center rounded-full border", deltaBorder)}>
+              <Wind className={cn("h-5 w-5", deltaTone)} aria-hidden="true" />
+            </span>
+            <div className="flex flex-col items-center leading-tight">
+              <span className={cn("font-mono text-sm font-bold tabular-nums", deltaTone)}>
+                {gustDelta == null ? "—" : `${gustDelta > 0 ? "+" : ""}${Math.round(gustDelta)}`}
+              </span>
+              <span className={cn("font-mono text-[0.5625rem] uppercase tracking-wider", deltaTone)}>{deltaWord}</span>
+            </div>
+          </div>
+
+          {/* FAR SITE (50 km) */}
+          <div className={cn("rounded-xl border p-4", deltaBorder)}>
+            <span className={cn("flex items-center gap-1.5 font-mono text-[0.625rem] uppercase tracking-widest", deltaTone)}>
+              <Navigation className="h-3 w-3" aria-hidden="true" /> Far site · 50 km away
+            </span>
+            <div className="mt-1.5 flex items-baseline gap-1.5">
+              <span className="text-4xl font-black tabular-nums text-foreground">
+                {farGust == null ? "—" : Math.round(farGust)}
+              </span>
+              <span className="text-sm text-muted-foreground">{speedUnit(payload.units)} gust</span>
+            </div>
+            <span className="mt-0.5 block font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+              Upwind sample · {compass(payload.current.windDirection)} origin
+            </span>
+          </div>
         </div>
-        <div>
-          <span className="label-caps text-muted-foreground">How the model reads distance</span>
-          <p className="mt-1 text-pretty text-sm text-muted-foreground">
-            The AI tracks wind speed, wind gust, rain and precipitation hazards and maps how close they are
-            to you. The tighter the ring a hazard reaches, the higher the alert.
-          </p>
-          <ul className="mt-3 grid gap-2 sm:grid-cols-2">
-            {LADDER.map((rung) => (
-              <li
-                key={rung.level}
-                className={cn("flex items-center gap-2 rounded-lg border px-2.5 py-2 text-sm", LEVEL_STYLES[rung.level].chip)}
-              >
-                <span className={cn("h-3 w-3 shrink-0 rounded-full", rung.solid)} aria-hidden="true" />
-                <span className="font-mono text-xs font-bold uppercase tracking-wide">{rung.label}</span>
-                <span className="ml-auto font-mono text-xs tabular-nums opacity-90">
-                  {rung.level === "green" ? `${ALERT_RADII_KM.green} km +` : `within ${ALERT_RADII_KM[rung.level]} km`}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
+
+        <p className="mt-3 text-pretty text-sm text-muted-foreground">
+          The AI samples wind, gust, rain and precipitation 50 km upwind and maps how close they are to you.
+          When the far-site gust runs stronger than on-site, hazardous wind is intensifying toward your
+          location — the tighter the ring a hazard reaches, the higher the alert.
+        </p>
+
+        <ul className="mt-3 grid gap-2 sm:grid-cols-4">
+          {LADDER.map((rung) => (
+            <li
+              key={rung.level}
+              className={cn("flex items-center gap-2 rounded-lg border px-2.5 py-2 text-sm", LEVEL_STYLES[rung.level].chip)}
+            >
+              <span className={cn("h-3 w-3 shrink-0 rounded-full", rung.solid)} aria-hidden="true" />
+              <span className="font-mono text-xs font-bold uppercase tracking-wide">{rung.label}</span>
+              <span className="ml-auto font-mono text-xs tabular-nums opacity-90">
+                {rung.level === "green" ? `${ALERT_RADII_KM.green} km +` : `within ${ALERT_RADII_KM[rung.level]} km`}
+              </span>
+            </li>
+          ))}
+        </ul>
       </div>
 
       {/* Live background hazard data feeding the model */}

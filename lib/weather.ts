@@ -389,6 +389,23 @@ export const ALERT_RADII_KM: Record<AlertLevel, number> = {
 /** Proximity radius (km) the danger buzzer scans for severe conditions (red tier). */
 export const DANGER_RADIUS_KM = ALERT_RADII_KM.red
 
+/**
+ * Great-circle destination point `distanceKm` away from (lat, lon) along
+ * `bearingDeg` (degrees clockwise from true north). Used to sample a "far site"
+ * upwind of the user so the model can preview hazards before they arrive on site.
+ */
+export function offsetLocation(lat: number, lon: number, bearingDeg: number, distanceKm: number) {
+  const R = 6371
+  const brng = (bearingDeg * Math.PI) / 180
+  const lat1 = (lat * Math.PI) / 180
+  const lon1 = (lon * Math.PI) / 180
+  const dr = distanceKm / R
+  const lat2 = Math.asin(Math.sin(lat1) * Math.cos(dr) + Math.cos(lat1) * Math.sin(dr) * Math.cos(brng))
+  const lon2 =
+    lon1 + Math.atan2(Math.sin(brng) * Math.sin(dr) * Math.cos(lat1), Math.cos(dr) - Math.sin(lat1) * Math.sin(lat2))
+  return { lat: (lat2 * 180) / Math.PI, lon: (((lon2 * 180) / Math.PI + 540) % 360) - 180 }
+}
+
 export type HazardKey = "wind" | "gust" | "rain" | "precip"
 
 export type Hazard = {

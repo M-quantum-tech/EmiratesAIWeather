@@ -20,17 +20,26 @@ const RANK: Record<AlertLevel, number> = { green: 0, yellow: 1, orange: 2, red: 
  * the centre; the active tier lights up and drops a pulsing hazard blip on its
  * ring, visualising how close the current hazard is to the user's location.
  */
-export function ProximityRings({ active }: { active: AlertLevel }) {
+export function ProximityRings({ active, showFarSite = false }: { active: AlertLevel; showFarSite?: boolean }) {
   const maxRadius = ALERT_RADII_KM.green
+  const yellowSize = (ALERT_RADII_KM.yellow / maxRadius) * MAX_PX
 
   return (
     <div className="flex flex-col items-center gap-3">
       <div className="relative grid place-items-center" style={{ width: MAX_PX, height: MAX_PX }}>
-        {/* sweep backdrop */}
+        {/* radial backdrop */}
         <div
           aria-hidden="true"
-          className="absolute inset-0 rounded-full bg-[radial-gradient(circle,theme(colors.signal/12%),transparent_70%)]"
+          className="absolute inset-0 rounded-full bg-[radial-gradient(circle,theme(colors.signal/16%),transparent_70%)]"
         />
+        {/* rotating radar sweep */}
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 animate-spin rounded-full [animation-duration:7s] bg-[conic-gradient(from_0deg,transparent_0deg,theme(colors.signal/24%)_26deg,transparent_58deg)]"
+        />
+        {/* crosshair */}
+        <div aria-hidden="true" className="absolute inset-x-2 top-1/2 h-px -translate-y-1/2 bg-border/50" />
+        <div aria-hidden="true" className="absolute inset-y-2 left-1/2 w-px -translate-x-1/2 bg-border/50" />
         {TIERS.map((tier) => {
           const isActive = tier.level === active
           const isInsideActive = RANK[tier.level] >= RANK[active]
@@ -42,7 +51,7 @@ export function ProximityRings({ active }: { active: AlertLevel }) {
               className={cn(
                 "absolute rounded-full border-2 transition-all",
                 tier.ring,
-                isActive ? "opacity-100" : isInsideActive ? "opacity-90" : "opacity-30",
+                isActive ? "opacity-100" : isInsideActive ? "opacity-95" : "opacity-45",
                 isActive && tier.level === "red" && "alert-glow",
               )}
               style={{ width: size, height: size }}
@@ -65,6 +74,22 @@ export function ProximityRings({ active }: { active: AlertLevel }) {
             </div>
           )
         })}
+
+        {/* far-site hazard sample on the 50 km (yellow) ring */}
+        {showFarSite ? (
+          <span
+            className="absolute z-10 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center"
+            style={{ top: "50%", left: `calc(50% + ${yellowSize / 2}px)` }}
+          >
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-alert-yellow opacity-75" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-alert-yellow" />
+            </span>
+            <span className="mt-0.5 rounded bg-background px-1 font-mono text-[0.5rem] font-bold uppercase tracking-wide text-alert-yellow">
+              Far 50km
+            </span>
+          </span>
+        ) : null}
 
         {/* user pin */}
         <span className="relative z-10 grid h-8 w-8 place-items-center rounded-full border border-signal/50 bg-background text-signal shadow">
