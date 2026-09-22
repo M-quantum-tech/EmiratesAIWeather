@@ -6,11 +6,13 @@ import {
   Activity,
   BellRing,
   BellOff,
+  Clock,
   CloudRain,
   Droplets,
   Gauge,
   MapPin,
   Navigation,
+  Navigation2,
   ShieldCheck,
   Siren,
   Timer,
@@ -22,8 +24,10 @@ import {
   compass,
   DANGER_RADIUS_KM,
   formatClock,
+  formatEta,
   offsetLocation,
   speedUnit,
+  windArrivalMinutes,
   type AlertLevel,
   type HazardKey,
   type WeatherPayload,
@@ -144,10 +148,13 @@ export function AlertBanner() {
   const alert = useMemo(() => (payload ? buildAlert(payload) : null), [payload])
   const [muted, setMuted] = useState(false)
 
-  // Live 60-second auto-refresh counter shown in the header ribbon.
+  // Live 60-second auto-refresh counter + a wall clock synced to real time, both
+  // driven by a single 1-second tick so the header stays in step with the network clock.
   const [countdown, setCountdown] = useState(REFRESH_SECONDS)
+  const [now, setNow] = useState(() => new Date())
   useEffect(() => {
     const id = setInterval(() => {
+      setNow(new Date())
       setCountdown((c) => {
         if (c <= 1) {
           refresh()
@@ -178,7 +185,7 @@ export function AlertBanner() {
       ? `/api/weather?lat=${farPoint.lat.toFixed(3)}&lon=${farPoint.lon.toFixed(3)}&units=${payload.units}`
       : null
   const { data: farData } = useSWR(farKey, farFetcher, {
-    refreshInterval: 3 * 60 * 1000,
+    refreshInterval: 60 * 1000,
     keepPreviousData: true,
   })
 
@@ -207,6 +214,30 @@ export function AlertBanner() {
   const deltaWord = gustDelta == null ? "Sampling" : approaching ? "Intensifying" : easing ? "Easing" : "Steady"
   const mm = Math.floor(countdown / 60)
   const ss = countdown % 60
+
+  // Synced wall clock (station timezone, ticking every second against real time).
+  const safeTime = (d: Date, withSeconds = false) => {
+    try {
+      return d.toLocaleTimeString([], {
+        hour: "numeric",
+        minute: "2-digit",
+        ...(withSeconds ? { second: "2-digit" } : {}),
+        timeZone: payload.timezone,
+      })
+    } catch {
+      return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+    }
+  }
+  const localClock = safeTime(now, true)
+
+  // Predictive wind-front arrival: when upwind gusts are intensifying, estimate when the
+  // 50 km-out front advects onto the user's location, carried by the mean wind.
+  const originCompass = compass(payload.current.windDirection)
+  const advectionSpeed = payload.current.windSpeed // km/h mean transport of the front
+  const etaMinutes = approaching ? windArrivalMinutes(ALERT_RADII_KM.yellow, advectionSpeed) : null
+  const arrivalClock = etaMinutes != null ? safeTime(new Date(now.getTime() + etaMinutes * 60_000)) : null
+  // Front position along the 60 km watch ring (0% = watch edge, 100% = on you).
+  const frontProgress = Math.max(0, Math.min(100, (1 - ALERT_RADII_KM.yellow / ALERT_RADII_KM.green) * 100))
   const rankedHazards = [...alert.hazards].sort((a, b) => {
     const order = { red: 3, orange: 2, yellow: 1, green: 0 } as const
     return order[b.level] - order[a.level]
@@ -234,6 +265,10 @@ export function AlertBanner() {
               <span className="relative inline-flex h-2 w-2 rounded-full bg-alert-green" />
             </span>
             Live · updated {formatClock(payload.current.time)}
+          </span>
+          <span className="flex items-center gap-1.5 rounded-md border border-border bg-background/60 px-2 py-1 font-mono text-[0.625rem] uppercase tracking-wider text-foreground tabular-nums">
+            <Clock className="h-3 w-3 text-signal" aria-hidden="true" />
+            {localClock}
           </span>
           <span className="flex items-center gap-1.5 rounded-md border border-signal/40 bg-signal/10 px-2 py-1 font-mono text-[0.625rem] uppercase tracking-wider text-signal">
             <Timer className={cn("h-3 w-3", isValidating && "animate-spin")} aria-hidden="true" />
@@ -397,6 +432,105 @@ export function AlertBanner() {
             </span>
           </div>
         </div>
+
+        {/* Predictive wind-front arrival — shown when upwind gusts are intensifying toward the user */}
+        {approaching ? (
+          <div className={cn("mt-3 rounded-xl border p-4", deltaBorder)}>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className={cn("flex items-center gap-1.5 label-caps", deltaTone)}>
+                <Navigation2
+                  className="h-3.5 w-3.5"
+                  style={{ transform: `rotate(${(payload.current.windDirection + 180) % 360}deg)` }}
+                  aria-hidden="true"
+                />
+                Wind front approaching
+              </span>
+              <span className={cn("rounded-full border px-2 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider", deltaTone)}>
+                Live prediction
+              </span>
+            </div>
+
+            <p className="mt-2 text-pretty text-sm text-foreground">
+              <span className={cn("font-semibold", deltaTone)}>{originCompass}</span> gusts to{" "}
+              <span className="font-semibold tabular-nums">
+                {farGust == null ? "—" : Math.round(farGust)} {speedUnit(payload.units)}
+              </span>{" "}
+              are tracking toward you from{" "}
+              <span className="font-semibold tabular-nums">{ALERT_RADII_KM.yellow} km</span> out — inside the{" "}
+              {ALERT_RADII_KM.green} km watch ring.
+            </p>
+
+            {/* Closing track: watch edge (left) → YOU (right) with the front marker */}
+            <div className="mt-3">
+              <div className="relative h-2.5 rounded-full bg-secondary">
+                <div
+                  className={cn("absolute inset-y-0 right-0 rounded-full opacity-30", styles.solid)}
+                  style={{ width: `${100 - frontProgress}%` }}
+                />
+                <span
+                  className={cn(
+                    "absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-background",
+                    styles.solid,
+                  )}
+                  style={{ left: `${frontProgress}%` }}
+                  aria-hidden="true"
+                />
+                <span className="absolute -right-0.5 top-1/2 grid h-4 w-4 -translate-y-1/2 place-items-center rounded-full border-2 border-background bg-signal text-signal">
+                  <MapPin className="h-2.5 w-2.5 text-background" aria-hidden="true" />
+                </span>
+              </div>
+              <div className="mt-1 flex justify-between font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+                <span>{ALERT_RADII_KM.green} km · watch edge</span>
+                <span>You</span>
+              </div>
+            </div>
+
+            <div className="mt-3 grid gap-2 sm:grid-cols-3">
+              <div className={cn("flex items-center gap-2 rounded-lg border px-2.5 py-2", deltaBorder)}>
+                <Timer className={cn("h-4 w-4 shrink-0", deltaTone)} aria-hidden="true" />
+                <span className="min-w-0">
+                  <span className="block font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+                    ETA on site
+                  </span>
+                  <span className={cn("block text-sm font-bold tabular-nums", deltaTone)}>
+                    {etaMinutes == null ? "Winds too light" : `~${formatEta(etaMinutes)}`}
+                  </span>
+                </span>
+              </div>
+              <div className={cn("flex items-center gap-2 rounded-lg border px-2.5 py-2", deltaBorder)}>
+                <Clock className={cn("h-4 w-4 shrink-0", deltaTone)} aria-hidden="true" />
+                <span className="min-w-0">
+                  <span className="block font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+                    Arrives approx
+                  </span>
+                  <span className={cn("block text-sm font-bold tabular-nums", deltaTone)}>
+                    {arrivalClock ?? "—"}
+                  </span>
+                </span>
+              </div>
+              <div className={cn("flex items-center gap-2 rounded-lg border px-2.5 py-2", deltaBorder)}>
+                <Navigation className={cn("h-4 w-4 shrink-0", deltaTone)} aria-hidden="true" />
+                <span className="min-w-0">
+                  <span className="block font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+                    Closing speed
+                  </span>
+                  <span className={cn("block text-sm font-bold tabular-nums", deltaTone)}>
+                    {Math.round(advectionSpeed)} {speedUnit(payload.units)} · {originCompass}
+                  </span>
+                </span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-3 flex items-center gap-2 rounded-xl border border-border bg-background/40 p-4">
+            <Wind className="h-4 w-4 shrink-0 text-alert-green" aria-hidden="true" />
+            <p className="text-pretty text-sm text-muted-foreground">
+              No wind front closing on your location — upwind gusts {ALERT_RADII_KM.yellow} km out are{" "}
+              <span className="font-semibold text-foreground">{easing ? "easing" : "steady"}</span> from the{" "}
+              {originCompass}. The model keeps scanning within {ALERT_RADII_KM.green} km.
+            </p>
+          </div>
+        )}
 
         <p className="mt-3 text-pretty text-sm text-muted-foreground">
           The AI samples wind, gust, rain and precipitation 50 km upwind and maps how close they are to you.

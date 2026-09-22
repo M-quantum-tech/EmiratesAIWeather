@@ -406,6 +406,24 @@ export function offsetLocation(lat: number, lon: number, bearingDeg: number, dis
   return { lat: (lat2 * 180) / Math.PI, lon: (((lon2 * 180) / Math.PI + 540) % 360) - 180 }
 }
 
+/**
+ * Minutes for an upwind hazard `distanceKm` away to advect to the user, carried by
+ * the mean wind at `speedKmh`. Returns null when the wind is too calm (< 3 km/h) to
+ * transport the front in any meaningful time.
+ */
+export function windArrivalMinutes(distanceKm: number, speedKmh: number): number | null {
+  if (speedKmh < 3) return null
+  return Math.round((distanceKm / speedKmh) * 60)
+}
+
+/** Compact "1h 28m" / "42m" label for a minute count. */
+export function formatEta(minutes: number): string {
+  if (minutes < 60) return `${minutes}m`
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  return m === 0 ? `${h}h` : `${h}h ${m}m`
+}
+
 export type HazardKey = "wind" | "gust" | "rain" | "precip"
 
 export type Hazard = {

@@ -14,8 +14,8 @@ const FALLBACK: StationLocation = {
   longitude: 55.2708,
 }
 
-/** Auto-refresh cadence. Kept under the 5-minute target; aligned with the API's 180s cache. */
-const REFRESH_MS = 3 * 60 * 1000
+/** Live auto-refresh cadence — pulls a fresh reading every minute. */
+const REFRESH_MS = 60 * 1000
 
 async function fetcher(url: string) {
   const response = await fetch(url)
