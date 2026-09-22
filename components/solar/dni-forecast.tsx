@@ -42,9 +42,20 @@ function dayName(date: string, index: number) {
 }
 
 export function DniForecast() {
-  const { location } = useWeather()
+  const { location, selectedDay, setSelectedDay } = useWeather()
   const { isPro } = usePro()
   const [horizon, setHorizon] = useState<Horizon>(7)
+
+  // Selecting a day here drives the 24-Hour Breakdown panel (both read the same
+  // weather context). Only the free 7-day window maps to the hourly breakdown, so
+  // rows beyond index 6 (the Pro 14-day extension) are display-only.
+  function selectDay(index: number) {
+    if (index > 6) return
+    setSelectedDay(index)
+    if (typeof document !== "undefined") {
+      document.getElementById("hourly")?.scrollIntoView({ behavior: "smooth", block: "start" })
+    }
+  }
 
   // The extended 14-day AI-prediction horizon is a Pro feature. Free users always
   // see the 7-day EmiratesConsensus model; picking 14-day reveals an unlock prompt.
@@ -179,6 +190,12 @@ export function DniForecast() {
           </div>
 
           {/* Per-day breakdown */}
+          <div className="mb-1 flex items-center justify-between">
+            <span className="label-caps text-muted-foreground">Per-day breakdown</span>
+            <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+              Tap a day for hourly
+            </span>
+          </div>
           <div className="-mx-1 overflow-x-auto px-1">
             <table className="w-full min-w-[30rem] border-collapse text-left">
               <thead>
@@ -194,9 +211,31 @@ export function DniForecast() {
               <tbody>
                 {days.map((d, i) => {
                   const band = dniBand(d.dniEnergy)
+                  const selectable = i <= 6
+                  const active = selectable && i === selectedDay
                   return (
-                    <tr key={d.date} className="border-t border-border/60 text-sm">
-                      <td className="py-1.5 pr-2 font-medium text-foreground">{dayName(d.date, i)}</td>
+                    <tr
+                      key={d.date}
+                      onClick={selectable ? () => selectDay(i) : undefined}
+                      aria-current={active ? "true" : undefined}
+                      className={cn(
+                        "border-t border-border/60 text-sm transition-colors",
+                        selectable && "cursor-pointer hover:bg-secondary/40",
+                        active && "bg-signal/10",
+                      )}
+                    >
+                      <td className="py-1.5 pr-2 font-medium text-foreground">
+                        <span className="flex items-center gap-1.5">
+                          <span
+                            aria-hidden="true"
+                            className={cn(
+                              "h-3 w-0.5 rounded-full transition-colors",
+                              active ? "bg-signal" : "bg-transparent",
+                            )}
+                          />
+                          {dayName(d.date, i)}
+                        </span>
+                      </td>
                       <td className="py-1.5 pr-2 font-mono tabular-nums text-foreground">
                         {d.dniEnergy.toFixed(1)}
                       </td>
