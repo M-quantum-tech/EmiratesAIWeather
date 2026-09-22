@@ -3,7 +3,6 @@ import { SiteNav } from "@/components/site-nav"
 import { LeftNav } from "@/components/left-nav"
 import { WeatherProvider } from "@/components/weather/weather-provider"
 import { AlertBanner } from "@/components/weather/alert-banner"
-import { AiBriefing } from "@/components/forecast/ai-briefing"
 import { HourlyBreakdown } from "@/components/forecast/hourly-breakdown"
 import { MeasureMap } from "@/components/weather/measure-map"
 import { NcmSources } from "@/components/weather/ncm-sources"
@@ -48,13 +47,7 @@ export default function Page() {
               <AlertBanner />
             </div>
 
-            {/* 1 · AI briefing — plain-language, timed advisories (highest/lowest values, when
-                    they occur, and the measure to take) from the 24-hour + 14-day model. */}
-            <section id="briefing" className="mt-6 scroll-mt-6">
-              <AiBriefing />
-            </section>
-
-            {/* 2 · Live trend + AI projection — normalized multi-metric forecast (24H / 14-day)
+            {/* 1 · Live trend + AI projection — normalized multi-metric forecast (24H / 14-day)
                     with predictive timing + measures, that drives the breakdown below */}
             <section id="forecast" className="mt-6 scroll-mt-6">
               <LiveTrend />

@@ -226,7 +226,7 @@ function buildView(
         series: [
           { label: "Temp", color: "var(--signal)", values: temps, format: t },
           { label: "Feels", color: "var(--accent)", values: feels, format: t },
-          { label: "Humidity", color: "var(--chart-3)", values: hum, format: pct },
+          { label: "Humidity", color: "oklch(0.72 0.19 300)", values: hum, format: pct },
         ],
         stats: [
           { label: "Temperature", value: t(cur.temperature), sub: `peak ${t(Math.max(...temps))}` },
@@ -761,14 +761,18 @@ function MetricCard({
   const Arrow = delta > 0 ? ArrowUpRight : delta < 0 ? ArrowDownRight : Minus
   const arrowClass = delta > 0 ? "text-alert-orange" : delta < 0 ? "text-signal" : "text-muted-foreground"
   return (
-    <div className="flex flex-col gap-1.5 bg-panel px-4 py-3">
+    <div className="flex flex-col gap-2 bg-panel px-4 py-4">
       <div className="flex items-center gap-2 text-muted-foreground">
-        <span aria-hidden="true" className="h-2 w-2 rounded-full" style={{ background: serie.color }} />
-        <span className="label-caps">{serie.label}</span>
+        <span
+          aria-hidden="true"
+          className="h-2.5 w-2.5 rounded-full"
+          style={{ background: serie.color, boxShadow: `0 0 8px ${serie.color}` }}
+        />
+        <span className="label-caps text-[0.6875rem]">{serie.label}</span>
       </div>
-      <p className="font-mono text-2xl font-bold leading-none tabular-nums text-foreground">{serie.format(shown)}</p>
-      <p className={cn("flex items-center gap-1 font-mono text-xs tabular-nums", arrowClass)}>
-        <Arrow className="h-3.5 w-3.5" aria-hidden="true" />
+      <p className="font-mono text-4xl font-bold leading-none tabular-nums text-foreground">{serie.format(shown)}</p>
+      <p className={cn("flex items-center gap-1 font-mono text-sm font-semibold tabular-nums", arrowClass)}>
+        <Arrow className="h-4 w-4" aria-hidden="true" />
         {serie.format(serie.values[exIdx])}
         <span className="text-muted-foreground">{ahead > 0 ? `at +${ahead}${unit}` : "now"}</span>
       </p>
@@ -912,9 +916,9 @@ function TimingCard({ hl, direction }: { hl: Highlight; direction: "up" | "down"
 /* ---------------- chart ---------------- */
 
 const W = 1000
-const H = 280
-const TOP = 26
-const BOT = 30
+const H = 360
+const TOP = 30
+const BOT = 34
 
 function TrendChart({
   view,
@@ -956,16 +960,24 @@ function TrendChart({
     <div className="relative px-2 pt-3">
       <svg
         viewBox={`0 0 ${W} ${H}`}
-        className="h-80 w-full overflow-visible"
+        className="h-[26rem] w-full overflow-visible"
         preserveAspectRatio="none"
         role="img"
         aria-label={`${series.map((s) => s.label).join(", ")} trend`}
       >
         <defs>
           <linearGradient id="live-trend-area" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="var(--signal)" stopOpacity="0.22" />
+            <stop offset="0%" stopColor="var(--signal)" stopOpacity="0.28" />
             <stop offset="100%" stopColor="var(--signal)" stopOpacity="0" />
           </linearGradient>
+          {/* soft neon bloom so the bright lines read vividly against the dark chassis */}
+          <filter id="live-trend-glow" x="-10%" y="-10%" width="120%" height="120%">
+            <feGaussianBlur stdDeviation="2.4" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
         </defs>
 
         {/* baseline grid */}
@@ -992,15 +1004,15 @@ function TrendChart({
 
         {/* each series: solid (near-term) + dashed (AI projection) */}
         {normed.map((ys, si) => (
-          <g key={series[si].label}>
+          <g key={series[si].label} filter="url(#live-trend-glow)">
             <path
               d={segment(ys, 0, solidTo)}
               fill="none"
               stroke={series[si].color}
-              strokeWidth={si === 0 ? 2.5 : 2}
+              strokeWidth={si === 0 ? 3.5 : 3}
               strokeLinejoin="round"
               strokeLinecap="round"
-              opacity={si === 0 ? 1 : 0.85}
+              opacity={1}
               vectorEffect="non-scaling-stroke"
             />
             {boundary < n - 1 ? (
@@ -1008,11 +1020,11 @@ function TrendChart({
                 d={segment(ys, solidTo, n - 1)}
                 fill="none"
                 stroke={series[si].color}
-                strokeWidth={si === 0 ? 2.5 : 2}
-                strokeDasharray="2 4"
+                strokeWidth={si === 0 ? 3.5 : 3}
+                strokeDasharray="2 5"
                 strokeLinejoin="round"
                 strokeLinecap="round"
-                opacity={si === 0 ? 0.9 : 0.7}
+                opacity={si === 0 ? 0.95 : 0.85}
                 vectorEffect="non-scaling-stroke"
               />
             ) : null}

@@ -9,7 +9,6 @@ import {
   type LucideIcon,
   Map as MapIcon,
   Satellite,
-  Sparkles,
   Swords,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -17,7 +16,6 @@ import { cn } from "@/lib/utils"
 type NavItem = { id: string; label: string; icon: LucideIcon }
 
 export const NAV_ITEMS: NavItem[] = [
-  { id: "briefing", label: "AI Briefing", icon: Sparkles },
   { id: "forecast", label: "Live Trend + AI", icon: Activity },
   { id: "hourly", label: "Hourly Breakdown", icon: CalendarDays },
   { id: "observations", label: "Air Quality", icon: Gauge },
