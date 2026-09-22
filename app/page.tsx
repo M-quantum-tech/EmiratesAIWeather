@@ -4,7 +4,6 @@ import { LeftNav } from "@/components/left-nav"
 import { WeatherProvider } from "@/components/weather/weather-provider"
 import { AlertBanner } from "@/components/weather/alert-banner"
 import { AiPrediction } from "@/components/forecast/ai-prediction"
-import { DniForecast } from "@/components/solar/dni-forecast"
 import { Outlook14Day } from "@/components/forecast/outlook-14day"
 import { HourlyBreakdown } from "@/components/forecast/hourly-breakdown"
 import { MeasureMap } from "@/components/weather/measure-map"
@@ -54,15 +53,10 @@ export default function Page() {
               <AiPrediction />
             </section>
 
-            {/* 1b · DNI solar forecast + the selected day's 24-hour breakdown, merged into one block.
-                    Scrub the trend or tap a day above to drive the hour-by-hour panel below. */}
-            <section id="solar" className="mt-6 scroll-mt-6">
-              <div className="flex flex-col gap-6">
-                <DniForecast />
-                <div id="hourly" className="scroll-mt-6">
-                  <HourlyBreakdown />
-                </div>
-              </div>
+            {/* 1b · The selected day's 24-hour breakdown. Scrub the trend or tap a day
+                    in AI Prediction above to drive this hour-by-hour panel. */}
+            <section id="hourly" className="mt-6 scroll-mt-6">
+              <HourlyBreakdown />
             </section>
 
             {/* 14-day multi-model outlook — synced to the shared selected day */}
