@@ -85,7 +85,7 @@ export async function GET(request: NextRequest) {
   forecastUrl.searchParams.set("hourly", HOURLY)
   forecastUrl.searchParams.set("daily", DAILY)
   forecastUrl.searchParams.set("timezone", "auto")
-  forecastUrl.searchParams.set("forecast_days", "7")
+  forecastUrl.searchParams.set("forecast_days", "14")
   // Single model → Open-Meteo keeps base variable names, so downstream parsing is unchanged.
   if (model !== "best_match") forecastUrl.searchParams.set("models", model)
   if (units === "imperial") {

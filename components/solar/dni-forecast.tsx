@@ -2,12 +2,10 @@
 
 import { useMemo, useState } from "react"
 import useSWR from "swr"
-import { Sun, Sparkles, Clock, Lock } from "lucide-react"
+import { Sun, Sparkles, Clock } from "lucide-react"
 import { Panel } from "@/components/station/panel"
 import { TrendChart, type TrendPoint } from "@/components/station/trend-chart"
 import { useWeather } from "@/components/weather/weather-provider"
-import { usePro } from "@/components/pro/use-pro"
-import { UnlockPro } from "@/components/pro/unlock-pro"
 import { dniBand, formatWeekday, type SolarDay, type SolarPayload } from "@/lib/weather"
 import { cn } from "@/lib/utils"
 
@@ -43,23 +41,17 @@ function dayName(date: string, index: number) {
 
 export function DniForecast() {
   const { location, selectedDay, setSelectedDay } = useWeather()
-  const { isPro } = usePro()
   const [horizon, setHorizon] = useState<Horizon>(7)
 
-  // Selecting a day here drives the 24-Hour Breakdown panel (both read the same
-  // weather context). Only the free 7-day window maps to the hourly breakdown, so
-  // rows beyond index 6 (the Pro 14-day extension) are display-only.
+  // Selecting a day here drives the 24-Hour Breakdown panel — both the table rows
+  // and the trend-chart cursor share the same weather context. The weather feed
+  // now covers all 14 days, so every day in either horizon is selectable.
   function selectDay(index: number) {
-    if (index > 6) return
     setSelectedDay(index)
     if (typeof document !== "undefined") {
       document.getElementById("hourly")?.scrollIntoView({ behavior: "smooth", block: "start" })
     }
   }
-
-  // The extended 14-day AI-prediction horizon is a Pro feature. Free users always
-  // see the 7-day EmiratesConsensus model; picking 14-day reveals an unlock prompt.
-  const locked = horizon === 14 && !isPro
 
   // Always request the 14-day window once, then slice client-side for the toggle —
   // avoids a second network round-trip when switching horizons.
@@ -69,11 +61,9 @@ export function DniForecast() {
     keepPreviousData: true,
   })
 
-  // Free/locked users are held to the 7-day model even after tapping 14-day.
-  const effectiveHorizon = locked ? 7 : horizon
   const days: SolarDay[] = useMemo(
-    () => (data?.days ?? []).slice(0, effectiveHorizon),
-    [data, effectiveHorizon],
+    () => (data?.days ?? []).slice(0, horizon),
+    [data, horizon],
   )
 
   const stats = useMemo(() => {
@@ -107,27 +97,23 @@ export function DniForecast() {
           aria-label="Forecast horizon"
           className="flex items-center gap-1 rounded-md border border-border bg-secondary/50 p-0.5"
         >
-          {([7, 14] as Horizon[]).map((h) => {
-            const proTab = h === 14 && !isPro
-            return (
-              <button
-                key={h}
-                type="button"
-                role="tab"
-                aria-selected={horizon === h}
-                onClick={() => setHorizon(h)}
-                className={cn(
-                  "inline-flex items-center gap-1 rounded px-2.5 py-1 font-mono text-[0.625rem] font-bold uppercase tracking-wider transition-colors",
-                  horizon === h
-                    ? "bg-signal text-signal-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {proTab ? <Lock className="h-2.5 w-2.5" aria-hidden="true" /> : null}
-                {h}-Day
-              </button>
-            )
-          })}
+          {([7, 14] as Horizon[]).map((h) => (
+            <button
+              key={h}
+              type="button"
+              role="tab"
+              aria-selected={horizon === h}
+              onClick={() => setHorizon(h)}
+              className={cn(
+                "inline-flex items-center gap-1 rounded px-2.5 py-1 font-mono text-[0.625rem] font-bold uppercase tracking-wider transition-colors",
+                horizon === h
+                  ? "bg-signal text-signal-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {h}-Day
+            </button>
+          ))}
         </div>
       </header>
 
@@ -170,14 +156,15 @@ export function DniForecast() {
             </div>
           ) : null}
 
-          {/* Daily energy trend — one point per day, driven by the 7-day EmiratesConsensus model */}
+          {/* Daily energy trend — one point per day. The cursor scrubs the whole
+              trend; releasing on a day selects it and drives the 24-hour breakdown. */}
           <div>
             <div className="mb-1 flex items-center justify-between">
               <span className="label-caps text-muted-foreground">
-                Daily DNI energy yield · {effectiveHorizon}-day trend
+                Daily DNI energy yield · {horizon}-day trend
               </span>
               <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-                kWh/m²/day
+                Drag to scrub · kWh/m²/day
               </span>
             </div>
             <TrendChart
@@ -186,6 +173,8 @@ export function DniForecast() {
               format={(v) => v.toFixed(1)}
               height={150}
               color="var(--color-signal)"
+              selectedIndex={selectedDay < days.length ? selectedDay : null}
+              onSelect={selectDay}
             />
           </div>
 
@@ -211,16 +200,14 @@ export function DniForecast() {
               <tbody>
                 {days.map((d, i) => {
                   const band = dniBand(d.dniEnergy)
-                  const selectable = i <= 6
-                  const active = selectable && i === selectedDay
+                  const active = i === selectedDay
                   return (
                     <tr
                       key={d.date}
-                      onClick={selectable ? () => selectDay(i) : undefined}
+                      onClick={() => selectDay(i)}
                       aria-current={active ? "true" : undefined}
                       className={cn(
-                        "border-t border-border/60 text-sm transition-colors",
-                        selectable && "cursor-pointer hover:bg-secondary/40",
+                        "cursor-pointer border-t border-border/60 text-sm transition-colors hover:bg-secondary/40",
                         active && "bg-signal/10",
                       )}
                     >
@@ -254,28 +241,12 @@ export function DniForecast() {
             </table>
           </div>
 
-          {locked ? (
-            <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-accent/40 bg-accent/5 px-6 py-6 text-center">
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent/10 px-3 py-1 font-mono text-[0.625rem] font-semibold uppercase tracking-wider text-accent">
-                <Lock className="h-3 w-3" aria-hidden="true" />
-                14-day AI prediction · Pro
-              </span>
-              <h3 className="text-balance text-sm font-semibold text-foreground">
-                Extend the solar forecast to 14 days
-              </h3>
-              <p className="max-w-md text-pretty text-xs leading-relaxed text-muted-foreground">
-                The free view shows the 7-day EmiratesConsensus model. Sign in and go Pro to unlock the extended
-                14-day AI DNI prediction with day-by-day yield, peak irradiance and grade breakdowns.
-              </p>
-              <UnlockPro label="Sign in to unlock 14-day" />
-            </div>
-          ) : null}
-
           <p className="text-pretty text-[0.7rem] leading-relaxed text-muted-foreground">
             Direct Normal Irradiance (DNI) is the beam solar flux on a sun-tracking surface — the primary input for
-            concentrating solar and panel-yield planning. Daily yield integrates the hourly DNI curve; the free 7-day
-            window is driven by the EmiratesConsensus model, while the Pro 14-day horizon extends it with the AI
-            prediction model.
+            concentrating solar and panel-yield planning. Daily yield integrates the hourly DNI curve; the 7-day
+            window is driven by the EmiratesConsensus model, while the 14-day horizon extends it with the AI
+            prediction model. Both horizons are free — scrub the trend or tap a day to load its hour-by-hour
+            breakdown.
           </p>
         </div>
       )}
