@@ -32,13 +32,13 @@ export function Hero() {
           </div>
 
           <div className="relative mt-6 w-full max-w-xl lg:mt-0 lg:ml-8">
-            <div className="pointer-events-none hidden select-none sm:block">
+            <div className="pointer-events-none select-none overflow-hidden rounded-xl border border-border bg-card shadow-2xl station-rise">
               <Image
                 src="/hero/weather-hero.png"
-                alt="Weather map preview"
+                alt="AI-driven UAE weather map preview with radar sweep and wind flow"
                 width={720}
                 height={420}
-                className="rounded-xl shadow-2xl object-cover station-rise"
+                className="h-auto w-full object-cover"
                 priority
               />
             </div>

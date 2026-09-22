@@ -56,12 +56,15 @@ const RADAR_SCALE = [
   { c: "#f800fd", label: "Violent" },
 ] as const
 
+// Radar-Merge-Sat legend: grey IR cloud field with vivid radar reflectivity
+// cells (green → yellow → red → magenta) painted on top.
 const CLOUD_SCALE = [
-  { c: "#0b1b33", label: "Clear" },
-  { c: "#2b3f5c", label: "" },
-  { c: "#5a6f8c", label: "Low cloud" },
-  { c: "#9aa8bd", label: "" },
-  { c: "#d6dce6", label: "High / cold top" },
+  { c: "#3a4a63", label: "Cloud" },
+  { c: "#02fd02", label: "Rain" },
+  { c: "#fdf802", label: "" },
+  { c: "#fd9500", label: "Heavy" },
+  { c: "#fd0000", label: "" },
+  { c: "#f800fd", label: "Intense" },
 ] as const
 
 // Wind-speed legend (m/s) matching the Windy-style heatmap palette (calm → gale).
@@ -99,6 +102,7 @@ export function NcmSources() {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<any>(null)
   const overlayRef = useRef<any>(null)
+  const mergeRef = useRef<any>(null)
   const basemapRef = useRef<any>(null)
   const windLayerRef = useRef<any>(null)
   const warnLayerRef = useRef<any>(null)
@@ -137,6 +141,13 @@ export function NcmSources() {
     return layer === "radar"
       ? `${host}${f.path}/512/{z}/{x}/{y}/6/1_1.png`
       : `${host}${f.path}/512/{z}/{x}/{y}/0/0_0.png`
+  }
+
+  // NCM "radar-Merge-Sat": vivid radar reflectivity cells (colour scheme 6,
+  // green→yellow→red→magenta) painted over the IR cloud field.
+  const radarMergeUrl = (f: Frame) => {
+    const host = maps?.host ?? "https://tilecache.rainviewer.com"
+    return `${host}${f.path}/512/{z}/{x}/{y}/6/1_1.png`
   }
 
   // Load and refresh RainViewer frame catalogue every 5 minutes.
@@ -251,15 +262,12 @@ export function NcmSources() {
         scrollWheelZoom: true,
       })
       map.zoomControl.setPosition("bottomright")
-      const cartoKey = process.env.NEXT_PUBLIC_CARTO_API_KEY
-      const base = cartoKey
-        ? `https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?api_key=${cartoKey}`
-        : // Keyless dark basemap (Esri Dark Gray) — reliable public tiles, matches theme
-          "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-      basemapRef.current = L.tileLayer(base, {
-        maxZoom: 12,
-        attribution: "&copy; OpenStreetMap contributors",
-      }).addTo(map)
+      // Esri dark-grey canvas: keyless, English/Latin place names (OSM localises
+      // UAE labels to Arabic) and a muted dark palette that matches the theme.
+      basemapRef.current = L.tileLayer(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+        { maxZoom: 12, attribution: "&copy; Esri, HERE, Garmin, OpenStreetMap contributors" },
+      ).addTo(map)
       // High-z pane so city labels sit above the shaded warning polygons (NCM look).
       map.createPane("labels")
       const labelsPane = map.getPane("labels")
@@ -267,6 +275,11 @@ export function NcmSources() {
         labelsPane.style.zIndex = "650"
         labelsPane.style.pointerEvents = "none"
       }
+      // English reference labels on a top pane so cities read over overlays.
+      L.tileLayer(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
+        { maxZoom: 12, pane: "labels" },
+      ).addTo(map)
       mapRef.current = map
       if (!cancelled) setMapReady(true)
       setTimeout(() => map.invalidateSize(), 250)
@@ -300,6 +313,10 @@ export function NcmSources() {
         map.removeLayer(overlayRef.current)
         overlayRef.current = null
       }
+      if (mergeRef.current) {
+        map.removeLayer(mergeRef.current)
+        mergeRef.current = null
+      }
       return
     }
 
@@ -310,10 +327,28 @@ export function NcmSources() {
       overlayRef.current.setUrl(url)
     } else {
       overlayRef.current = L.tileLayer(url, {
-        opacity: layer === "radar" ? 0.92 : 0.7,
+        opacity: layer === "radar" ? 0.92 : 0.82,
         maxZoom: 12,
         zIndex: 400,
       }).addTo(map)
+    }
+
+    // Clouds/IR = NCM radar-Merge-Sat: overlay vivid radar cells on the IR field.
+    if (layer === "satellite" && maps?.radar && maps.radar.length > 0) {
+      const rf = maps.radar[maps.radar.length - 1]
+      const rurl = radarMergeUrl(rf)
+      if (mergeRef.current) {
+        mergeRef.current.setUrl(rurl)
+      } else {
+        mergeRef.current = L.tileLayer(rurl, {
+          opacity: 0.9,
+          maxZoom: 12,
+          zIndex: 410,
+        }).addTo(map)
+      }
+    } else if (mergeRef.current) {
+      map.removeLayer(mergeRef.current)
+      mergeRef.current = null
     }
     setStamp(new Date(f.time * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))
     // Broadcast the active time so other map panels can sync.
@@ -331,6 +366,10 @@ export function NcmSources() {
     if (map && overlayRef.current) {
       map.removeLayer(overlayRef.current)
       overlayRef.current = null
+    }
+    if (map && mergeRef.current) {
+      map.removeLayer(mergeRef.current)
+      mergeRef.current = null
     }
     if (basemapRef.current) {
       // Fade the dark basemap on radar/clouds/warnings so the NCM blue tint shows

@@ -133,13 +133,14 @@ export function createWindLayer(L: any, grid: WindGrid) {
       ctx.drawImage(off, nw.x, nw.y, se.x - nw.x, se.y - nw.y)
       ctx.globalAlpha = 1
 
-      // 2) Uniform arrow grid — direction only, fixed size (speed is shown by the heatmap).
-      const step = 40
-      const len = 6
-      const head = 4
-      ctx.lineWidth = 1.1
-      ctx.strokeStyle = "rgba(255,255,255,0.82)"
-      ctx.fillStyle = "rgba(255,255,255,0.82)"
+      // 2) Uniform arrow grid — direction only, larger glyphs for readability.
+      // Each arrow is stroked twice: a dark outline underneath for contrast against
+      // the bright heatmap, then a bright white arrow on top.
+      const step = 58
+      const len = 12
+      const head = 8
+      ctx.lineCap = "round"
+      ctx.lineJoin = "round"
       for (let y = step / 2; y < s.y; y += step) {
         for (let x = step / 2; x < s.x; x += step) {
           const ll = map.containerPointToLatLng([x, y])
@@ -150,16 +151,42 @@ export function createWindLayer(L: any, grid: WindGrid) {
           const ang = Math.atan2(-sm.v, sm.u)
           const dx = Math.cos(ang)
           const dy = Math.sin(ang)
+          const tx = x - dx * len
+          const ty = y - dy * len
           const hx = x + dx * len
           const hy = y + dy * len
+          const bx1 = hx + Math.cos(ang + 2.6) * head
+          const by1 = hy + Math.sin(ang + 2.6) * head
+          const bx2 = hx + Math.cos(ang - 2.6) * head
+          const by2 = hy + Math.sin(ang - 2.6) * head
+
+          // Dark contrast outline
+          ctx.strokeStyle = "rgba(6,12,26,0.75)"
+          ctx.fillStyle = "rgba(6,12,26,0.75)"
+          ctx.lineWidth = 4.5
           ctx.beginPath()
-          ctx.moveTo(x - dx * len, y - dy * len)
+          ctx.moveTo(tx, ty)
           ctx.lineTo(hx, hy)
           ctx.stroke()
           ctx.beginPath()
           ctx.moveTo(hx, hy)
-          ctx.lineTo(hx + Math.cos(ang + 2.6) * head, hy + Math.sin(ang + 2.6) * head)
-          ctx.lineTo(hx + Math.cos(ang - 2.6) * head, hy + Math.sin(ang - 2.6) * head)
+          ctx.lineTo(bx1, by1)
+          ctx.lineTo(bx2, by2)
+          ctx.closePath()
+          ctx.fill()
+
+          // Bright arrow on top
+          ctx.strokeStyle = "rgba(255,255,255,0.96)"
+          ctx.fillStyle = "rgba(255,255,255,0.96)"
+          ctx.lineWidth = 2.2
+          ctx.beginPath()
+          ctx.moveTo(tx, ty)
+          ctx.lineTo(hx, hy)
+          ctx.stroke()
+          ctx.beginPath()
+          ctx.moveTo(hx, hy)
+          ctx.lineTo(bx1, by1)
+          ctx.lineTo(bx2, by2)
           ctx.closePath()
           ctx.fill()
         }
