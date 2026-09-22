@@ -11,25 +11,9 @@ const BADGES = [
 export function Hero() {
   return (
     <section className="relative overflow-hidden">
-      {/* full-bleed storm photograph */}
-      <Image
-        src="/hero/storm-hero.png"
-        alt="Lightning storm over a UAE coastal city skyline at night"
-        fill
-        priority
-        sizes="100vw"
-        className="object-cover"
-      />
-      {/* darkening overlays for text legibility — stronger on the left */}
-      <div
-        aria-hidden="true"
-        className="absolute inset-0 bg-gradient-to-r from-background via-background/80 to-background/30"
-      />
-      <div aria-hidden="true" className="absolute inset-0 bg-background/40" />
-
-      <div className="relative mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:py-28">
+      <div className="relative mx-auto grid max-w-7xl items-center gap-10 px-4 py-16 sm:px-6 lg:grid-cols-2 lg:gap-12 lg:py-24">
         <div className="max-w-2xl">
-          <span className="inline-flex items-center gap-2 rounded-full border border-signal/40 bg-signal/10 px-3 py-1 font-mono text-[0.625rem] uppercase tracking-[0.16em] text-signal backdrop-blur-sm">
+          <span className="inline-flex items-center gap-2 rounded-full border border-signal/40 bg-signal/10 px-3 py-1 font-mono text-[0.625rem] uppercase tracking-[0.16em] text-signal">
             <span className="relative flex h-2 w-2">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-signal opacity-75" />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-signal" />
@@ -53,7 +37,7 @@ export function Hero() {
             </Link>
             <Link
               href="/pricing"
-              className="inline-flex items-center rounded-md border border-border bg-background/40 px-5 py-2.5 text-sm font-medium text-foreground backdrop-blur-sm hover:bg-secondary/50"
+              className="inline-flex items-center rounded-md border border-border bg-background/40 px-5 py-2.5 text-sm font-medium text-foreground hover:bg-secondary/50"
             >
               Upgrade
             </Link>
@@ -69,6 +53,23 @@ export function Hero() {
               )
             })}
           </ul>
+        </div>
+
+        {/* contained Dubai photograph */}
+        <div className="relative overflow-hidden rounded-2xl border border-border shadow-2xl lg:justify-self-end">
+          <Image
+            src="/hero/dubai-hero.png"
+            alt="Dubai skyline at dusk with the Burj Khalifa under gathering storm clouds"
+            width={640}
+            height={480}
+            priority
+            sizes="(min-width: 1024px) 40vw, 100vw"
+            className="h-auto w-full object-cover"
+          />
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 rounded-2xl ring-1 ring-inset ring-background/10"
+          />
         </div>
       </div>
     </section>
