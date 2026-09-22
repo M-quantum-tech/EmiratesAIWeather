@@ -73,7 +73,7 @@ export const LOCAL_ADS: LocalAd[] = [
     offer: "Bottomless coffee with any entrée",
     city: "New York",
     url: "https://example.com/hk-brunch",
-    weather: ["rain", "snow", "cloudy"],
+    weather: ["rain", "snow", "cloud"],
     tempBias: "cold",
   },
   // Reykjavik
@@ -85,7 +85,7 @@ export const LOCAL_ADS: LocalAd[] = [
     offer: "Evening pass 15% off",
     city: "Reykjav",
     url: "https://example.com/laugar-baths",
-    weather: ["snow", "rain", "cloudy", "fog"],
+    weather: ["snow", "rain", "cloud", "fog"],
     tempBias: "cold",
   },
   {
@@ -113,7 +113,7 @@ export const FALLBACK_ADS: LocalAd[] = [
     offer: "Free shipping on jackets over $60",
     city: "",
     url: "https://example.com/allweather",
-    weather: ["rain", "drizzle", "thunderstorm", "snow"],
+    weather: ["rain", "drizzle", "storm", "snow"],
   },
   {
     id: "generic-sun",
