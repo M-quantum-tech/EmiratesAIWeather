@@ -10,6 +10,7 @@ import { MeasureMap } from "@/components/weather/measure-map"
 import { NcmSources } from "@/components/weather/ncm-sources"
 import { Webcams } from "@/components/weather/webcams"
 import { StationDashboard } from "@/components/station/station-dashboard"
+import { LiveTrend } from "@/components/station/live-trend"
 import { RegisterPanel } from "@/components/players/register-panel"
 import { AdUnit } from "@/components/station/ad-unit"
 import { ChessGame } from "@/components/games/chess-game"
@@ -63,6 +64,11 @@ export default function Page() {
                     in AI Prediction above to drive this hour-by-hour panel. */}
             <section id="hourly" className="mt-6 scroll-mt-6">
               <HourlyBreakdown />
+            </section>
+
+            {/* 3b · Live trend + AI projection — normalized temperature / feels-like / humidity */}
+            <section id="live" className="mt-6 scroll-mt-6">
+              <LiveTrend />
             </section>
 
             {/* 4 · Live observations */}

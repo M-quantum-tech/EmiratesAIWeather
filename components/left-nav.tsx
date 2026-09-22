@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import {
+  Activity,
   CalendarDays,
   Camera,
   Gauge,
@@ -20,6 +21,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "briefing", label: "AI Briefing", icon: Sparkles },
   { id: "forecast", label: "AI Prediction", icon: LineChart },
   { id: "hourly", label: "Hourly Breakdown", icon: CalendarDays },
+  { id: "live", label: "Live Trend", icon: Activity },
   { id: "observations", label: "Air Quality", icon: Gauge },
   { id: "radar", label: "Radar & Satellite", icon: Satellite },
   { id: "map", label: "Weather Map", icon: MapIcon },
