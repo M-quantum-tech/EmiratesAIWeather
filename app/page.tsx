@@ -54,14 +54,15 @@ export default function Page() {
               <ForecastStrip />
             </section>
 
-            {/* 1b · DNI (Direct Normal Irradiance) 7 & 14-day solar-resource forecast */}
+            {/* 1b · DNI solar forecast + the selected day's 24-hour breakdown, merged into one block.
+                    Scrub the trend or tap a day above to drive the hour-by-hour panel below. */}
             <section id="solar" className="mt-6 scroll-mt-6">
-              <DniForecast />
-            </section>
-
-            {/* 2 · 24-hour forecast breakdown for the selected day */}
-            <section id="hourly" className="mt-6 scroll-mt-6">
-              <HourlyBreakdown />
+              <div className="flex flex-col gap-6">
+                <DniForecast />
+                <div id="hourly" className="scroll-mt-6">
+                  <HourlyBreakdown />
+                </div>
+              </div>
             </section>
 
             {/* 7-day multi-panel meteogram */}
