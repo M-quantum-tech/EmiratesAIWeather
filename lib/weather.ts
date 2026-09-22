@@ -372,8 +372,20 @@ export function dniBand(energy: number): { label: string; tone: "bad" | "warn" |
 
 export type AlertLevel = "green" | "yellow" | "orange" | "red"
 
-/** Proximity radius (km) the danger buzzer scans for severe conditions. */
-export const DANGER_RADIUS_KM = 30
+/**
+ * Distance (km) from the user's location associated with each alert tier. As a
+ * hazard closes in on the user, the tier escalates: a green hazard is still 60 km+
+ * away, yellow ~50 km, orange ~30 km, and red within 20 km (take-shelter range).
+ */
+export const ALERT_RADII_KM: Record<AlertLevel, number> = {
+  green: 60,
+  yellow: 50,
+  orange: 30,
+  red: 20,
+}
+
+/** Proximity radius (km) the danger buzzer scans for severe conditions (red tier). */
+export const DANGER_RADIUS_KM = ALERT_RADII_KM.red
 
 export type HazardKey = "wind" | "gust" | "rain" | "precip"
 
@@ -500,22 +512,22 @@ export function buildAlert(data: WeatherPayload): WeatherAlert {
   const copy: Record<AlertLevel, { headline: string; detail: string; advice: string }> = {
     green: {
       headline: "All clear — conditions are calm and safe",
-      detail: "The AI model detects no significant hazards across wind, rain, heat or air quality within 30 km.",
+      detail: `No significant wind, rain or air-quality hazards are tracking within ${ALERT_RADII_KM.green} km of your location.`,
       advice: "Enjoy the outdoors — a great window for any activity.",
     },
     yellow: {
       headline: "Caution — stay weather-aware",
-      detail: "Minor hazards developing nearby. Keep an eye on changing wind, rain or air-quality trends.",
+      detail: `Minor hazards developing about ${ALERT_RADII_KM.yellow} km out. Keep an eye on changing wind, rain or air-quality trends.`,
       advice: "Carry a layer or umbrella and check back before heading out.",
     },
     orange: {
       headline: "Severe — prepare and take precautions",
-      detail: "Notable hazards likely within 30 km — strong gusts, heavy rain, extreme feels-like, or poor air.",
+      detail: `Notable hazards closing within ${ALERT_RADII_KM.orange} km — strong gusts, heavy rain, extreme feels-like, or poor air.`,
       advice: "Postpone exposed activities, secure loose items, and stay near shelter.",
     },
     red: {
       headline: "Danger — take shelter immediately",
-      detail: "Severe hazards detected within 30 km. Travel and outdoor exposure are risky right now.",
+      detail: `Severe hazards detected within ${ALERT_RADII_KM.red} km of you. Travel and outdoor exposure are risky right now.`,
       advice: "Stay indoors, avoid travel, and follow official emergency guidance.",
     },
   }

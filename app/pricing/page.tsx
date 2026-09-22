@@ -1,6 +1,6 @@
 import { headers } from "next/headers"
 import { auth } from "@/lib/auth"
-import { PASS_LIST, PLAN_LIST } from "@/lib/plans"
+import { getEffectivePlans } from "@/lib/pricing"
 import { SiteNav } from "@/components/site-nav"
 import { PricingCards } from "@/components/pricing/pricing-cards"
 
@@ -13,6 +13,9 @@ export const metadata = {
 export default async function PricingPage() {
   const session = await auth.api.getSession({ headers: await headers() })
   const isAuthed = Boolean(session?.user)
+  const plans = await getEffectivePlans()
+  const planList = [plans.company, plans.personal]
+  const passList = [plans.pass_10m, plans.pass_30m, plans.pass_60m]
 
   return (
     <main className="min-h-screen">
@@ -30,7 +33,7 @@ export default async function PricingPage() {
         </div>
 
         <div className="mx-auto mt-12 max-w-4xl">
-          <PricingCards plans={PLAN_LIST} isAuthed={isAuthed} columns={2} />
+          <PricingCards plans={planList} isAuthed={isAuthed} columns={2} />
         </div>
 
         <div className="mx-auto mt-20 max-w-2xl text-center">
@@ -45,7 +48,7 @@ export default async function PricingPage() {
         </div>
 
         <div className="mx-auto mt-10 max-w-5xl">
-          <PricingCards plans={PASS_LIST} isAuthed={isAuthed} columns={3} />
+          <PricingCards plans={passList} isAuthed={isAuthed} columns={3} />
         </div>
 
         <p className="mx-auto mt-8 max-w-xl text-center text-xs text-muted-foreground">

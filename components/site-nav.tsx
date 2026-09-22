@@ -9,7 +9,6 @@ import { signOut, useSession } from "@/lib/auth-client"
 
 const LINKS = [
   { href: "/", label: "Weather Station" },
-  { href: "/editor", label: "Image Editor" },
   { href: "/pricing", label: "Pricing" },
   { href: "/company", label: "Company Profile" },
 ]

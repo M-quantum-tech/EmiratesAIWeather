@@ -1,8 +1,17 @@
 "use client"
 
+import Image from "next/image"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Activity, BellRing, BellOff, CloudRain, Droplets, Gauge, ShieldCheck, Siren, Wind } from "lucide-react"
-import { buildAlert, DANGER_RADIUS_KM, formatClock, type AlertLevel, type HazardKey } from "@/lib/weather"
+import {
+  ALERT_RADII_KM,
+  buildAlert,
+  DANGER_RADIUS_KM,
+  formatClock,
+  type AlertLevel,
+  type HazardKey,
+} from "@/lib/weather"
+import { ProximityRings } from "@/components/weather/proximity-rings"
 import { useWeather } from "@/components/weather/weather-provider"
 import { cn } from "@/lib/utils"
 
@@ -178,68 +187,112 @@ export function AlertBanner() {
         </div>
       ) : null}
 
-      {/* Big live status */}
-      <div className="flex flex-col gap-5 p-4 sm:flex-row sm:items-center sm:p-5">
-        <div className="flex items-center gap-4">
-          <div
-            className={cn(
-              "grid h-24 w-24 shrink-0 place-items-center rounded-2xl border-2 text-5xl",
-              styles.chip,
-              styles.glowShadow,
-            )}
-            aria-hidden="true"
-          >
-            <span>{alert.emoji}</span>
-          </div>
-          <div className="min-w-0">
-            <span className="font-mono text-[0.625rem] uppercase tracking-widest text-muted-foreground">
-              Current safety status
-            </span>
-            <div className="flex items-baseline gap-2">
-              <span className={cn("text-4xl font-black uppercase tracking-tight sm:text-5xl", styles.text)}>
-                {alert.title}
-              </span>
+      {/* Big live status + proximity radar */}
+      <div className="grid gap-8 p-5 sm:p-7 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+        <div className="flex flex-col gap-6">
+          <div className="flex items-center gap-5">
+            <div
+              className={cn(
+                "grid h-28 w-28 shrink-0 place-items-center rounded-2xl border-2 text-6xl sm:h-32 sm:w-32 sm:text-7xl",
+                styles.chip,
+                styles.glowShadow,
+              )}
+              aria-hidden="true"
+            >
+              <span>{alert.emoji}</span>
             </div>
-            <h3 className={cn("mt-1 text-balance text-base font-semibold tracking-tight", styles.text)}>
-              {alert.headline}
-            </h3>
-            <p className="mt-0.5 text-pretty text-sm text-muted-foreground">{alert.detail}</p>
+            <div className="min-w-0">
+              <span className="font-mono text-[0.625rem] uppercase tracking-widest text-muted-foreground">
+                Current safety status
+              </span>
+              <div className="flex items-baseline gap-2">
+                <span className={cn("text-5xl font-black uppercase tracking-tight sm:text-6xl", styles.text)}>
+                  {alert.title}
+                </span>
+              </div>
+              <h3 className={cn("mt-1.5 text-balance text-lg font-semibold tracking-tight sm:text-xl", styles.text)}>
+                {alert.headline}
+              </h3>
+              <p className="mt-1 text-pretty text-sm text-muted-foreground sm:text-base">{alert.detail}</p>
+            </div>
           </div>
-        </div>
 
-        {/* Severity meter + ladder */}
-        <div className="flex flex-col gap-3 sm:ml-auto sm:min-w-[15rem] sm:items-end">
-          <div className="flex w-full items-center gap-2 sm:justify-end">
+          {/* Severity meter */}
+          <div className="flex items-center gap-2">
             <span className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">Severity</span>
-            <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-secondary sm:max-w-[10rem]">
+            <div className="relative h-2.5 flex-1 overflow-hidden rounded-full bg-secondary">
               <div
                 className={cn("absolute inset-y-0 left-0 rounded-full transition-all", styles.solid)}
                 style={{ width: `${alert.score}%` }}
               />
             </div>
-            <span className={cn("font-mono text-xs font-bold tabular-nums", styles.text)}>{alert.score}</span>
+            <span className={cn("font-mono text-sm font-bold tabular-nums", styles.text)}>{alert.score}</span>
           </div>
-          <div className="flex items-center gap-1.5">
+
+          {/* Tier ladder with proximity radii */}
+          <div className="grid grid-cols-4 gap-2">
             {LADDER.map((rung, i) => (
-              <div key={rung.level} className="flex flex-col items-center gap-1">
-                <div
-                  className={cn(
-                    "h-2.5 w-10 rounded-full transition-opacity",
-                    rung.solid,
-                    i === activeIndex ? "opacity-100" : "opacity-20",
-                  )}
-                />
+              <div
+                key={rung.level}
+                className={cn(
+                  "flex flex-col items-center gap-1.5 rounded-lg border px-2 py-2 transition-opacity",
+                  i === activeIndex ? cn(LEVEL_STYLES[rung.level].chip, "opacity-100") : "border-border opacity-50",
+                )}
+              >
+                <span className={cn("h-2.5 w-full rounded-full", rung.solid)} />
                 <span
                   className={cn(
-                    "font-mono text-[0.5rem] font-bold uppercase tracking-wide",
-                    i === activeIndex ? styles.text : "text-muted-foreground/60",
+                    "font-mono text-[0.5625rem] font-bold uppercase tracking-wide",
+                    i === activeIndex ? LEVEL_STYLES[rung.level].text : "text-muted-foreground/70",
                   )}
                 >
                   {rung.label}
                 </span>
+                <span className="font-mono text-[0.5rem] uppercase tracking-wide text-muted-foreground">
+                  {rung.level === "green" ? `${ALERT_RADII_KM.green}km+` : `${ALERT_RADII_KM[rung.level]} km`}
+                </span>
               </div>
             ))}
           </div>
+        </div>
+
+        {/* Proximity radar */}
+        <div className="flex justify-center lg:justify-end">
+          <ProximityRings active={alert.level} />
+        </div>
+      </div>
+
+      {/* How the 4 proximity tiers work — AI-generated legend */}
+      <div className="grid gap-4 border-t border-border/60 p-5 sm:p-7 lg:grid-cols-[auto_minmax(0,1fr)] lg:items-center">
+        <div className="overflow-hidden rounded-xl border border-border bg-background/60">
+          <Image
+            src="/safety/proximity-levels.png"
+            alt="Diagram of the four proximity alert rings: red within 20 km, orange within 30 km, yellow within 50 km, green beyond 60 km of your location"
+            width={420}
+            height={420}
+            className="h-auto w-full max-w-[16rem] object-contain"
+          />
+        </div>
+        <div>
+          <span className="label-caps text-muted-foreground">How the model reads distance</span>
+          <p className="mt-1 text-pretty text-sm text-muted-foreground">
+            The AI tracks wind speed, wind gust, rain and precipitation hazards and maps how close they are
+            to you. The tighter the ring a hazard reaches, the higher the alert.
+          </p>
+          <ul className="mt-3 grid gap-2 sm:grid-cols-2">
+            {LADDER.map((rung) => (
+              <li
+                key={rung.level}
+                className={cn("flex items-center gap-2 rounded-lg border px-2.5 py-2 text-sm", LEVEL_STYLES[rung.level].chip)}
+              >
+                <span className={cn("h-3 w-3 shrink-0 rounded-full", rung.solid)} aria-hidden="true" />
+                <span className="font-mono text-xs font-bold uppercase tracking-wide">{rung.label}</span>
+                <span className="ml-auto font-mono text-xs tabular-nums opacity-90">
+                  {rung.level === "green" ? `${ALERT_RADII_KM.green} km +` : `within ${ALERT_RADII_KM[rung.level]} km`}
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
       </div>
 

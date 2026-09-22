@@ -3,7 +3,8 @@
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { subscription } from "@/lib/db/schema"
-import { PLANS, type PlanId } from "@/lib/plans"
+import { type PlanId } from "@/lib/plans"
+import { getEffectivePlan } from "@/lib/pricing"
 import { desc, eq } from "drizzle-orm"
 import { headers } from "next/headers"
 import { revalidatePath } from "next/cache"
@@ -33,7 +34,7 @@ export async function getMySubscription() {
  */
 export async function choosePlan(planId: PlanId) {
   const userId = await getUserId()
-  const plan = PLANS[planId]
+  const plan = await getEffectivePlan(planId)
   if (!plan) throw new Error("Unknown plan")
 
   const now = new Date()

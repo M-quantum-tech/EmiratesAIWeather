@@ -63,6 +63,15 @@ export const player = pgTable("player", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 })
 
+// Admin-editable price overrides per plan. When a row exists for a plan, its
+// priceCents wins over the static default in lib/plans.ts. Lets admins change
+// pricing from the console without a redeploy.
+export const planPrice = pgTable("plan_price", {
+  planId: text("planId").primaryKey(),
+  priceCents: integer("priceCents").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+})
+
 export const subscription = pgTable("subscription", {
   id: text("id").primaryKey(),
   userId: text("userId").notNull(),

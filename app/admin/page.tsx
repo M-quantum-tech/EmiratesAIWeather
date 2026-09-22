@@ -1,9 +1,11 @@
 import { redirect } from "next/navigation"
-import { Building2, Clock, Ticket, TrendingUp, User, Users } from "lucide-react"
+import { Building2, Clock, Tag, Ticket, TrendingUp, User, Users } from "lucide-react"
 import { computeStats, getAdminMembers, getSessionUser } from "@/lib/admin"
 import { formatCents } from "@/lib/plans"
+import { getEffectivePlans } from "@/lib/pricing"
 import { SiteNav } from "@/components/site-nav"
 import { MembersTable } from "@/components/admin/members-table"
+import { PricingEditor, type PriceRow } from "@/components/admin/pricing-editor"
 
 export const metadata = { title: "Admin dashboard — EmiratesAIWeather" }
 
@@ -14,6 +16,14 @@ export default async function AdminPage() {
 
   const members = await getAdminMembers()
   const stats = computeStats(members)
+  const plans = await getEffectivePlans()
+  const priceRows: PriceRow[] = [
+    plans.company,
+    plans.personal,
+    plans.pass_10m,
+    plans.pass_30m,
+    plans.pass_60m,
+  ].map((p) => ({ id: p.id, name: p.name, cadenceLabel: p.cadenceLabel, priceCents: p.priceCents }))
 
   return (
     <main className="min-h-screen">
@@ -44,9 +54,35 @@ export default async function AdminPage() {
             hint={`${stats.passCount} passes sold (one-time)`}
           />
           <StatCard icon={Users} label="Total members" value={String(stats.totalMembers)} hint={`${stats.activeSubs} active subscriptions`} />
-          <StatCard icon={Building2} label="Company Pro" value={String(stats.companyCount)} hint="$100 / month each" />
-          <StatCard icon={User} label="Personal Pro" value={String(stats.personalCount)} hint="$10 / day each" />
-          <StatCard icon={Clock} label="Time passes" value={String(stats.passCount)} hint="$3 / $5 / $7 tiers" />
+          <StatCard
+            icon={Building2}
+            label="Company Pro"
+            value={String(stats.companyCount)}
+            hint={`${plans.company.priceLabel} / month each`}
+          />
+          <StatCard
+            icon={User}
+            label="Personal Pro"
+            value={String(stats.personalCount)}
+            hint={`${plans.personal.priceLabel} / day each`}
+          />
+          <StatCard
+            icon={Clock}
+            label="Time passes"
+            value={String(stats.passCount)}
+            hint={`${plans.pass_10m.priceLabel} / ${plans.pass_30m.priceLabel} / ${plans.pass_60m.priceLabel} tiers`}
+          />
+        </div>
+
+        <div className="mt-10 flex flex-col gap-4">
+          <div className="flex items-center gap-2">
+            <Tag className="h-4 w-4 text-accent" aria-hidden="true" />
+            <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-foreground">Plan pricing</h2>
+          </div>
+          <p className="-mt-2 text-sm text-muted-foreground">
+            Update any plan or pass price. Changes apply instantly across the pricing page and checkout.
+          </p>
+          <PricingEditor rows={priceRows} />
         </div>
 
         <div className="mt-10 flex flex-col gap-4">
