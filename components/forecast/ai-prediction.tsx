@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react"
 import useSWR from "swr"
-import { ArrowDownRight, ArrowUpRight, CloudRain, ShieldCheck, Sparkles, Sun, Thermometer, Wind } from "lucide-react"
+import { ArrowDownRight, ArrowUpRight, CloudRain, Minus, ShieldCheck, Sparkles, Sun, Thermometer, Wind } from "lucide-react"
 import { Panel } from "@/components/station/panel"
 import { useWeather } from "@/components/weather/weather-provider"
 import {
@@ -59,6 +59,13 @@ const MEASURE_DOT: Record<MeasureTone, string> = {
   bad: "bg-alert-red",
 }
 
+const MEASURE_CHIP: Record<MeasureTone, string> = {
+  good: "border-alert-green/40 bg-alert-green/10 text-alert-green",
+  info: "border-signal/40 bg-signal/10 text-signal",
+  warn: "border-alert-orange/40 bg-alert-orange/10 text-alert-orange",
+  bad: "border-alert-red/50 bg-alert-red/10 text-alert-red",
+}
+
 type Series = {
   label: string
   color: string
@@ -86,6 +93,8 @@ type View = {
   peak: Highlight
   trough: Highlight
   measures: Measure[]
+  /** One-line trend narrative + status chip surfaced in the chart header. */
+  headline: { status: string; tone: MeasureTone; comment: string }
   projectionNote: string
   tooltipHead: (i: number) => string
 }
@@ -167,6 +176,11 @@ function buildView(
         ],
         peak: { label: "Peak irradiance", value: wm2(values[hi]), when: clockLabel(hi) },
         trough: { label: "Usable window", value: `${day.sunHours} h`, when: `${clockLabel(first)}–${clockLabel(last)}` },
+        headline: {
+          status: day.peakDni >= 800 ? "Prime solar" : day.peakDni < 400 ? "Weak beam" : "Moderate sun",
+          tone: day.peakDni >= 800 ? "good" : day.peakDni < 400 ? "warn" : "info",
+          comment: `Beam irradiance peaks ${wm2(day.peakDni)} around ${clockLabel(day.peakHour)} — ${day.sunHours} usable sun hours (${band.label.toLowerCase()} day).`,
+        },
         measures,
       }
     }
@@ -214,6 +228,11 @@ function buildView(
         ],
         peak: { label: "Warmest (feels)", value: t(feels[hi]), when: clockAt(hi) },
         trough: { label: "Coolest (feels)", value: t(feels[lo]), when: clockAt(lo) },
+        headline: {
+          status: feels[hi] >= extreme ? "Extreme heat" : feels[hi] >= hot ? "Heat stress" : "Comfortable",
+          tone: feels[hi] >= extreme ? "bad" : feels[hi] >= hot ? "warn" : "good",
+          comment: `Feels-like peaks ${t(feels[hi])} around ${clockAt(hi)}; easing to ${t(feels[lo])} by ${clockAt(lo)}.`,
+        },
         measures,
       }
     }
@@ -247,6 +266,11 @@ function buildView(
         ],
         peak: { label: "Strongest gust", value: s(gust[hi]), when: clockAt(hi) },
         trough: { label: "Calmest hour", value: s(gust[lo]), when: clockAt(lo) },
+        headline: {
+          status: gMax >= 75 ? "Damaging gusts" : gMax >= 50 ? "Windy" : gMax >= 35 ? "Breezy" : "Light air",
+          tone: gMax >= 75 ? "bad" : gMax >= 50 ? "warn" : gMax >= 35 ? "info" : "good",
+          comment: `Peak gusts ${s(gust[hi])} ${compass(hours[hi].windDirection)} around ${clockAt(hi)}; calmest ${s(gust[lo])} at ${clockAt(lo)}.`,
+        },
         measures,
       }
     }
@@ -279,6 +303,14 @@ function buildView(
       ],
       peak: { label: "Peak rain chance", value: pct(prob[hi]), when: clockAt(hi) },
       trough: { label: "Driest hour", value: pct(prob[lo]), when: clockAt(lo) },
+      headline: {
+        status: prob[hi] >= 70 ? "Rain likely" : prob[hi] >= 50 ? "Showers" : prob[hi] >= 25 ? "Isolated showers" : "Dry",
+        tone: prob[hi] >= 70 ? "bad" : prob[hi] >= 50 ? "warn" : prob[hi] >= 25 ? "info" : "good",
+        comment:
+          prob[hi] >= 25
+            ? `Peak rain chance ${pct(prob[hi])} around ${clockAt(hi)}; ${total.toFixed(1)} ${precipUnit(units)} expected over the day.`
+            : "Dry through the next 24 hours — no meaningful rain expected.",
+      },
       measures,
     }
   }
@@ -328,6 +360,11 @@ function buildView(
       ],
       peak: { label: "Best yield", value: kwh(yield_[hi]), when: dniWhen(hi) },
       trough: { label: "Lowest yield", value: kwh(yield_[lo]), when: dniWhen(lo) },
+      headline: {
+        status: "Solar outlook",
+        tone: "info",
+        comment: `Best yield ${kwh(yield_[hi])} on ${dniWhen(hi)}; lowest ${kwh(yield_[lo])} on ${dniWhen(lo)}. 14-day average ${kwh(avg)}.`,
+      },
       measures,
     }
   }
@@ -362,6 +399,11 @@ function buildView(
       ],
       peak: { label: "Warmest day", value: t(max[hi]), when: when14(hi) },
       trough: { label: "Coolest night", value: t(min[lo]), when: when14(lo) },
+      headline: {
+        status: max[hi] >= hot ? "Hot spell" : "Stable",
+        tone: max[hi] >= hot ? "warn" : "good",
+        comment: `Hottest ${t(max[hi])} on ${when14(hi)}; coolest night ${t(min[lo])} on ${when14(lo)}.`,
+      },
       measures,
     }
   }
@@ -394,6 +436,11 @@ function buildView(
       ],
       peak: { label: "Peak gust", value: s(gust[hi]), when: when14(hi) },
       trough: { label: "Calmest day", value: s(gust[lo]), when: when14(lo) },
+      headline: {
+        status: gMax >= 75 ? "Damaging gusts" : gMax >= 50 ? "Windy" : "Light",
+        tone: gMax >= 75 ? "bad" : gMax >= 50 ? "warn" : "good",
+        comment: `Peak gust ${s(gust[hi])} on ${when14(hi)}; calmest ${s(gust[lo])} on ${when14(lo)}.`,
+      },
       measures,
     }
   }
@@ -425,6 +472,14 @@ function buildView(
     ],
     peak: { label: "Wettest day", value: `${rain[hi].toFixed(1)} ${precipUnit(units)}`, when: when14(hi) },
     trough: { label: "Driest day", value: pct(prob[lo]), when: when14(lo) },
+    headline: {
+      status: wetDays === 0 ? "Dry fortnight" : `${wetDays} wet day(s)`,
+      tone: wetDays === 0 ? "good" : "info",
+      comment:
+        wetDays === 0
+          ? "No significant rain days flagged across the fortnight."
+          : `${wetDays} day(s) carry ≥ 40% rain chance; wettest ${when14(hi)} (${rain[hi].toFixed(1)} ${precipUnit(units)}).`,
+    },
     measures,
   }
 }
@@ -547,6 +602,9 @@ export function AiPrediction() {
         </div>
       ) : (
         <>
+          {/* Header trend — AI Briefing narrative for this metric; live per-point read while scrubbing */}
+          <HeaderTrend view={view} active={active} />
+
           {/* Stat cards */}
           <div className="grid grid-cols-3 gap-px bg-border">
             {view.stats.map((stat) => (
@@ -652,6 +710,74 @@ export function AiPrediction() {
         Multi-model blend · {MODEL_NETWORK}
       </p>
     </Panel>
+  )
+}
+
+/**
+ * Header trend band — surfaces the metric's AI Briefing narrative, and while the
+ * cursor scrubs the chart it swaps to a live read of the hovered point plus a
+ * rising / easing / steady trend pill derived from the primary series.
+ */
+function HeaderTrend({ view, active }: { view: View; active: number | null }) {
+  const tone = MEASURE_CHIP[view.headline.tone]
+  const primary = view.series[0]
+  const scrub =
+    active === null
+      ? null
+      : (() => {
+          const cur = primary.values[active]
+          const prev = active > 0 ? primary.values[active - 1] : cur
+          const delta = cur - prev
+          const dir: "up" | "down" | "flat" = Math.abs(delta) < 1e-6 ? "flat" : delta > 0 ? "up" : "down"
+          return { head: view.tooltipHead(active).split(" · ")[0], dir }
+        })()
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border bg-secondary/20 px-4 py-3">
+      <span
+        className={cn(
+          "flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider",
+          tone,
+        )}
+      >
+        <span className={cn("h-1.5 w-1.5 rounded-full", MEASURE_DOT[view.headline.tone])} aria-hidden="true" />
+        {view.headline.status}
+      </span>
+
+      {scrub && active !== null ? (
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="font-mono text-xs font-semibold uppercase tracking-wider text-foreground">{scrub.head}</span>
+          {view.series.map((serie) => (
+            <span
+              key={serie.label}
+              className="flex items-center gap-1.5 font-mono text-xs tabular-nums text-muted-foreground"
+            >
+              <span className="inline-block h-0.5 w-3 rounded-sm" style={{ background: serie.color }} aria-hidden="true" />
+              <span className="font-semibold text-foreground">{serie.format(serie.values[active])}</span>
+            </span>
+          ))}
+          <TrendPill dir={scrub.dir} />
+        </div>
+      ) : (
+        <p className="min-w-0 flex-1 text-pretty text-sm leading-snug text-foreground/90">{view.headline.comment}</p>
+      )}
+    </div>
+  )
+}
+
+function TrendPill({ dir }: { dir: "up" | "down" | "flat" }) {
+  const cfg =
+    dir === "up"
+      ? { Icon: ArrowUpRight, text: "Rising", cls: "text-signal" }
+      : dir === "down"
+        ? { Icon: ArrowDownRight, text: "Easing", cls: "text-accent" }
+        : { Icon: Minus, text: "Steady", cls: "text-muted-foreground" }
+  const { Icon } = cfg
+  return (
+    <span className={cn("ml-auto flex items-center gap-1 font-mono text-[0.625rem] uppercase tracking-wider", cfg.cls)}>
+      <Icon className="h-3 w-3" aria-hidden="true" />
+      {cfg.text}
+    </span>
   )
 }
 
