@@ -17,9 +17,9 @@ import { cn } from "@/lib/utils"
 type NavItem = { id: string; label: string; icon: LucideIcon }
 
 export const NAV_ITEMS: NavItem[] = [
-  { id: "forecast", label: "AI Prediction", icon: Sparkles },
-  { id: "hourly", label: "Hourly Breakdown", icon: LineChart },
-  { id: "outlook", label: "14-Day Outlook", icon: CalendarDays },
+  { id: "briefing", label: "AI Briefing", icon: Sparkles },
+  { id: "forecast", label: "AI Prediction", icon: LineChart },
+  { id: "hourly", label: "Hourly Breakdown", icon: CalendarDays },
   { id: "observations", label: "Live Observations", icon: Gauge },
   { id: "radar", label: "Radar & Satellite", icon: Satellite },
   { id: "map", label: "Weather Map", icon: MapIcon },

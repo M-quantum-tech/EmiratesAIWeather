@@ -3,8 +3,8 @@ import { SiteNav } from "@/components/site-nav"
 import { LeftNav } from "@/components/left-nav"
 import { WeatherProvider } from "@/components/weather/weather-provider"
 import { AlertBanner } from "@/components/weather/alert-banner"
+import { AiBriefing } from "@/components/forecast/ai-briefing"
 import { AiPrediction } from "@/components/forecast/ai-prediction"
-import { Outlook14Day } from "@/components/forecast/outlook-14day"
 import { HourlyBreakdown } from "@/components/forecast/hourly-breakdown"
 import { MeasureMap } from "@/components/weather/measure-map"
 import { NcmSources } from "@/components/weather/ncm-sources"
@@ -48,23 +48,24 @@ export default function Page() {
               <AlertBanner />
             </div>
 
-            {/* 1 · AI prediction — trendable multi-model forecast (24H / 14-day) that drives the breakdown below */}
+            {/* 1 · AI briefing — plain-language, timed advisories (highest/lowest values, when
+                    they occur, and the measure to take) from the 24-hour + 14-day model. */}
+            <section id="briefing" className="mt-6 scroll-mt-6">
+              <AiBriefing />
+            </section>
+
+            {/* 2 · AI prediction — trendable multi-model forecast (24H / 14-day) that drives the breakdown below */}
             <section id="forecast" className="mt-6 scroll-mt-6">
               <AiPrediction />
             </section>
 
-            {/* 1b · The selected day's 24-hour breakdown. Scrub the trend or tap a day
+            {/* 3 · The selected day's 24-hour breakdown. Scrub the trend or tap a day
                     in AI Prediction above to drive this hour-by-hour panel. */}
             <section id="hourly" className="mt-6 scroll-mt-6">
               <HourlyBreakdown />
             </section>
 
-            {/* 14-day multi-model outlook — synced to the shared selected day */}
-            <section id="outlook" className="mt-6 scroll-mt-6">
-              <Outlook14Day />
-            </section>
-
-            {/* 3 · Live observations */}
+            {/* 4 · Live observations */}
             <section id="observations" className="mt-6 scroll-mt-6">
               <StationDashboard />
             </section>
