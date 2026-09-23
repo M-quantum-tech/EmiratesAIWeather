@@ -10,6 +10,9 @@ const HOURLY = [
   "shortwave_radiation",
   "diffuse_radiation",
   "terrestrial_radiation",
+  // On-site influence factors the AI beam nowcast corrects for.
+  "cloud_cover",
+  "relative_humidity_2m",
 ].join(",")
 
 /** Threshold (W/m²) above which DNI is considered usable for generation. */
@@ -53,6 +56,8 @@ export async function GET(request: NextRequest) {
     const ghi: number[] = hourly.shortwave_radiation ?? []
     const diffuse: number[] = hourly.diffuse_radiation ?? []
     const terr: number[] = hourly.terrestrial_radiation ?? []
+    const cloud: number[] = hourly.cloud_cover ?? []
+    const rh: number[] = hourly.relative_humidity_2m ?? []
 
     // Sunrise / sunset keyed by local date (Open-Meteo daily arrays are aligned).
     const daily = data.daily ?? {}
@@ -75,6 +80,8 @@ export async function GET(request: NextRequest) {
       /** DNI per local hour (0–23), for the full-day irradiance curve. */
       hourly: number[]
       hourlyGhi: number[]
+      /** Influence-corrected beam per hour, pre-smoothing (fed to the AI nowcast). */
+      aiRaw: number[]
       /** Transmittance (Kt, %), reflectivity (diffuse fraction, %) and attenuation (dB) per hour. */
       trans: number[]
       refl: number[]
@@ -105,6 +112,7 @@ export async function GET(request: NextRequest) {
           sunHours: 0,
           hourly: new Array(24).fill(0),
           hourlyGhi: new Array(24).fill(0),
+          aiRaw: new Array(24).fill(0),
           trans: new Array(24).fill(0),
           refl: new Array(24).fill(0),
           atten: new Array(24).fill(0),
@@ -127,9 +135,18 @@ export async function GET(request: NextRequest) {
       const diffuseFraction = ghiVal > 5 ? clamp01(diffVal / ghiVal) : 0 // sky reflectivity proxy
       const attenDb = daylight && kt > 0.001 ? Math.min(40, -10 * Math.log10(kt)) : 0 // beam optical loss
 
+      // AI beam nowcast — correct the model DNI for on-site influence factors.
+      // Cloud cover cuts beam non-linearly; humidity haze scatters it slightly.
+      const cloudVal = clamp01(num(cloud[index]) / 100)
+      const rhVal = clamp01((num(rh[index]) - 45) / 55)
+      const cloudFactor = 1 - 0.55 * Math.pow(cloudVal, 1.4)
+      const hazeFactor = 1 - 0.12 * rhVal
+      const aiBeam = daylight ? Math.max(0, dniVal * cloudFactor * hazeFactor) : 0
+
       if (hour >= 0 && hour < 24) {
         bucket.hourly[hour] = dniVal
         bucket.hourlyGhi[hour] = ghiVal
+        bucket.aiRaw[hour] = aiBeam
         bucket.trans[hour] = kt * 100
         bucket.refl[hour] = diffuseFraction * 100
         bucket.atten[hour] = attenDb
@@ -158,6 +175,12 @@ export async function GET(request: NextRequest) {
         sunHours: b.sunHours,
         hourlyDni: b.hourly.map((v) => Math.round(v)),
         hourlyGhi: b.hourlyGhi.map((v) => Math.round(v)),
+        // Temporal 3-point smoothing (0.25/0.5/0.25) — persistence-style nowcast.
+        hourlyDniAi: b.aiRaw.map((v, i, arr) => {
+          const prev = arr[i - 1] ?? v
+          const next = arr[i + 1] ?? v
+          return Math.round(prev * 0.25 + v * 0.5 + next * 0.25)
+        }),
         hourlyTransmittance: b.trans.map((v) => Math.round(v)),
         hourlyReflectivity: b.refl.map((v) => Math.round(v)),
         hourlyAttenuation: b.atten.map((v) => Math.round(v * 10) / 10),

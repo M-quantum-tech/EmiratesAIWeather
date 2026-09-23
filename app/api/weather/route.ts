@@ -28,6 +28,7 @@ const HOURLY = [
   "wind_direction_10m",
   "relative_humidity_2m",
   "weather_code",
+  "cloud_cover",
   "is_day",
 ].join(",")
 
@@ -146,6 +147,7 @@ export async function GET(request: NextRequest) {
       windDirection: num(hourlyRaw.wind_direction_10m?.[index]),
       humidity: num(hourlyRaw.relative_humidity_2m?.[index]),
       weatherCode: num(hourlyRaw.weather_code?.[index]),
+      cloudCover: num(hourlyRaw.cloud_cover?.[index]),
       isDay: num(hourlyRaw.is_day?.[index], 1) === 1,
     }))
 

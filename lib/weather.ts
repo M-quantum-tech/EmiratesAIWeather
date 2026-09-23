@@ -40,6 +40,8 @@ export type HourlyReading = {
   windDirection: number
   humidity: number
   weatherCode: number
+  /** Total cloud cover for the hour (%), used for the on-site sky-cover forecast. */
+  cloudCover: number
   isDay: boolean
 }
 
@@ -355,6 +357,12 @@ export type SolarDay = {
   hourlyDni: number[]
   /** Global horizontal irradiance per local hour (W/m²), 24 entries. */
   hourlyGhi: number[]
+  /**
+   * AI-predicted beam irradiance per local hour (W/m²), 24 entries. The model
+   * DNI corrected for on-site influence factors (cloud cover, humidity haze)
+   * then temporally smoothed — a beam nowcast rather than the raw model value.
+   */
+  hourlyDniAi: number[]
   /** Atmospheric transmittance per hour — clearness index Kt = GHI / extraterrestrial, as %. */
   hourlyTransmittance: number[]
   /** Sky reflectivity per hour — diffuse fraction (scattered / total), as %. */

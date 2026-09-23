@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import useSWR from "swr"
 import { ArrowDownRight, ArrowUpRight, CloudRain, Minus, ShieldCheck, Sparkles, Sun, Sunrise, Thermometer, Wind } from "lucide-react"
 import { Panel } from "@/components/station/panel"
@@ -27,6 +27,38 @@ import { cn } from "@/lib/utils"
 
 /** Best-in-class model network the EmiratesConsensus blend fuses per location. */
 const MODEL_NETWORK = "ECMWF · DWD · NOAA · Météo-France · JMA · KMA · UK Met Office · BOM"
+
+/**
+ * Live wall clock pinned to the station timezone (NCM/UAE = Asia/Dubai), so the
+ * "now" anchor on every trend matches the National Center of Meteorology clock.
+ * Ticks every second and re-reads system time each tick — no drift.
+ */
+function NcmClock({ timezone }: { timezone?: string }) {
+  const tz = timezone || "Asia/Dubai"
+  const [now, setNow] = useState<Date | null>(null)
+  useEffect(() => {
+    setNow(new Date())
+    const id = setInterval(() => setNow(new Date()), 1000)
+    return () => clearInterval(id)
+  }, [])
+  if (!now) return null
+  const time = new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+    timeZone: tz,
+  }).format(now)
+  return (
+    <span
+      className="hidden items-center gap-1.5 rounded-full border border-border bg-card/60 px-2 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground lg:inline-flex"
+      title={`NCM-synced station time (${tz})`}
+    >
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-signal" aria-hidden="true" />
+      NCM {time}
+    </span>
+  )
+}
 
 type Horizon = "24h" | "14d"
 type MetricKey = "comfort" | "wind" | "sky" | "dni"
@@ -110,6 +142,8 @@ type View = {
   sunWindow?: { sunrise: string; sunset: string }
   /** Live AI comment for the scrubbed index, shown in the header during scroll. */
   scrubComment?: (i: number) => string
+  /** Optional bar layer drawn behind the lines (e.g. on-site cloud cover %). */
+  bars?: { label: string; color: string; values: number[]; format: (v: number) => string; max: number }
 }
 
 /** Format an Open-Meteo local ISO timestamp (…THH:MM) to a friendly clock label. */
@@ -167,6 +201,7 @@ function buildView(
       const day: SolarDay | undefined = solar?.days?.[selectedDay]
       if (!day) return null
       const values = day.hourlyDni.slice(0, 24)
+      const aiValues = (day.hourlyDniAi ?? day.hourlyDni).slice(0, 24)
       const ghiValues = day.hourlyGhi.slice(0, 24)
       const trans = day.hourlyTransmittance.slice(0, 24)
       const refl = day.hourlyReflectivity.slice(0, 24)
@@ -196,17 +231,22 @@ function buildView(
         tooltipHead: (i) => `${clockLabel(i)}${i === nowIndex ? " · live" : ""}`,
         projectionNote: nowIndex >= 0 ? "Solid = live · dashed = AI projection to midnight" : "AI-projected day",
         series: [
-          { label: "DNI", color: "var(--signal)", values, format: wm2 },
-          { label: "GHI", color: "var(--accent)", values: ghiValues, format: wm2 },
+          { label: "DNI · model", color: "var(--signal)", values, format: wm2 },
+          { label: "AI beam", color: "var(--accent)", values: aiValues, format: wm2 },
         ],
         sunWindow: { sunrise: day.sunrise, sunset: day.sunset },
         extra: (i) => [
+          { label: "GHI (horizontal)", value: wm2(ghiValues[i]) },
+          { label: "AI Δ vs model", value: `${aiValues[i] - values[i] >= 0 ? "+" : ""}${aiValues[i] - values[i]} W/m²` },
           { label: "Transmittance", value: `${trans[i]}%` },
           { label: "Reflectivity", value: `${refl[i]}%` },
           { label: "Attenuation", value: `${atten[i]} dB` },
         ],
-        scrubComment: (i) =>
-          `${clockLabel(i)} — beam ${wm2(values[i])} · GHI ${wm2(ghiValues[i])} · ${skyWord(trans[i])} (τ ${trans[i]}%, ${refl[i]}% diffuse, ${atten[i]} dB loss).`,
+        scrubComment: (i) => {
+          const d = aiValues[i] - values[i]
+          const bias = Math.abs(d) < 15 ? "matches the model" : d < 0 ? `${Math.abs(d)} W/m² below model (cloud/haze cutting beam)` : `${d} W/m² above model`
+          return `${clockLabel(i)} — model ${wm2(values[i])}, AI beam ${wm2(aiValues[i])} · ${bias} · ${skyWord(trans[i])} (τ ${trans[i]}%, ${atten[i]} dB loss).`
+        },
         stats: [
           { label: "DNI now", value: wm2(cur), sub: band.label },
           { label: "Peak DNI", value: wm2(day.peakDni), sub: `at ${clockLabel(day.peakHour)}` },
@@ -226,7 +266,8 @@ function buildView(
     const hours: HourlyReading[] = (payload.hourlyByDay?.[selectedDay] ?? payload.hourly ?? []).slice(0, 24)
     if (hours.length < 2) return null
     const n = hours.length
-    const xLabels = hours.map((h, i) => (i % 3 === 0 ? h.time.slice(11, 13) : ""))
+    // Every hour 00 → 23, matching an hour-by-hour breakdown axis.
+    const xLabels = hours.map((h) => h.time.slice(11, 13))
     const nowIndex = selectedDay === 0 ? payload.currentHourIndex : -1
     const boundary = nowIndex >= 0 ? nowIndex : n - 1
     const clockAt = (i: number) => clockLabel(Number(hours[i].time.slice(11, 13)))
@@ -318,8 +359,10 @@ function buildView(
     }
     const prob = hours.map((h) => h.precipitationProbability)
     const hum = hours.map((h) => h.humidity)
+    const cloud = hours.map((h) => h.cloudCover)
     const total = hours.reduce((sum, h) => sum + h.precipitation, 0)
     const cur = hours[Math.max(0, nowIndex)]
+    const cloudWord = (c: number) => (c >= 85 ? "overcast" : c >= 55 ? "cloudy" : c >= 25 ? "partly cloudy" : "clear")
     const { hi, lo } = argExtremes(prob)
     const heavy = isMetric ? 20 : 0.8
     const measures: Measure[] = []
@@ -338,13 +381,18 @@ function buildView(
         { label: "Rain %", color: "var(--accent)", values: prob, format: pct },
         { label: "Humidity", color: "var(--signal)", values: hum, format: pct },
       ],
+      bars: { label: "Cloud cover", color: "var(--muted-foreground)", values: cloud, format: pct, max: 100 },
       stats: [
         { label: "Rain chance", value: pct(cur.precipitationProbability), sub: `peak ${pct(Math.max(...prob))}` },
-        { label: "Precip total", value: `${total.toFixed(1)} ${precipUnit(units)}`, sub: "over the day" },
+        { label: "Cloud cover", value: pct(cur.cloudCover), sub: cloudWord(cur.cloudCover) },
         { label: "Humidity", value: pct(cur.humidity), sub: `${pct(Math.min(...hum))}–${pct(Math.max(...hum))}` },
       ],
+      extra: (i) => [
+        { label: "Cloud cover", value: `${pct(cloud[i])} · ${cloudWord(cloud[i])}` },
+        { label: "Precip total", value: `${total.toFixed(1)} ${precipUnit(units)}` },
+      ],
       scrubComment: (i) =>
-        `${clockAt(i)} — ${pct(prob[i])} rain chance · ${pct(hum[i])} humidity${prob[i] >= 50 ? " — showers likely." : "."}`,
+        `${clockAt(i)} — ${cloudWord(cloud[i])} (${pct(cloud[i])} cloud) · ${pct(prob[i])} rain chance · ${pct(hum[i])} humidity${prob[i] >= 50 ? " — showers likely." : "."}`,
       peak: { label: "Peak rain chance", value: pct(prob[hi]), when: clockAt(hi) },
       trough: { label: "Driest hour", value: pct(prob[lo]), when: clockAt(lo) },
       headline: {
@@ -554,7 +602,8 @@ export function LiveTrend() {
   )
 
   const daily = payload?.daily ?? []
-  const dayCount = horizon === "24h" ? Math.min(7, daily.length) : Math.min(14, daily.length)
+  // Hourly horizon exposes all 14 model days as an hour-by-hour breakdown.
+  const dayCount = horizon === "24h" ? Math.min(14, daily.length) : Math.min(14, daily.length)
   const dniLoading = metric === "dni" && !solar
   const unit = horizon === "14d" ? "d" : "h"
 
@@ -588,6 +637,7 @@ export function LiveTrend() {
               {unit} ahead
             </span>
           ) : null}
+          <NcmClock timezone={payload?.timezone} />
         </div>
 
         {/* Horizon toggle — the optional extended predictive view */}
@@ -992,8 +1042,10 @@ function TrendChart({
   active: number | null
   onActive: (i: number | null) => void
 }) {
-  const { n, series, xLabels, boundary, nowIndex } = view
+  const { n, series, xLabels, boundary, nowIndex, bars } = view
   const px = (i: number) => (n <= 1 ? 0 : (i / (n - 1)) * W)
+  // Half the gap between samples, used to size the cloud-cover bars.
+  const barHalf = n <= 1 ? W / 2 : (W / (n - 1)) * 0.34
 
   // Normalise each series to its own range so multi-unit lines share one canvas.
   const normed = series.map((serie) => {
@@ -1056,6 +1108,26 @@ function TrendChart({
             vectorEffect="non-scaling-stroke"
           />
         ))}
+
+        {/* optional bar layer (e.g. on-site cloud cover %) drawn behind the lines */}
+        {bars
+          ? bars.values.map((v, i) => {
+              if (!Number.isFinite(v) || v <= 0) return null
+              const h = (Math.min(v, bars.max) / bars.max) * (H - TOP - BOT)
+              return (
+                <rect
+                  key={`bar-${i}`}
+                  x={(px(i) - barHalf).toFixed(1)}
+                  y={(H - BOT - h).toFixed(1)}
+                  width={(barHalf * 2).toFixed(1)}
+                  height={h.toFixed(1)}
+                  rx="1.5"
+                  fill={bars.color}
+                  opacity={0.16 + 0.14 * (Math.min(v, bars.max) / bars.max)}
+                />
+              )
+            })
+          : null}
 
         {/* soft area under the primary series */}
         <path d={areaBase} fill="url(#live-trend-area)" />
