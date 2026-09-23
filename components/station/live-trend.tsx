@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import useSWR from "swr"
-import { ArrowDownRight, ArrowUpRight, CloudRain, Minus, ShieldCheck, Sparkles, Sun, Sunrise, Thermometer, Wind, ZoomIn } from "lucide-react"
+import { ArrowDownRight, ArrowUpRight, CloudRain, Minus, ShieldCheck, Sparkles, Sun, Sunrise, Thermometer, Wind, ZoomIn, ZoomOut } from "lucide-react"
 import { Panel } from "@/components/station/panel"
 import { useWeather } from "@/components/weather/weather-provider"
 import {
@@ -779,6 +779,75 @@ export function LiveTrend() {
             </span>
           </div>
 
+          {/* Zoom control — sits right under the chart; click any day to open its 24H hour-by-hour breakdown */}
+          <div className="border-t border-border bg-panel px-3 py-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1.5 font-mono text-[0.625rem] font-semibold uppercase tracking-wider text-signal">
+                <ZoomIn className="h-3.5 w-3.5" aria-hidden="true" />
+                {horizon === "14d" ? "Zoom to 24H — tap a day" : "24H zoom active — tap another day"}
+              </span>
+              {horizon === "24h" ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHorizon("14d")
+                    setActive(null)
+                  }}
+                  className="flex items-center gap-1 rounded-md border border-border bg-card/60 px-2.5 py-1 font-mono text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:border-signal/40 hover:text-foreground"
+                >
+                  <ZoomOut className="h-3 w-3" aria-hidden="true" />
+                  Back to 14-day
+                </button>
+              ) : null}
+            </div>
+            <div className="flex gap-1.5 overflow-x-auto">
+              {daily.slice(0, dayCount).map((day, index) => {
+                const on = index === selectedDay && horizon === "24h"
+                const { level } = buildDailyAlert(day, units)
+                return (
+                  <button
+                    key={day.date}
+                    type="button"
+                    onClick={() => {
+                      setSelectedDay(index)
+                      setActive(null)
+                      if (horizon === "14d") setHorizon("24h")
+                    }}
+                    title={`Zoom into ${dayLabel(day.date, index)} — 24H hour-by-hour`}
+                    aria-pressed={on}
+                    aria-label={`Zoom into ${dayLabel(day.date, index)} — 24 hour view`}
+                    className={cn(
+                      "flex min-w-[3.75rem] flex-1 flex-col items-center gap-1 rounded-lg border px-1.5 py-2 transition-colors",
+                      on
+                        ? "border-signal bg-signal/10 ring-1 ring-signal"
+                        : "border-border bg-card/40 hover:border-signal/40 hover:bg-card",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "font-mono text-[0.625rem] font-semibold uppercase tracking-wide",
+                        on ? "text-signal" : "text-foreground",
+                      )}
+                    >
+                      {dayLabel(day.date, index)}
+                    </span>
+                    <span className="text-base leading-none" aria-hidden="true">
+                      {weatherEmoji(day.weatherCode, true)}
+                    </span>
+                    <span className="font-mono text-[0.625rem] tabular-nums text-foreground">
+                      {Math.round(day.max)}°<span className="text-muted-foreground">/{Math.round(day.min)}°</span>
+                    </span>
+                    <span
+                      className={cn("h-1.5 w-1.5 rounded-full", ALERT_DOT[level])}
+                      title={`Safety: ${level}`}
+                      aria-hidden="true"
+                    />
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
           {/* Predictive timing + measures to be taken */}
           <div className="grid gap-px border-t border-border bg-border sm:grid-cols-2">
             <div className="bg-panel p-4">
@@ -807,57 +876,6 @@ export function LiveTrend() {
             </div>
           </div>
 
-          {/* Day selector — click any day to zoom into its 24H hour-by-hour (00 → 24) breakdown */}
-          <div className="border-t border-border px-3 py-3">
-            <div className="mb-2 flex items-center gap-1.5 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-              <ZoomIn className="h-3 w-3 text-signal" aria-hidden="true" />
-              {horizon === "14d"
-                ? "Click any day to zoom — opens the 24H view, hour-by-hour 00 → 24"
-                : "Zoomed to one day · hour-by-hour 00 → 24 — pick another day to zoom"}
-            </div>
-            <div className="flex gap-1.5 overflow-x-auto">
-              {daily.slice(0, dayCount).map((day, index) => {
-              const on = index === selectedDay
-              const { level } = buildDailyAlert(day, units)
-              return (
-                <button
-                  key={day.date}
-                  type="button"
-                  onClick={() => {
-                    setSelectedDay(index)
-                    setActive(null)
-                    if (horizon === "14d") setHorizon("24h")
-                  }}
-                  title={`Zoom into ${dayLabel(day.date, index)} — 24H hour-by-hour`}
-                  aria-pressed={on}
-                  aria-label={`Select ${dayLabel(day.date, index)}`}
-                  className={cn(
-                    "flex min-w-[3.75rem] flex-1 flex-col items-center gap-1 rounded-lg border px-1.5 py-2 transition-colors",
-                    on
-                      ? "border-signal bg-signal/10 ring-1 ring-signal"
-                      : "border-border bg-card/40 hover:border-signal/40 hover:bg-card",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "font-mono text-[0.625rem] font-semibold uppercase tracking-wide",
-                      on ? "text-signal" : "text-foreground",
-                    )}
-                  >
-                    {dayLabel(day.date, index)}
-                  </span>
-                  <span className="text-base leading-none" aria-hidden="true">
-                    {weatherEmoji(day.weatherCode, true)}
-                  </span>
-                  <span className="font-mono text-[0.625rem] tabular-nums text-foreground">
-                    {Math.round(day.max)}°<span className="text-muted-foreground">/{Math.round(day.min)}°</span>
-                  </span>
-                  <span className={cn("h-1.5 w-1.5 rounded-full", ALERT_DOT[level])} title={`Safety: ${level}`} aria-hidden="true" />
-                </button>
-              )
-            })}
-            </div>
-          </div>
         </>
       )}
 
