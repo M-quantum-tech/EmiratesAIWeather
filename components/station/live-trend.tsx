@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import useSWR from "swr"
-import { ArrowDownRight, ArrowUpRight, CloudRain, Minus, ShieldCheck, Sparkles, Sun, Sunrise, Thermometer, Wind } from "lucide-react"
+import { ArrowDownRight, ArrowUpRight, CloudRain, Minus, ShieldCheck, Sparkles, Sun, Sunrise, Thermometer, Wind, ZoomIn } from "lucide-react"
 import { Panel } from "@/components/station/panel"
 import { useWeather } from "@/components/weather/weather-provider"
 import {
@@ -807,9 +807,16 @@ export function LiveTrend() {
             </div>
           </div>
 
-          {/* Day selector — drives the shared selected day for the hour-by-hour breakdown below */}
-          <div className="flex gap-1.5 overflow-x-auto border-t border-border px-3 py-3">
-            {daily.slice(0, dayCount).map((day, index) => {
+          {/* Day selector — click any day to zoom into its 24H hour-by-hour (00 → 24) breakdown */}
+          <div className="border-t border-border px-3 py-3">
+            <div className="mb-2 flex items-center gap-1.5 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+              <ZoomIn className="h-3 w-3 text-signal" aria-hidden="true" />
+              {horizon === "14d"
+                ? "Click any day to zoom — opens the 24H view, hour-by-hour 00 → 24"
+                : "Zoomed to one day · hour-by-hour 00 → 24 — pick another day to zoom"}
+            </div>
+            <div className="flex gap-1.5 overflow-x-auto">
+              {daily.slice(0, dayCount).map((day, index) => {
               const on = index === selectedDay
               const { level } = buildDailyAlert(day, units)
               return (
@@ -818,8 +825,10 @@ export function LiveTrend() {
                   type="button"
                   onClick={() => {
                     setSelectedDay(index)
-                    if (horizon === "24h") setActive(null)
+                    setActive(null)
+                    if (horizon === "14d") setHorizon("24h")
                   }}
+                  title={`Zoom into ${dayLabel(day.date, index)} — 24H hour-by-hour`}
                   aria-pressed={on}
                   aria-label={`Select ${dayLabel(day.date, index)}`}
                   className={cn(
@@ -847,6 +856,7 @@ export function LiveTrend() {
                 </button>
               )
             })}
+            </div>
           </div>
         </>
       )}
