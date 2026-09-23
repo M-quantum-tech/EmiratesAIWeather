@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react"
 import useSWR from "swr"
-import { ArrowDownRight, ArrowUpRight, CloudRain, Minus, ShieldCheck, Sparkles, Sun, Thermometer, Wind } from "lucide-react"
+import { ArrowDownRight, ArrowUpRight, CloudRain, Minus, ShieldCheck, Sparkles, Sun, Sunrise, Thermometer, Wind } from "lucide-react"
 import { Panel } from "@/components/station/panel"
 import { useWeather } from "@/components/weather/weather-provider"
 import {
@@ -104,6 +104,21 @@ type View = {
   headline: { status: string; tone: MeasureTone; comment: string }
   projectionNote: string
   tooltipHead: (i: number) => string
+  /** Extra detail rows surfaced in the scrub tooltip (e.g. solar optics). */
+  extra?: (i: number) => { label: string; value: string }[]
+  /** Sunrise / sunset window chip shown in the header (solar views). */
+  sunWindow?: { sunrise: string; sunset: string }
+  /** Live AI comment for the scrubbed index, shown in the header during scroll. */
+  scrubComment?: (i: number) => string
+}
+
+/** Format an Open-Meteo local ISO timestamp (…THH:MM) to a friendly clock label. */
+function isoClock(iso: string) {
+  if (!iso || iso.length < 16) return "—"
+  const hour = Number(iso.slice(11, 13))
+  const minute = iso.slice(14, 16)
+  const h12 = hour % 12 === 0 ? 12 : hour % 12
+  return `${h12}:${minute} ${hour < 12 ? "AM" : "PM"}`
 }
 
 function dayLabel(date: string, index: number) {
@@ -152,11 +167,16 @@ function buildView(
       const day: SolarDay | undefined = solar?.days?.[selectedDay]
       if (!day) return null
       const values = day.hourlyDni.slice(0, 24)
+      const ghiValues = day.hourlyGhi.slice(0, 24)
+      const trans = day.hourlyTransmittance.slice(0, 24)
+      const refl = day.hourlyReflectivity.slice(0, 24)
+      const atten = day.hourlyAttenuation.slice(0, 24)
       const n = values.length
       const xLabels = values.map((_, i) => (i % 3 === 0 ? String(i).padStart(2, "0") : ""))
       const nowIndex = selectedDay === 0 ? payload.currentHourIndex : -1
       const boundary = nowIndex >= 0 ? nowIndex : n - 1
       const { hi } = argExtremes(values)
+      const skyWord = (t: number) => (t >= 70 ? "clear sky" : t >= 45 ? "hazy sky" : t >= 20 ? "cloudy" : "overcast")
       const usable = values.map((v, i) => (v >= 120 ? i : -1)).filter((i) => i >= 0)
       const first = usable.length ? usable[0] : 0
       const last = usable.length ? usable[usable.length - 1] : 0
@@ -175,7 +195,18 @@ function buildView(
         xLabels,
         tooltipHead: (i) => `${clockLabel(i)}${i === nowIndex ? " · live" : ""}`,
         projectionNote: nowIndex >= 0 ? "Solid = live · dashed = AI projection to midnight" : "AI-projected day",
-        series: [{ label: "DNI", color: "var(--signal)", values, format: wm2 }],
+        series: [
+          { label: "DNI", color: "var(--signal)", values, format: wm2 },
+          { label: "GHI", color: "var(--accent)", values: ghiValues, format: wm2 },
+        ],
+        sunWindow: { sunrise: day.sunrise, sunset: day.sunset },
+        extra: (i) => [
+          { label: "Transmittance", value: `${trans[i]}%` },
+          { label: "Reflectivity", value: `${refl[i]}%` },
+          { label: "Attenuation", value: `${atten[i]} dB` },
+        ],
+        scrubComment: (i) =>
+          `${clockLabel(i)} — beam ${wm2(values[i])} · GHI ${wm2(ghiValues[i])} · ${skyWord(trans[i])} (τ ${trans[i]}%, ${refl[i]}% diffuse, ${atten[i]} dB loss).`,
         stats: [
           { label: "DNI now", value: wm2(cur), sub: band.label },
           { label: "Peak DNI", value: wm2(day.peakDni), sub: `at ${clockLabel(day.peakHour)}` },
@@ -233,6 +264,8 @@ function buildView(
           { label: "Feels like", value: t(cur.apparentTemperature), sub: `Δ ${Math.round(cur.apparentTemperature - cur.temperature)}°` },
           { label: "Humidity", value: pct(cur.humidity), sub: `${pct(Math.min(...hum))}–${pct(Math.max(...hum))}` },
         ],
+        scrubComment: (i) =>
+          `${clockAt(i)} — ${t(temps[i])}, feels ${t(feels[i])} · ${pct(hum[i])} humidity${feels[i] >= hot ? " — heat caution." : "."}`,
         peak: { label: "Warmest (feels)", value: t(feels[hi]), when: clockAt(hi) },
         trough: { label: "Coolest (feels)", value: t(feels[lo]), when: clockAt(lo) },
         headline: {
@@ -271,6 +304,8 @@ function buildView(
           { label: "Gusts", value: s(spd(cur.windGusts)), sub: `peak ${s(Math.max(...gust))}` },
           { label: "Direction", value: compass(cur.windDirection), sub: `${Math.round(cur.windDirection)}°` },
         ],
+        scrubComment: (i) =>
+          `${clockAt(i)} — wind ${s(wind[i])}, gusting ${s(gust[i])} from ${compass(hours[i].windDirection)}${gustKmh[i] >= 50 ? " — dust likely." : "."}`,
         peak: { label: "Strongest gust", value: s(gust[hi]), when: clockAt(hi) },
         trough: { label: "Calmest hour", value: s(gust[lo]), when: clockAt(lo) },
         headline: {
@@ -308,6 +343,8 @@ function buildView(
         { label: "Precip total", value: `${total.toFixed(1)} ${precipUnit(units)}`, sub: "over the day" },
         { label: "Humidity", value: pct(cur.humidity), sub: `${pct(Math.min(...hum))}–${pct(Math.max(...hum))}` },
       ],
+      scrubComment: (i) =>
+        `${clockAt(i)} — ${pct(prob[i])} rain chance · ${pct(hum[i])} humidity${prob[i] >= 50 ? " — showers likely." : "."}`,
       peak: { label: "Peak rain chance", value: pct(prob[hi]), when: clockAt(hi) },
       trough: { label: "Driest hour", value: pct(prob[lo]), when: clockAt(lo) },
       headline: {
@@ -837,47 +874,73 @@ function HeaderTrend({ view, active, horizon }: { view: View; active: number | n
       </span>
 
       {scrub && active !== null ? (
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="font-mono text-xs font-semibold uppercase tracking-wider text-foreground">{scrub.head}</span>
-          {view.series.map((serie) => (
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="font-mono text-xs font-semibold uppercase tracking-wider text-foreground">{scrub.head}</span>
+            {view.series.map((serie) => (
+              <span
+                key={serie.label}
+                className="flex items-center gap-1.5 font-mono text-xs tabular-nums text-muted-foreground"
+              >
+                <span className="inline-block h-0.5 w-3 rounded-sm" style={{ background: serie.color }} aria-hidden="true" />
+                <span className="font-semibold text-foreground">{serie.format(serie.values[active])}</span>
+              </span>
+            ))}
+            <TrendPill dir={scrub.dir} />
             <span
-              key={serie.label}
-              className="flex items-center gap-1.5 font-mono text-xs tabular-nums text-muted-foreground"
+              className={cn(
+                "flex items-center gap-1 font-mono text-[0.625rem] uppercase tracking-wider",
+                scrub.peakRel === "past peak" ? "text-muted-foreground" : MEASURE_TEXT[view.headline.tone],
+              )}
             >
-              <span className="inline-block h-0.5 w-3 rounded-sm" style={{ background: serie.color }} aria-hidden="true" />
-              <span className="font-semibold text-foreground">{serie.format(serie.values[active])}</span>
+              {scrub.peakRel}
             </span>
-          ))}
-          <TrendPill dir={scrub.dir} />
-          <span
-            className={cn(
-              "flex items-center gap-1 font-mono text-[0.625rem] uppercase tracking-wider",
-              scrub.peakRel === "past peak" ? "text-muted-foreground" : MEASURE_TEXT[view.headline.tone],
-            )}
-          >
-            {scrub.peakRel}
-          </span>
+          </div>
+          {view.scrubComment ? (
+            <p className="flex items-center gap-1.5 text-pretty text-xs leading-snug text-foreground/80">
+              <Sparkles className="h-3 w-3 shrink-0 text-signal" aria-hidden="true" />
+              {view.scrubComment(active)}
+            </p>
+          ) : null}
         </div>
       ) : (
         <p className="min-w-0 flex-1 text-pretty text-sm leading-snug text-foreground/90">{view.headline.comment}</p>
       )}
 
-      {/* Upcoming peak highlight — colour-coded to the metric's severity */}
-      <span
-        className={cn(
-          "ml-auto flex shrink-0 items-center gap-2 rounded-md border px-2.5 py-1",
-          MEASURE_CHIP[view.headline.tone],
-        )}
-        title={`Predicted peak: ${peakValue} at ${peakTime} (${peakLabel})`}
-      >
-        <ArrowUpRight className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-        <span className="flex flex-col leading-none">
-          <span className="font-mono text-[0.5rem] uppercase tracking-wider opacity-80">{peakLabel}</span>
-          <span className="mt-0.5 font-mono text-xs font-bold tabular-nums">
-            {peakValue} · {peakTime}
+      <div className="ml-auto flex shrink-0 items-center gap-2">
+        {/* Sunrise / sunset window — solar views only */}
+        {view.sunWindow ? (
+          <span
+            className="hidden items-center gap-2 rounded-md border border-border bg-card/50 px-2.5 py-1 sm:flex"
+            title="Sunrise · sunset"
+          >
+            <Sunrise className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" />
+            <span className="flex flex-col leading-none">
+              <span className="font-mono text-[0.5rem] uppercase tracking-wider text-muted-foreground">Sun</span>
+              <span className="mt-0.5 font-mono text-xs font-bold tabular-nums text-foreground">
+                {isoClock(view.sunWindow.sunrise)}–{isoClock(view.sunWindow.sunset)}
+              </span>
+            </span>
+          </span>
+        ) : null}
+
+        {/* Upcoming peak highlight — colour-coded to the metric's severity */}
+        <span
+          className={cn(
+            "flex items-center gap-2 rounded-md border px-2.5 py-1",
+            MEASURE_CHIP[view.headline.tone],
+          )}
+          title={`Predicted peak: ${peakValue} at ${peakTime} (${peakLabel})`}
+        >
+          <ArrowUpRight className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span className="flex flex-col leading-none">
+            <span className="font-mono text-[0.5rem] uppercase tracking-wider opacity-80">{peakLabel}</span>
+            <span className="mt-0.5 font-mono text-xs font-bold tabular-nums">
+              {peakValue} · {peakTime}
+            </span>
           </span>
         </span>
-      </span>
+      </div>
     </div>
   )
 }
@@ -1147,6 +1210,19 @@ function TrendChart({
                     </span>
                   ))}
                 </div>
+                {view.extra ? (
+                  <div className="mt-1.5 flex flex-col gap-0.5 border-t border-border pt-1.5">
+                    {view.extra(activeIdx).map((row) => (
+                      <span
+                        key={row.label}
+                        className="flex items-center justify-between gap-3 font-mono text-[0.625rem] tabular-nums"
+                      >
+                        <span className="text-muted-foreground">{row.label}</span>
+                        <span className="font-semibold text-foreground">{row.value}</span>
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
                 <div className="mt-1.5 flex items-center justify-between gap-3 border-t border-border pt-1.5 font-mono text-[0.5rem] uppercase tracking-wider">
                   <span className={cn("flex items-center gap-1", atPeak ? "text-signal" : "text-muted-foreground")}>
                     <ArrowUpRight className="h-2.5 w-2.5" aria-hidden="true" />

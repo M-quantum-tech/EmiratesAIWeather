@@ -317,6 +317,10 @@ export function AlertBanner() {
   // reading, the 50 km upwind sample, and the NCM Al Bahar warning) for the prediction table.
   const gustKmh = payload.units === "metric" ? onGust : onGust * 1.609
   const gustMs = gustKmh / 3.6
+  // On-site wind speed and the 50 km upwind gust, both normalised to m/s for the radar readout.
+  const toMs = (v: number) => (payload.units === "metric" ? v : v * 1.609) / 3.6
+  const windMs = toMs(payload.current.windSpeed)
+  const farGustMs = farGust != null ? toMs(farGust) : null
   const precipNow = payload.units === "metric" ? payload.current.precipitation : payload.current.precipitation * 25.4
   const isStorm = describeCode(payload.current.weatherCode).group === "storm"
   const ncmActive = !!ncm && ncm.level !== "green"
@@ -507,7 +511,17 @@ export function AlertBanner() {
 
         {/* Proximity radar */}
         <div className="flex justify-center lg:justify-end">
-          <ProximityRings active={alert.level} showFarSite />
+          <ProximityRings
+            active={alert.level}
+            showFarSite
+            windMs={windMs}
+            gustMs={gustMs}
+            farGustMs={farGustMs}
+            originCompass={originCompass}
+            approaching={approaching}
+            etaLabel={etaMinutes != null ? formatEta(etaMinutes) : null}
+            windDirection={payload.current.windDirection}
+          />
         </div>
       </div>
 
@@ -525,11 +539,11 @@ export function AlertBanner() {
               <MapPin className="h-3 w-3" aria-hidden="true" /> On site · near
             </span>
             <div className="mt-1.5 flex items-baseline gap-1.5">
-              <span className="text-4xl font-black tabular-nums text-foreground">{Math.round(onGust)}</span>
-              <span className="text-sm text-muted-foreground">{speedUnit(payload.units)} gust</span>
+              <span className="text-4xl font-black tabular-nums text-foreground">{gustMs.toFixed(1)}</span>
+              <span className="text-sm text-muted-foreground">m/s gust</span>
             </div>
             <span className="mt-0.5 block font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
-              Your location · {compass(payload.current.windDirection)} wind
+              {Math.round(onGust)} {speedUnit(payload.units)} · {compass(payload.current.windDirection)} wind
             </span>
           </div>
 
@@ -553,12 +567,13 @@ export function AlertBanner() {
             </span>
             <div className="mt-1.5 flex items-baseline gap-1.5">
               <span className="text-4xl font-black tabular-nums text-foreground">
-                {farGust == null ? "—" : Math.round(farGust)}
+                {farGustMs == null ? "—" : farGustMs.toFixed(1)}
               </span>
-              <span className="text-sm text-muted-foreground">{speedUnit(payload.units)} gust</span>
+              <span className="text-sm text-muted-foreground">m/s gust</span>
             </div>
             <span className="mt-0.5 block font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
-              Upwind sample · {compass(payload.current.windDirection)} origin
+              {farGust == null ? "Sampling" : `${Math.round(farGust)} ${speedUnit(payload.units)}`} ·{" "}
+              {compass(payload.current.windDirection)} origin
             </span>
           </div>
         </div>

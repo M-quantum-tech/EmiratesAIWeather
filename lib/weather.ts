@@ -353,6 +353,21 @@ export type SolarDay = {
   sunHours: number
   /** Direct normal irradiance per local hour (W/m²), always 24 entries 00:00 → 23:00. */
   hourlyDni: number[]
+  /** Global horizontal irradiance per local hour (W/m²), 24 entries. */
+  hourlyGhi: number[]
+  /** Atmospheric transmittance per hour — clearness index Kt = GHI / extraterrestrial, as %. */
+  hourlyTransmittance: number[]
+  /** Sky reflectivity per hour — diffuse fraction (scattered / total), as %. */
+  hourlyReflectivity: number[]
+  /** Beam optical attenuation per hour (dB) — cloud + aerosol loss vs a clear sky. */
+  hourlyAttenuation: number[]
+  /** Daytime-mean transmittance (%), reflectivity (%) and attenuation (dB). */
+  clearness: number
+  reflectivity: number
+  attenuation: number
+  /** Local sunrise / sunset ISO timestamps for the day. */
+  sunrise: string
+  sunset: string
 }
 
 export type SolarPayload = {
