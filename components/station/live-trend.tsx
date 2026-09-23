@@ -602,8 +602,9 @@ export function LiveTrend() {
   )
 
   const daily = payload?.daily ?? []
-  // Hourly horizon exposes all 14 model days as an hour-by-hour breakdown.
-  const dayCount = horizon === "24h" ? Math.min(14, daily.length) : Math.min(14, daily.length)
+  // Both horizons expose all 14 model days: 24h picks one day as an hour-by-hour
+  // breakdown, 14d plots the day-by-day trend.
+  const dayCount = Math.min(14, daily.length)
   const dniLoading = metric === "dni" && !solar
   const unit = horizon === "14d" ? "d" : "h"
 
