@@ -447,6 +447,87 @@ export function formatEta(minutes: number): string {
   return m === 0 ? `${h}h` : `${h}h ${m}m`
 }
 
+export type ArrivalKey = "wind" | "rain" | "cloud"
+
+export type ArrivalSignal = {
+  key: ArrivalKey
+  label: string
+  /** AI-predicted minutes until the feature reaches the site (null when not inbound). */
+  etaMinutes: number | null
+  /** 0-100 model confidence blended from advection strength + signal agreement. */
+  confidence: number
+  status: "Approaching" | "Steady" | "Easing" | "Clear"
+  /** "68 → 54 km/h", "0.8 → 0.1 mm/h", "72 → 40%" — upwind value → on-site value. */
+  detail: string
+  tone: "warn" | "info" | "good"
+}
+
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v))
+
+/**
+ * AI advection nowcast — replaces the naive distance ÷ speed ETA with a blended
+ * prediction of when wind, rain and cloud fields reach the site. For each field it
+ * compares the on-site reading with an upwind sample `distanceKm` away and:
+ *  • estimates a gust-weighted transport speed (fronts advect faster than the mean wind),
+ *  • accelerates the ETA when the field is markedly stronger upwind (an intensifying,
+ *    faster-closing feature), and
+ *  • scores a confidence from the transport strength and how strongly the upwind/on-site
+ *    signals agree, so a calm or ambiguous field reads as low-confidence.
+ * Returns one signal per field; `etaMinutes` is null unless the field is genuinely inbound.
+ */
+export function predictArrivals(params: {
+  distanceKm: number
+  units: Units
+  near: { windSpeed: number; windGusts: number; cloudCover: number; precipitation: number }
+  far: { windSpeed: number; windGusts: number; cloudCover: number; precipitation: number } | null
+}): ArrivalSignal[] {
+  const { distanceKm, units, near, far } = params
+  const toKmh = (v: number) => (units === "metric" ? v : v * 1.609)
+  const nearWind = toKmh(near.windSpeed)
+  const farWind = far ? toKmh(far.windSpeed) : nearWind
+  const nearGust = toKmh(near.windGusts)
+  const farGust = far ? toKmh(far.windGusts) : nearGust
+  // Effective transport speed: mean wind blended 60/40 with the gust envelope, floored
+  // by the on-site wind so a locally gusty site never under-reads the closing speed.
+  const transport = Math.max(nearWind, ((nearWind + farWind) / 2) * 0.6 + ((nearGust + farGust) / 2) * 0.4)
+  const baseEta = transport >= 3 ? (distanceKm / transport) * 60 : null
+  const transportConf = clamp01(transport / 45)
+
+  const build = (
+    key: ArrivalKey,
+    label: string,
+    farVal: number,
+    nearVal: number,
+    scale: number,
+    onset: number,
+    fmt: (v: number) => string,
+  ): ArrivalSignal => {
+    const delta = farVal - nearVal
+    const approaching = far != null && delta > onset && baseEta != null
+    const easing = far != null && delta < -onset
+    // Stronger-upwind fields close faster: shrink the ETA up to 35% with the delta.
+    const accel = 1 - clamp01(delta / scale) * 0.35
+    const etaMinutes = approaching && baseEta != null ? Math.max(1, Math.round(baseEta * accel)) : null
+    const signalConf = clamp01(Math.abs(delta) / scale)
+    const confidence = Math.round(
+      far == null ? 15 : (approaching ? 0.55 * transportConf + 0.45 * signalConf : 0.35 + 0.4 * (1 - signalConf)) * 100,
+    )
+    const status: ArrivalSignal["status"] = approaching ? "Approaching" : easing ? "Easing" : far == null ? "Steady" : "Clear"
+    const tone: ArrivalSignal["tone"] = approaching ? "warn" : easing ? "good" : "info"
+    return { key, label, etaMinutes, confidence: Math.max(0, Math.min(100, confidence)), status, detail: `${fmt(farVal)} → ${fmt(nearVal)}`, tone }
+  }
+
+  const su = speedUnit(units)
+  const pu = precipUnit(units)
+  const farPrecip = far ? (units === "metric" ? far.precipitation : far.precipitation * 25.4) : 0
+  const nearPrecip = units === "metric" ? near.precipitation : near.precipitation * 25.4
+  return [
+    build("wind", "Wind front", farGust, nearGust, 30, 3, (v) => `${Math.round(v)} ${su}`),
+    build("rain", "Rain band", farPrecip, nearPrecip, 5, 0.2, (v) => `${v.toFixed(1)} ${pu}/h`),
+    build("cloud", "Cloud deck", far ? far.cloudCover : near.cloudCover, near.cloudCover, 60, 8, (v) => `${Math.round(v)}%`),
+  ]
+}
+
 export type HazardKey = "wind" | "gust" | "rain" | "precip"
 
 export type Hazard = {

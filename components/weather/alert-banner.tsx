@@ -5,16 +5,17 @@ import useSWR from "swr"
 import {
   Activity,
   BellRing,
-  BellOff,
+  Check,
   Clock,
+  Cloud,
   CloudRain,
   Droplets,
   Gauge,
   MapPin,
   Navigation,
-  Navigation2,
   ShieldCheck,
   Siren,
+  Sparkles,
   Timer,
   Wind,
 } from "lucide-react"
@@ -29,9 +30,10 @@ import {
   formatLocation,
   offsetLocation,
   precipUnit,
+  predictArrivals,
   speedUnit,
-  windArrivalMinutes,
   type AlertLevel,
+  type ArrivalKey,
   type HazardKey,
   type WeatherPayload,
 } from "@/lib/weather"
@@ -135,13 +137,31 @@ const HAZARD_ICON: Record<HazardKey, typeof Wind> = {
   precip: Droplets,
 }
 
-/** Looping two-tone emergency buzzer via the Web Audio API (no asset needed). */
-function useBuzzer(active: boolean, muted: boolean) {
+const ARRIVAL_ICON: Record<ArrivalKey, typeof Wind> = {
+  wind: Wind,
+  rain: CloudRain,
+  cloud: Cloud,
+}
+
+/**
+ * Per-level buzzer character — each tier has its own pitch set, cadence and loudness so
+ * the alarm is audibly identifiable, escalating from a soft green chime to an urgent red
+ * three-tone. The buzzer sounds on any level change until the operator acknowledges it.
+ */
+const BUZZER_TONE: Record<AlertLevel, { pattern: number[]; step: number; interval: number; gain: number; type: OscillatorType }> = {
+  green: { pattern: [523], step: 0, interval: 2600, gain: 0.05, type: "sine" },
+  yellow: { pattern: [659, 784], step: 0.26, interval: 1800, gain: 0.09, type: "triangle" },
+  orange: { pattern: [784, 988], step: 0.24, interval: 1200, gain: 0.13, type: "square" },
+  red: { pattern: [988, 740, 988], step: 0.22, interval: 820, gain: 0.18, type: "square" },
+}
+
+/** Looping level-tuned alarm via the Web Audio API (no asset needed). */
+function useBuzzer(active: boolean, level: AlertLevel) {
   const ctxRef = useRef<AudioContext | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
-    if (!active || muted) {
+    if (!active) {
       if (timerRef.current) clearInterval(timerRef.current)
       timerRef.current = null
       return
@@ -152,13 +172,14 @@ function useBuzzer(active: boolean, muted: boolean) {
     const ctx = ctxRef.current
     if (ctx.state === "suspended") ctx.resume().catch(() => {})
 
+    const tone = BUZZER_TONE[level]
     const beep = (freq: number, at: number, dur: number) => {
       const osc = ctx.createOscillator()
       const gain = ctx.createGain()
-      osc.type = "square"
+      osc.type = tone.type
       osc.frequency.value = freq
       gain.gain.setValueAtTime(0.0001, at)
-      gain.gain.exponentialRampToValueAtTime(0.16, at + 0.02)
+      gain.gain.exponentialRampToValueAtTime(tone.gain, at + 0.02)
       gain.gain.exponentialRampToValueAtTime(0.0001, at + dur)
       osc.connect(gain).connect(ctx.destination)
       osc.start(at)
@@ -166,16 +187,15 @@ function useBuzzer(active: boolean, muted: boolean) {
     }
     const cycle = () => {
       const t = ctx.currentTime
-      beep(880, t, 0.22)
-      beep(660, t + 0.28, 0.22)
+      tone.pattern.forEach((freq, i) => beep(freq, t + i * tone.step, 0.2))
     }
     cycle()
-    timerRef.current = setInterval(cycle, 1100)
+    timerRef.current = setInterval(cycle, tone.interval)
     return () => {
       if (timerRef.current) clearInterval(timerRef.current)
       timerRef.current = null
     }
-  }, [active, muted])
+  }, [active, level])
 
   useEffect(
     () => () => {
@@ -188,7 +208,26 @@ function useBuzzer(active: boolean, muted: boolean) {
 export function AlertBanner() {
   const { payload, isValidating, refresh } = useWeather()
   const alert = useMemo(() => (payload ? buildAlert(payload) : null), [payload])
-  const [muted, setMuted] = useState(false)
+  const level = alert?.level ?? null
+  // Acknowledgment latch: the alarm sounds whenever the detected level differs from the
+  // last level the operator acknowledged. The first observed level is auto-armed silently;
+  // every subsequent change re-arms the alarm until Acknowledge is pressed.
+  const [ackedLevel, setAckedLevel] = useState<AlertLevel | null>(null)
+  const [changedFrom, setChangedFrom] = useState<AlertLevel | null>(null)
+  const prevLevelRef = useRef<AlertLevel | null>(null)
+  useEffect(() => {
+    if (!level) return
+    const prev = prevLevelRef.current
+    if (prev === null) {
+      setAckedLevel(level)
+    } else if (prev !== level) {
+      setAckedLevel(null)
+      setChangedFrom(prev)
+    }
+    prevLevelRef.current = level
+  }, [level])
+  const alarmActive = level != null && ackedLevel !== level
+  const acknowledge = () => setAckedLevel(level)
   const [ncm, setNcm] = useState<EmirateWarning | null>(null)
 
   // Live NCM Al Bahar warning for the current hour — matched to the user's emirate
@@ -260,7 +299,7 @@ export function AlertBanner() {
   })
 
   const danger = alert?.danger ?? false
-  useBuzzer(danger, muted)
+  useBuzzer(alarmActive, level ?? "green")
 
   if (!payload || !alert) {
     return <div className="h-40 animate-pulse rounded-lg border border-border bg-panel" />
@@ -300,11 +339,34 @@ export function AlertBanner() {
   }
   const localClock = safeTime(now, true)
 
-  // Predictive wind-front arrival: when upwind gusts are intensifying, estimate when the
-  // 50 km-out front advects onto the user's location, carried by the mean wind.
+  // AI advection nowcast: blend the on-site reading with the 50 km upwind sample to
+  // predict when the wind, rain and cloud fields reach the site — replacing the old
+  // distance ÷ speed ETA with a gust-weighted, confidence-scored model.
   const originCompass = compass(payload.current.windDirection)
   const advectionSpeed = payload.current.windSpeed // km/h mean transport of the front
-  const etaMinutes = approaching ? windArrivalMinutes(ALERT_RADII_KM.yellow, advectionSpeed) : null
+  const arrivals = predictArrivals({
+    distanceKm: ALERT_RADII_KM.yellow,
+    units: payload.units,
+    near: {
+      windSpeed: payload.current.windSpeed,
+      windGusts: payload.current.windGusts,
+      cloudCover: payload.current.cloudCover,
+      precipitation: payload.current.precipitation,
+    },
+    far: farData
+      ? {
+          windSpeed: farData.current.windSpeed,
+          windGusts: farData.current.windGusts,
+          cloudCover: farData.current.cloudCover,
+          precipitation: farData.current.precipitation,
+        }
+      : null,
+  })
+  const windArrival = arrivals.find((a) => a.key === "wind") ?? null
+  const soonest = arrivals
+    .filter((a) => a.etaMinutes != null)
+    .sort((a, b) => (a.etaMinutes ?? 0) - (b.etaMinutes ?? 0))[0]
+  const etaMinutes = windArrival?.etaMinutes ?? null
   const arrivalClock = etaMinutes != null ? safeTime(new Date(now.getTime() + etaMinutes * 60_000)) : null
   // Front position along the 60 km watch ring (0% = watch edge, 100% = on you).
   const frontProgress = Math.max(0, Math.min(100, (1 - ALERT_RADII_KM.yellow / ALERT_RADII_KM.green) * 100))
@@ -390,33 +452,61 @@ export function AlertBanner() {
           </span>
           <button
             type="button"
-            onClick={() => setMuted((m) => !m)}
-            aria-pressed={muted}
-            aria-label={muted ? "Unmute danger buzzer" : "Mute danger buzzer"}
+            onClick={acknowledge}
+            disabled={!alarmActive}
+            aria-label={
+              alarmActive ? `Acknowledge ${alert.title} alarm and silence buzzer` : `Buzzer armed at ${alert.title} level`
+            }
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-[0.625rem] uppercase tracking-wider transition-colors",
-              danger
-                ? "border-alert-red/50 bg-alert-red/15 text-alert-red hover:bg-alert-red/25"
-                : "border-border text-muted-foreground hover:bg-secondary",
+              "relative inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 font-mono text-[0.625rem] font-bold uppercase tracking-wider transition-all",
+              alarmActive
+                ? cn(styles.chip, styles.text, "tier-blink shadow-sm")
+                : cn("border-border bg-background/60", styles.text, "cursor-default opacity-80"),
             )}
           >
-            {muted ? <BellOff className="h-3 w-3" aria-hidden="true" /> : <BellRing className="h-3 w-3" aria-hidden="true" />}
-            {muted ? "Muted" : "Buzzer"}
+            {alarmActive ? (
+              <>
+                <span
+                  className={cn("absolute -left-1 -top-1 h-2.5 w-2.5 animate-ping rounded-full", styles.solid)}
+                  aria-hidden="true"
+                />
+                <BellRing className="h-3.5 w-3.5" aria-hidden="true" />
+                Acknowledge
+              </>
+            ) : (
+              <>
+                <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                Armed · {alert.title}
+              </>
+            )}
           </button>
         </span>
       </div>
 
-      {/* Red buzzer strip — only when danger detected within the radius */}
-      {danger ? (
+      {/* Alarm strip — sounds on any level change until acknowledged, tinted to the level */}
+      {alarmActive ? (
         <div
           role="alert"
-          className="flex flex-wrap items-center gap-2 border-b border-alert-red/40 bg-alert-red/15 px-4 py-2 text-alert-red"
+          className={cn("flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-2.5", styles.bar, styles.text)}
         >
-          <Siren className={cn("h-4 w-4 shrink-0", !muted && "animate-pulse")} aria-hidden="true" />
-          <span className="text-sm font-bold uppercase tracking-wide">Red Buzzer</span>
-          <span className="text-xs font-medium">
-            Severe conditions detected within {DANGER_RADIUS_KM} km — take shelter now.
+          <Siren className="h-4 w-4 shrink-0 animate-pulse" aria-hidden="true" />
+          <span className="text-sm font-bold uppercase tracking-wide">{alert.title} buzzer</span>
+          <span className="text-xs font-medium text-foreground/80">
+            {changedFrom ? `Level changed ${changedFrom.toUpperCase()} → ${alert.title}` : `Armed at ${alert.title}`}
+            {danger ? ` · severe conditions within ${DANGER_RADIUS_KM} km` : ""} — sounding until acknowledged.
           </span>
+          <button
+            type="button"
+            onClick={acknowledge}
+            className={cn(
+              "ml-auto inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 font-mono text-[0.625rem] font-bold uppercase tracking-wider transition-opacity hover:opacity-80",
+              styles.chip,
+              styles.text,
+            )}
+          >
+            <Check className="h-3.5 w-3.5" aria-hidden="true" />
+            Acknowledge &amp; silence
+          </button>
         </div>
       ) : null}
 
@@ -578,34 +668,82 @@ export function AlertBanner() {
           </div>
         </div>
 
-        {/* Predictive wind-front arrival — shown when upwind gusts are intensifying toward the user */}
-        {approaching ? (
-          <div className={cn("mt-3 rounded-xl border p-4", deltaBorder)}>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span className={cn("flex items-center gap-1.5 label-caps", deltaTone)}>
-                <Navigation2
-                  className="h-3.5 w-3.5"
-                  style={{ transform: `rotate(${(payload.current.windDirection + 180) % 360}deg)` }}
-                  aria-hidden="true"
-                />
-                Wind front approaching
-              </span>
-              <span className={cn("rounded-full border px-2 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider", deltaTone)}>
-                Live prediction
-              </span>
-            </div>
+        {/* AI advection nowcast — predicts when wind, rain and cloud fields reach the site */}
+        <div className={cn("mt-3 rounded-xl border p-4", approaching ? deltaBorder : "border-border bg-background/40")}>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className={cn("flex items-center gap-1.5 label-caps", approaching ? deltaTone : "text-signal")}>
+              <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+              AI arrival nowcast · wind · rain · cloud
+            </span>
+            <span
+              className={cn(
+                "rounded-full border px-2 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider",
+                soonest ? deltaTone : "border-border text-muted-foreground",
+              )}
+            >
+              {soonest && soonest.etaMinutes != null ? `Soonest · ${soonest.label} ~${formatEta(soonest.etaMinutes)}` : "Nothing inbound"}
+            </span>
+          </div>
 
-            <p className="mt-2 text-pretty text-sm text-foreground">
-              <span className={cn("font-semibold", deltaTone)}>{originCompass}</span> gusts to{" "}
-              <span className="font-semibold tabular-nums">
-                {farGust == null ? "—" : Math.round(farGust)} {speedUnit(payload.units)}
-              </span>{" "}
-              are tracking toward you from{" "}
-              <span className="font-semibold tabular-nums">{ALERT_RADII_KM.yellow} km</span> out — inside the{" "}
-              {ALERT_RADII_KM.green} km watch ring.
-            </p>
+          <p className="mt-2 text-pretty text-sm text-muted-foreground">
+            Blending the on-site reading with the {ALERT_RADII_KM.yellow} km upwind sample, the model predicts field
+            arrival from the <span className="font-semibold text-foreground">{originCompass}</span> at a{" "}
+            <span className="font-semibold tabular-nums text-foreground">
+              {Math.round(advectionSpeed)} {speedUnit(payload.units)}
+            </span>{" "}
+            closing speed.
+          </p>
 
-            {/* Closing track: watch edge (left) → YOU (right) with the front marker */}
+          <div className="mt-3 grid gap-2 sm:grid-cols-3">
+            {arrivals.map((a) => {
+              const Icon = ARRIVAL_ICON[a.key]
+              const tone =
+                a.status === "Approaching"
+                  ? "text-alert-orange"
+                  : a.status === "Easing"
+                    ? "text-alert-green"
+                    : "text-muted-foreground"
+              const border =
+                a.status === "Approaching"
+                  ? "border-alert-orange/40 bg-alert-orange/10"
+                  : a.status === "Easing"
+                    ? "border-alert-green/40 bg-alert-green/10"
+                    : "border-border bg-background/50"
+              const barColor =
+                a.status === "Approaching" ? "bg-alert-orange" : a.status === "Easing" ? "bg-alert-green" : "bg-muted-foreground/50"
+              return (
+                <div key={a.key} className={cn("rounded-lg border p-3", border)}>
+                  <span className="flex items-center justify-between">
+                    <span className={cn("flex items-center gap-1.5 font-mono text-[0.625rem] uppercase tracking-wider", tone)}>
+                      <Icon className="h-3.5 w-3.5" aria-hidden="true" /> {a.label}
+                    </span>
+                    <span className={cn("font-mono text-[0.5625rem] uppercase tracking-wider", tone)}>{a.status}</span>
+                  </span>
+                  <div className="mt-1.5 flex items-baseline gap-1.5">
+                    <span className={cn("text-2xl font-black tabular-nums", tone)}>
+                      {a.etaMinutes == null ? "—" : `~${formatEta(a.etaMinutes)}`}
+                    </span>
+                    {a.etaMinutes != null ? (
+                      <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">ETA on site</span>
+                    ) : null}
+                  </div>
+                  <span className="mt-0.5 block font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground tabular-nums">
+                    {a.detail}
+                  </span>
+                  <div className="mt-2 flex items-center gap-1.5">
+                    <span className="font-mono text-[0.5rem] uppercase tracking-wider text-muted-foreground">Conf</span>
+                    <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-secondary">
+                      <div className={cn("absolute inset-y-0 left-0 rounded-full transition-all", barColor)} style={{ width: `${a.confidence}%` }} />
+                    </div>
+                    <span className="font-mono text-[0.5625rem] tabular-nums text-muted-foreground">{a.confidence}%</span>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Closing track — shown when a wind front is genuinely inbound */}
+          {approaching ? (
             <div className="mt-3">
               <div className="relative h-2.5 rounded-full bg-secondary">
                 <div
@@ -626,56 +764,11 @@ export function AlertBanner() {
               </div>
               <div className="mt-1 flex justify-between font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
                 <span>{ALERT_RADII_KM.green} km · watch edge</span>
-                <span>You</span>
+                <span>You{arrivalClock ? ` · arrives ${arrivalClock}` : ""}</span>
               </div>
             </div>
-
-            <div className="mt-3 grid gap-2 sm:grid-cols-3">
-              <div className={cn("flex items-center gap-2 rounded-lg border px-2.5 py-2", deltaBorder)}>
-                <Timer className={cn("h-4 w-4 shrink-0", deltaTone)} aria-hidden="true" />
-                <span className="min-w-0">
-                  <span className="block font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-                    ETA on site
-                  </span>
-                  <span className={cn("block text-sm font-bold tabular-nums", deltaTone)}>
-                    {etaMinutes == null ? "Winds too light" : `~${formatEta(etaMinutes)}`}
-                  </span>
-                </span>
-              </div>
-              <div className={cn("flex items-center gap-2 rounded-lg border px-2.5 py-2", deltaBorder)}>
-                <Clock className={cn("h-4 w-4 shrink-0", deltaTone)} aria-hidden="true" />
-                <span className="min-w-0">
-                  <span className="block font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-                    Arrives approx
-                  </span>
-                  <span className={cn("block text-sm font-bold tabular-nums", deltaTone)}>
-                    {arrivalClock ?? "—"}
-                  </span>
-                </span>
-              </div>
-              <div className={cn("flex items-center gap-2 rounded-lg border px-2.5 py-2", deltaBorder)}>
-                <Navigation className={cn("h-4 w-4 shrink-0", deltaTone)} aria-hidden="true" />
-                <span className="min-w-0">
-                  <span className="block font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-                    Closing speed
-                  </span>
-                  <span className={cn("block text-sm font-bold tabular-nums", deltaTone)}>
-                    {Math.round(advectionSpeed)} {speedUnit(payload.units)} · {originCompass}
-                  </span>
-                </span>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="mt-3 flex items-center gap-2 rounded-xl border border-border bg-background/40 p-4">
-            <Wind className="h-4 w-4 shrink-0 text-alert-green" aria-hidden="true" />
-            <p className="text-pretty text-sm text-muted-foreground">
-              No wind front closing on your location — upwind gusts {ALERT_RADII_KM.yellow} km out are{" "}
-              <span className="font-semibold text-foreground">{easing ? "easing" : "steady"}</span> from the{" "}
-              {originCompass}. The model keeps scanning within {ALERT_RADII_KM.green} km.
-            </p>
-          </div>
-        )}
+          ) : null}
+        </div>
 
         {/* Escalation rules table — the fixed NCM-style ladder, active tier highlighted */}
         <div className="mt-4 overflow-hidden rounded-lg border border-border/70">
