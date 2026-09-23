@@ -99,22 +99,25 @@ const RULES: { level: AlertLevel; label: string; km: string; triggers: string; s
     level: "green",
     label: "L1 · Green",
     km: "60 km +",
-    triggers: "Convection 60 km + · gust under 15 m/s · rain under 1 mm — all clear",
-    sources: "Open-Meteo · Satellite",
+    triggers:
+      "Convection 60 km + · gust under 15 m/s · rain under 1 mm · no weather warnings under 50 km from location — all clear",
+    sources: "Open-Meteo · Satellite · NCM",
   },
   {
     level: "yellow",
     label: "L2 · Yellow",
     km: "within 50 km",
-    triggers: "Convection under 60 km · gust over 15 m/s · diverging wind under 50 km · rain over 1 mm",
-    sources: "Open-Meteo · Satellite",
+    triggers:
+      "Intensifying convection under 30 km · any warning alarm on site · satellite image warnings",
+    sources: "Satellite · NCM Al Bahar",
   },
   {
     level: "orange",
     label: "L3 · Orange",
     km: "within 30 km",
-    triggers: "Convection under 30 km + L2 · radar precipitation · NCM website alert",
-    sources: "Radar · NCM Al Bahar",
+    triggers:
+      "Satellite image · intensifying convection under 20 km + Level 2 alerts · radar precipitation · NCM website alerts",
+    sources: "Satellite · Radar · NCM Al Bahar",
   },
   {
     level: "red",
@@ -455,30 +458,50 @@ export function AlertBanner() {
             <span className={cn("font-mono text-sm font-bold tabular-nums", styles.text)}>{alert.score}</span>
           </div>
 
-          {/* Tier ladder with proximity radii */}
+          {/* Tier ladder — button-style graphics that blink on the active level */}
           <div className="grid grid-cols-4 gap-2">
-            {LADDER.map((rung, i) => (
-              <div
-                key={rung.level}
-                className={cn(
-                  "flex flex-col items-center gap-1.5 rounded-lg border px-2 py-2 transition-opacity",
-                  i === activeIndex ? cn(LEVEL_STYLES[rung.level].chip, "opacity-100") : "border-border opacity-50",
-                )}
-              >
-                <span className={cn("h-2.5 w-full rounded-full", rung.solid)} />
-                <span
+            {LADDER.map((rung, i) => {
+              const active = i === activeIndex
+              const rungStyles = LEVEL_STYLES[rung.level]
+              return (
+                <button
+                  key={rung.level}
+                  type="button"
+                  aria-pressed={active}
+                  aria-label={`${rung.label} tier${active ? " — active" : ""}`}
                   className={cn(
-                    "font-mono text-[0.5625rem] font-bold uppercase tracking-wide",
-                    i === activeIndex ? LEVEL_STYLES[rung.level].text : "text-muted-foreground/70",
+                    "flex flex-col items-center gap-1.5 rounded-lg border px-2 py-2.5 transition-all",
+                    active
+                      ? cn(rungStyles.chip, rungStyles.text, "tier-blink opacity-100 shadow-sm")
+                      : "border-border bg-background/40 opacity-50 hover:opacity-75",
                   )}
                 >
-                  {rung.label}
-                </span>
-                <span className="font-mono text-[0.5rem] uppercase tracking-wide text-muted-foreground">
-                  {rung.level === "green" ? `${ALERT_RADII_KM.green}km+` : `${ALERT_RADII_KM[rung.level]} km`}
-                </span>
-              </div>
-            ))}
+                  <span
+                    className={cn(
+                      "h-3 w-full rounded-full",
+                      rung.solid,
+                      active ? "opacity-100" : "opacity-60",
+                    )}
+                  />
+                  <span
+                    className={cn(
+                      "font-mono text-[0.5625rem] font-bold uppercase tracking-wide",
+                      active ? rungStyles.text : "text-muted-foreground/70",
+                    )}
+                  >
+                    {rung.label}
+                  </span>
+                  <span
+                    className={cn(
+                      "font-mono text-[0.5rem] uppercase tracking-wide",
+                      active ? rungStyles.text : "text-muted-foreground",
+                    )}
+                  >
+                    {rung.level === "green" ? `${ALERT_RADII_KM.green}km+` : `${ALERT_RADII_KM[rung.level]} km`}
+                  </span>
+                </button>
+              )
+            })}
           </div>
         </div>
 

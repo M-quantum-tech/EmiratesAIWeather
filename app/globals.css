@@ -158,6 +158,22 @@
   animation: alert-glow 2s ease-in-out infinite;
 }
 
+@keyframes tier-blink {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 14px 1px currentColor;
+  }
+  50% {
+    opacity: 0.55;
+    box-shadow: 0 0 0 0 currentColor;
+  }
+}
+
+.tier-blink {
+  animation: tier-blink 1.1s steps(1, end) infinite;
+}
+
 /* Themed Leaflet popup for the measure & forecast map */
 .spot-popup .leaflet-popup-content-wrapper {
   background: var(--card);
