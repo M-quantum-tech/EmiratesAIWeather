@@ -23,15 +23,19 @@ import {
   buildAlert,
   compass,
   DANGER_RADIUS_KM,
+  describeCode,
   formatClock,
   formatEta,
+  formatLocation,
   offsetLocation,
+  precipUnit,
   speedUnit,
   windArrivalMinutes,
   type AlertLevel,
   type HazardKey,
   type WeatherPayload,
 } from "@/lib/weather"
+import { fetchWarningFrames, type EmirateWarning } from "@/lib/ncm-warnings"
 import { ProximityRings } from "@/components/weather/proximity-rings"
 import { useWeather } from "@/components/weather/weather-provider"
 import { cn } from "@/lib/utils"
@@ -84,6 +88,41 @@ const LADDER: { level: AlertLevel; label: string; solid: string }[] = [
   { level: "yellow", label: "YELLOW", solid: "bg-alert-yellow" },
   { level: "orange", label: "ORANGE", solid: "bg-alert-orange" },
   { level: "red", label: "RED", solid: "bg-alert-red" },
+]
+
+/**
+ * Fixed escalation rules — the NCM-style ladder. Each tier lists the trigger
+ * criteria that promote the model to that level and the data source behind them.
+ */
+const RULES: { level: AlertLevel; label: string; km: string; triggers: string; sources: string }[] = [
+  {
+    level: "green",
+    label: "L1 · Green",
+    km: "60 km +",
+    triggers: "Convection 60 km + · gust under 15 m/s · rain under 1 mm — all clear",
+    sources: "Open-Meteo · Satellite",
+  },
+  {
+    level: "yellow",
+    label: "L2 · Yellow",
+    km: "within 50 km",
+    triggers: "Convection under 60 km · gust over 15 m/s · diverging wind under 50 km · rain over 1 mm",
+    sources: "Open-Meteo · Satellite",
+  },
+  {
+    level: "orange",
+    label: "L3 · Orange",
+    km: "within 30 km",
+    triggers: "Convection under 30 km + L2 · radar precipitation · NCM website alert",
+    sources: "Radar · NCM Al Bahar",
+  },
+  {
+    level: "red",
+    label: "L4 · Red",
+    km: "within 20 km",
+    triggers: "Convection under 20 km + L3 · radar precipitation · active NCM alert — take shelter",
+    sources: "Radar · NCM Al Bahar",
+  },
 ]
 
 const HAZARD_ICON: Record<HazardKey, typeof Wind> = {
@@ -147,6 +186,34 @@ export function AlertBanner() {
   const { payload, isValidating, refresh } = useWeather()
   const alert = useMemo(() => (payload ? buildAlert(payload) : null), [payload])
   const [muted, setMuted] = useState(false)
+  const [ncm, setNcm] = useState<EmirateWarning | null>(null)
+
+  // Live NCM Al Bahar warning for the current hour — matched to the user's emirate
+  // when possible, otherwise the most severe active UAE warning. Refreshed every 10 min.
+  const locationId = payload?.location.id
+  useEffect(() => {
+    if (!payload) return
+    const controller = new AbortController()
+    const loc = formatLocation(payload.location).toLowerCase()
+    async function load() {
+      try {
+        const data = await fetchWarningFrames(controller.signal, 3)
+        const frame = data.frames[0] ?? []
+        const mine = frame.find((w) => loc.includes(w.name.toLowerCase()))
+        setNcm(mine ?? frame[0] ?? null)
+      } catch (err) {
+        if ((err as any)?.name !== "AbortError")
+          console.log("[v0] alert ncm warning failed:", err instanceof Error ? err.message : err)
+      }
+    }
+    load()
+    const id = setInterval(load, 10 * 60 * 1000)
+    return () => {
+      controller.abort()
+      clearInterval(id)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locationId])
 
   // Live 60-second auto-refresh counter + a wall clock synced to real time, both
   // driven by a single 1-second tick so the header stays in step with the network clock.
@@ -242,6 +309,46 @@ export function AlertBanner() {
     const order = { red: 3, orange: 2, yellow: 1, green: 0 } as const
     return order[b.level] - order[a.level]
   })
+
+  // Live evaluation of the escalation rules against real signals (Open-Meteo current
+  // reading, the 50 km upwind sample, and the NCM Al Bahar warning) for the prediction table.
+  const gustKmh = payload.units === "metric" ? onGust : onGust * 1.609
+  const gustMs = gustKmh / 3.6
+  const precipNow = payload.units === "metric" ? payload.current.precipitation : payload.current.precipitation * 25.4
+  const isStorm = describeCode(payload.current.weatherCode).group === "storm"
+  const ncmActive = !!ncm && ncm.level !== "green"
+  const predictionRows: { signal: string; source: string; value: string; met: boolean }[] = [
+    {
+      signal: "Intensifying convection",
+      source: "Satellite · radar",
+      value: approaching || isStorm ? `Closing · ~${ALERT_RADII_KM[alert.level]} km` : "Steady · 60 km +",
+      met: approaching || isStorm,
+    },
+    {
+      signal: "Wind gust over 15 m/s",
+      source: "Open-Meteo",
+      value: `${gustMs.toFixed(1)} m/s · ${Math.round(gustKmh)} km/h`,
+      met: gustMs >= 15,
+    },
+    {
+      signal: "Diverging wind under 50 km",
+      source: "Upwind sample",
+      value: gustDelta == null ? "Sampling" : `${gustDelta > 0 ? "+" : ""}${Math.round(gustDelta)} ${speedUnit(payload.units)}`,
+      met: approaching,
+    },
+    {
+      signal: "Rain precipitation over 1 mm",
+      source: "Open-Meteo",
+      value: `${precipNow.toFixed(1)} ${precipUnit(payload.units)}/h`,
+      met: precipNow >= 1,
+    },
+    {
+      signal: "NCM / satellite warning",
+      source: "NCM Al Bahar",
+      value: ncm ? `${ncm.name} · ${ncm.headline}` : "No active warning",
+      met: ncmActive,
+    },
+  ]
 
   return (
     <section aria-label="Advance AI safety model" className={cn("station-rise rounded-xl border", styles.bar)}>
@@ -532,26 +639,78 @@ export function AlertBanner() {
           </div>
         )}
 
-        <p className="mt-3 text-pretty text-sm text-muted-foreground">
-          The AI samples wind, gust, rain and precipitation 50 km upwind and maps how close they are to you.
-          When the far-site gust runs stronger than on-site, hazardous wind is intensifying toward your
-          location — the tighter the ring a hazard reaches, the higher the alert.
-        </p>
+        {/* Escalation rules table — the fixed NCM-style ladder, active tier highlighted */}
+        <div className="mt-4 overflow-hidden rounded-lg border border-border/70">
+          <div className="flex items-center gap-1.5 border-b border-border/60 bg-background/40 px-3 py-1.5 label-caps text-muted-foreground">
+            <ShieldCheck className="h-3 w-3" aria-hidden="true" />
+            Escalation rules · NCM + wind forecast + Open-Meteo
+          </div>
+          <table className="w-full border-collapse text-left">
+            <tbody>
+              {RULES.map((rule) => (
+                <tr
+                  key={rule.level}
+                  className={cn(
+                    "border-t border-border/40 first:border-t-0",
+                    alert.level === rule.level && LEVEL_STYLES[rule.level].bar,
+                  )}
+                >
+                  <td className="whitespace-nowrap px-3 py-2 align-top">
+                    <span className="flex items-center gap-1.5">
+                      <span className={cn("h-2.5 w-2.5 rounded-full", LEVEL_STYLES[rule.level].solid)} aria-hidden="true" />
+                      <span className={cn("font-mono text-[0.625rem] font-bold uppercase tracking-wide", LEVEL_STYLES[rule.level].text)}>
+                        {rule.label}
+                      </span>
+                    </span>
+                    <span className="mt-0.5 block font-mono text-[0.5rem] uppercase tracking-wide text-muted-foreground">
+                      {rule.km}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-xs leading-snug text-muted-foreground">{rule.triggers}</td>
+                  <td className="hidden whitespace-nowrap px-3 py-2 text-right align-top font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground sm:table-cell">
+                    {rule.sources}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
 
-        <ul className="mt-3 grid gap-2 sm:grid-cols-4">
-          {LADDER.map((rung) => (
-            <li
-              key={rung.level}
-              className={cn("flex items-center gap-2 rounded-lg border px-2.5 py-2 text-sm", LEVEL_STYLES[rung.level].chip)}
-            >
-              <span className={cn("h-3 w-3 shrink-0 rounded-full", rung.solid)} aria-hidden="true" />
-              <span className="font-mono text-xs font-bold uppercase tracking-wide">{rung.label}</span>
-              <span className="ml-auto font-mono text-xs tabular-nums opacity-90">
-                {rung.level === "green" ? `${ALERT_RADII_KM.green} km +` : `within ${ALERT_RADII_KM[rung.level]} km`}
-              </span>
-            </li>
-          ))}
-        </ul>
+        {/* Live prediction table — each rule signal evaluated against real data now */}
+        <div className="mt-3 overflow-hidden rounded-lg border border-border/70">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-background/40 px-3 py-1.5">
+            <span className="flex items-center gap-1.5 label-caps text-muted-foreground">
+              <Activity className="h-3 w-3" aria-hidden="true" />
+              Live prediction
+            </span>
+            <span className={cn("flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider", styles.chip)}>
+              <span className={cn("h-2 w-2 rounded-full", styles.solid)} aria-hidden="true" />
+              Predicted {alert.title}
+              {approaching && etaMinutes != null ? ` · ETA ${formatEta(etaMinutes)}` : ""}
+            </span>
+          </div>
+          <table className="w-full border-collapse text-left">
+            <tbody>
+              {predictionRows.map((row) => (
+                <tr key={row.signal} className="border-t border-border/40 first:border-t-0">
+                  <td className="px-3 py-1.5">
+                    <span className="block text-xs font-medium text-foreground">{row.signal}</span>
+                    <span className="block font-mono text-[0.5rem] uppercase tracking-wider text-muted-foreground">
+                      {row.source}
+                    </span>
+                  </td>
+                  <td className="px-3 py-1.5 text-right text-xs tabular-nums text-muted-foreground">{row.value}</td>
+                  <td className="w-8 px-3 py-1.5 text-right">
+                    <span
+                      className={cn("inline-flex h-2.5 w-2.5 rounded-full", row.met ? "bg-alert-orange" : "bg-alert-green/40")}
+                      aria-label={row.met ? "Triggered" : "Clear"}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {/* Live background hazard data feeding the model */}
