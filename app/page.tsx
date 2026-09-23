@@ -4,7 +4,6 @@ import { LeftNav } from "@/components/left-nav"
 import { WeatherProvider } from "@/components/weather/weather-provider"
 import { AlertBanner } from "@/components/weather/alert-banner"
 import { HourlyBreakdown } from "@/components/forecast/hourly-breakdown"
-import { MeasureMap } from "@/components/weather/measure-map"
 import { NcmSources } from "@/components/weather/ncm-sources"
 import { Webcams } from "@/components/weather/webcams"
 import { StationDashboard } from "@/components/station/station-dashboard"
@@ -67,11 +66,6 @@ export default function Page() {
             {/* 4 · NCM live radar & satellite loops (zoom + time slider) */}
             <section id="radar" className="mt-6 scroll-mt-6">
               <NcmSources />
-            </section>
-
-            {/* 5 · Big multi-model measure & forecast map */}
-            <section id="map" className="mt-6 scroll-mt-6">
-              <MeasureMap />
             </section>
 
             {/* 6 · Local webcams */}
