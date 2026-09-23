@@ -5,8 +5,11 @@ import "leaflet/dist/leaflet.css"
 import {
   AlertTriangle,
   ArrowUpRight,
+  BrainCircuit,
   ChevronLeft,
   ChevronRight,
+  Cloud,
+  CloudRain,
   CloudSun,
   Pause,
   Play,

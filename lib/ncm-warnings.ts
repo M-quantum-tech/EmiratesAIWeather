@@ -34,24 +34,49 @@ function fmt(d: Date): string {
   return `${p(d.getDate())}/${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
+/**
+ * Four-tier NCM alert ladder from the operational spec. Because Open-Meteo does not
+ * expose radar-cell distance, "intensifying convection proximity" is proxied by the
+ * convective / thunderstorm WMO codes (showers → cell nearby, thunder → cell overhead),
+ * combined with the raw gust and rain-rate signals. Gust is converted to m/s so it maps
+ * directly onto the spec's 15 m/s Level-1 threshold.
+ *
+ *   Green  — calm, no active warning.
+ *   Yellow — Level 1/2: gust > 15 m/s, rain > 1 mm, or convection developing nearby.
+ *   Orange — Level 3: convective core with rain, heavy rain (≥15 mm), or gale gust (≥25 m/s).
+ *   Red    — Level 4: thunder core with torrential rain, rain ≥30 mm, or destructive gust (≥30 m/s).
+ */
 function classify(gust: number, precip: number, code: number): { level: WarnLevel; score: number } {
+  const gustMs = gust / 3.6
+  const convective = CONVECTIVE.has(code)
+  const thunder = THUNDER.has(code)
+
+  // Severity meter (0-100) — drives the UI meter and frame ordering.
   let score = 0
-  if (gust >= 90) score += 60
-  else if (gust >= 65) score += 42
-  else if (gust >= 45) score += 24
-  else if (gust >= 40) score += 14
-  if (precip >= 15) score += 45
-  else if (precip >= 5) score += 28
-  else if (precip >= 1) score += 14
-  else if (precip > 0) score += 6
-  if (THUNDER.has(code)) score += 30
-  else if (CONVECTIVE.has(code)) score += 16
+  if (gustMs >= 30) score += 60
+  else if (gustMs >= 25) score += 45
+  else if (gustMs >= 20) score += 30
+  else if (gustMs > 15) score += 16
+  if (precip >= 30) score += 45
+  else if (precip >= 15) score += 30
+  else if (precip >= 5) score += 18
+  else if (precip > 1) score += 8
+  if (thunder) score += 30
+  else if (convective) score += 16
   if (FOG.has(code)) score += 12
   score = Math.min(100, Math.round(score))
+
+  // Spec ladder.
+  const level1 = gustMs > 15 || precip > 1 || convective
+  const level2 = thunder || precip >= 5 || gustMs >= 20
+  const level3 = (thunder && precip >= 1) || precip >= 15 || gustMs >= 25
+  const level4 = (thunder && precip >= 10) || precip >= 30 || gustMs >= 30
+
   let level: WarnLevel = "green"
-  if (score >= 62) level = "red"
-  else if (score >= 40) level = "orange"
-  else if (score >= 14) level = "yellow"
+  if (level4) level = "red"
+  else if (level3) level = "orange"
+  else if (level2 || level1) level = "yellow"
+
   return { level, score }
 }
 
