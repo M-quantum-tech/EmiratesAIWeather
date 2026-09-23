@@ -1,6 +1,6 @@
 "use client"
 
-import { Lock } from "lucide-react"
+import { Clock, Lock, ShieldX } from "lucide-react"
 import type { ReactNode } from "react"
 import { usePro } from "@/components/pro/use-pro"
 import { UnlockPro } from "@/components/pro/unlock-pro"
@@ -23,10 +23,49 @@ export function ProGate({
   title = "Unlock the full analysis",
   blurb = "Free view shows the first 45%. Go Pro for the complete depth — every trend, forecast band and expert breakdown.",
 }: ProGateProps) {
-  const { isPro, isLoading } = usePro()
+  const { isPro, isLoading, access } = usePro()
 
   if (isPro || isLoading) {
     return <div className={isLoading ? "opacity-95" : undefined}>{children}</div>
+  }
+
+  // Admin-controlled access gate takes precedence over the paywall: a denied,
+  // pending, expired or not-yet-started account cannot see the paid depth at all.
+  if (access === "denied" || access === "pending" || access === "expired" || access === "scheduled") {
+    const copy: Record<string, { title: string; blurb: string }> = {
+      denied: {
+        title: "Access denied",
+        blurb: "An administrator has denied access to this content. Contact your administrator if you believe this is a mistake.",
+      },
+      pending: {
+        title: "Access pending approval",
+        blurb: "Your account is awaiting administrator approval. You'll gain access as soon as it's allowed.",
+      },
+      expired: {
+        title: "Service period ended",
+        blurb: "Your service window has ended. Contact your administrator to renew access.",
+      },
+      scheduled: {
+        title: "Service not started yet",
+        blurb: "Your access is scheduled to begin on the start date set by your administrator.",
+      },
+    }
+    const { title: gTitle, blurb: gBlurb } = copy[access]
+    return (
+      <div className="relative overflow-hidden rounded-xl border border-border bg-card">
+        <div className="flex flex-col items-center gap-3 px-6 py-14 text-center">
+          <span className="inline-flex h-12 w-12 items-center justify-center rounded-full border border-border bg-muted/40 text-muted-foreground">
+            {access === "expired" || access === "scheduled" ? (
+              <Clock className="h-5 w-5" aria-hidden="true" />
+            ) : (
+              <ShieldX className="h-5 w-5" aria-hidden="true" />
+            )}
+          </span>
+          <h3 className="text-balance text-lg font-semibold tracking-tight text-foreground">{gTitle}</h3>
+          <p className="max-w-md text-pretty text-sm text-muted-foreground">{gBlurb}</p>
+        </div>
+      </div>
+    )
   }
 
   const revealPct = Math.round(freeFraction * 100)

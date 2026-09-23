@@ -35,6 +35,18 @@ type Frame = { time: number; path: string }
 type Maps = { host: string; radar: Frame[]; satellite: Frame[] }
 type Layer = "wind" | "radar" | "satellite" | "warnings"
 
+// Esri keyless canvas basemaps. Warnings use the LIGHT-grey canvas (clean, as
+// requested); animated radar/cloud/wind layers use the DARK canvas so colours pop.
+// Esri canvas uses English/Latin place names (OSM localises UAE labels to Arabic).
+const BASE_LIGHT =
+  "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+const REF_LIGHT =
+  "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
+const BASE_DARK =
+  "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+const REF_DARK =
+  "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
+
 // Official UAE National Center of Meteorology (Ghaith / Al Bahar) portals plus the
 // meteoblue satellite view and the Open-Meteo trend source used for AI prediction.
 // These government viewers block embedding, so they remain deep-link references below
@@ -43,10 +55,11 @@ const NCM_LINKS = [
   { label: "Official Warnings", href: "https://www.ncm.gov.ae/maps-warnings?lang=en", icon: AlertTriangle },
   { label: "Diverging Winds · COSMO-UAE", href: "https://ghaith.ncm.gov.ae/?lang=en#cosmo-uae-wind", icon: Wind },
   {
-    label: "Clouds · Radar-Merge GCC",
-    href: "https://ghaith.ncm.gov.ae/?lang=en#radar-Merge-GCC,trajectory",
-    icon: CloudSun,
+    label: "Radar-Merge Sat · Trajectory",
+    href: "https://ghaith.ncm.gov.ae/?lang=en#radar-Merge-Sat,trajectory",
+    icon: Radar,
   },
+  { label: "Cloud Tops · IR", href: "https://ghaith.ncm.gov.ae/?lang=en#satellite-IR", icon: CloudSun },
   { label: "Rain / Hail Radar · GCC", href: "https://ghaith.ncm.gov.ae/?lang=en#radar-Merge-GCC,hail", icon: Radar },
   {
     label: "meteoblue Satellite",
@@ -80,13 +93,16 @@ const CLOUD_SCALE = [
   { c: "#f800fd", label: "Intense" },
 ] as const
 
-// Wind-speed legend (m/s) matching the Windy-style heatmap palette (calm → gale).
+// Wind-speed legend (m/s) matching the COSMO-UAE heatmap palette in lib/wind-layer.
+// Numeric ticks (m/s) mirror the NCM diverging-winds scale calm → gale.
 const WIND_SCALE = [
-  { c: "#1a3a78", label: "Calm" },
-  { c: "#1a96be", label: "" },
-  { c: "#78c868", label: "Breeze" },
-  { c: "#f0963c", label: "Strong" },
-  { c: "#e4483a", label: "Gale" },
+  { c: "#2642a8", label: "0" },
+  { c: "#1ea5cd", label: "5" },
+  { c: "#2ec39e", label: "10" },
+  { c: "#80d26c", label: "15" },
+  { c: "#e8d658", label: "20" },
+  { c: "#f69c3c", label: "25" },
+  { c: "#e84a3a", label: "30+" },
 ] as const
 
 /** Format a local ISO timestamp like "2026-08-26T12:00" into "Wed 26/08/2026 · 12:00". */
@@ -117,6 +133,7 @@ export function NcmSources() {
   const overlayRef = useRef<any>(null)
   const mergeRef = useRef<any>(null)
   const basemapRef = useRef<any>(null)
+  const referenceRef = useRef<any>(null)
   const windLayerRef = useRef<any>(null)
   const warnLayerRef = useRef<any>(null)
   const geoRef = useRef<any>(null)
@@ -275,12 +292,11 @@ export function NcmSources() {
         scrollWheelZoom: true,
       })
       map.zoomControl.setPosition("bottomright")
-      // Esri dark-grey canvas: keyless, English/Latin place names (OSM localises
-      // UAE labels to Arabic) and a muted dark palette that matches the theme.
-      basemapRef.current = L.tileLayer(
-        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
-        { maxZoom: 16, attribution: "&copy; Esri, HERE, Garmin, OpenStreetMap contributors" },
-      ).addTo(map)
+      // Start on the clean LIGHT-grey canvas (warnings is the default layer).
+      basemapRef.current = L.tileLayer(BASE_LIGHT, {
+        maxZoom: 16,
+        attribution: "&copy; Esri, HERE, Garmin, OpenStreetMap contributors",
+      }).addTo(map)
       // High-z pane so city labels sit above the shaded warning polygons (NCM look).
       map.createPane("labels")
       const labelsPane = map.getPane("labels")
@@ -288,11 +304,9 @@ export function NcmSources() {
         labelsPane.style.zIndex = "650"
         labelsPane.style.pointerEvents = "none"
       }
-      // English reference labels on a top pane so cities read over overlays.
-      L.tileLayer(
-        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
-        { maxZoom: 16, pane: "labels" },
-      ).addTo(map)
+      // SINGLE English reference-label source on the top pane. All emirate/city
+      // names come from here only, so labels never render twice.
+      referenceRef.current = L.tileLayer(REF_LIGHT, { maxZoom: 16, pane: "labels" }).addTo(map)
       mapRef.current = map
       if (!cancelled) setMapReady(true)
       setTimeout(() => map.invalidateSize(), 250)
@@ -386,10 +400,13 @@ export function NcmSources() {
       map.removeLayer(mergeRef.current)
       mergeRef.current = null
     }
-    if (basemapRef.current) {
-      // Keep the clean dark cartographic basemap fully visible for warnings (no blue
-      // wash) so the map reads crisply; fade it a little under the radar/cloud tiles.
-      basemapRef.current.setOpacity(layer === "wind" ? 1 : layer === "warnings" ? 0.95 : 0.4)
+    if (basemapRef.current && referenceRef.current) {
+      // Warnings → clean LIGHT-grey canvas. Radar/clouds/wind → DARK canvas so the
+      // coloured overlays read clearly. Swap both the base and reference-label tiles.
+      const light = layer === "warnings"
+      basemapRef.current.setUrl(light ? BASE_LIGHT : BASE_DARK)
+      referenceRef.current.setUrl(light ? REF_LIGHT : REF_DARK)
+      basemapRef.current.setOpacity(layer === "radar" || layer === "satellite" ? 0.55 : 1)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layer])
@@ -463,10 +480,11 @@ export function NcmSources() {
       style: (feature: any) => {
         const lvl = levelByName.get(feature.properties.name) ?? "green"
         const warned = lvl !== "green"
+        // Dark outlines read on the light-grey canvas; warned emirates shaded by severity.
         return {
-          color: warned ? "#ffffff" : "#7d96b6",
-          weight: warned ? 1.6 : 0.8,
-          opacity: warned ? 0.95 : 0.45,
+          color: warned ? "#0f172a" : "#94a3b8",
+          weight: warned ? 2 : 0.9,
+          opacity: warned ? 0.9 : 0.6,
           fillColor: warned ? WARN_FILL[lvl] : "transparent",
           fillOpacity: warned ? 0.55 : 0,
         }
@@ -478,94 +496,29 @@ export function NcmSources() {
       },
     })
 
-    // Label layer: create small divIcons at each emirate centroid and toggle by zoom
-    const labelLayer = L.layerGroup()
-    try {
-      const features = geoRef.current.features ?? []
-      features.forEach((f: any) => {
-        const name = f.properties?.name ?? ""
-        // compute centroid (simple average of coordinates of first polygon ring)
-        let lat = 0
-        let lon = 0
-        let count = 0
-        const geom = f.geometry
-        if (geom && geom.type === "Polygon") {
-          const ring = geom.coordinates[0] ?? []
-          ring.forEach((c: any) => {
-            lon += c[0]
-            lat += c[1]
-            count++
-          })
-        } else if (geom && geom.type === "MultiPolygon") {
-          const ring = geom.coordinates[0]?.[0] ?? []
-          ring.forEach((c: any) => {
-            lon += c[0]
-            lat += c[1]
-            count++
-          })
-        }
-        if (count === 0) return
-        const cx = lat / count
-        const cy = lon / count
-        const icon = L.divIcon({
-          className: "emirate-label",
-          html: `<div style="padding:4px 8px;background:rgba(0,0,0,0.6);color:#fff;border-radius:6px;font-size:12px;font-weight:600;box-shadow:0 4px 10px rgba(0,0,0,0.6)">${name}</div>`,
-          iconAnchor: [0, 0],
-          interactive: false,
-        })
-        const m = L.marker([cx, cy], { icon })
-        labelLayer.addLayer(m)
-      })
-    } catch (err) {
-      console.log('label layer build failed', err)
-    }
-
-    // Add both geo and label layers to group so they can be toggled together
+    // Only the shaded emirate polygons go in the group. Every emirate/city name
+    // comes solely from the Esri reference-label tiles added at init, so names
+    // never render twice (fixes the doubled-label issue).
     geoLayer.addTo(group)
-    labelLayer.addTo(group)
-
-    // City labels on top (dedicated high-z pane) for the NCM cartographic look.
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/dark_only_labels/{z}/{x}/{y}{r}.png", {
-      maxZoom: 16,
-      pane: "labels",
-    }).addTo(group)
-
     group.addTo(map)
     warnLayerRef.current = group
 
-    // Zoom handler: show labels and emphasise boundaries at higher zoom levels (Al-Bahar style)
+    // Zoom handler: emphasise boundaries at higher zoom for the Al-Bahar look.
     function onZoom() {
       try {
         const z = map.getZoom()
-        // show detailed labels when zoomed in
-        if (z >= 9) {
-          labelLayer.eachLayer((lyr: any) => map.addLayer(lyr))
-          geoLayer.setStyle((feature: any) => {
-            const lvl = levelByName.get(feature.properties.name) ?? "green"
-            const warned = lvl !== "green"
-            return {
-              color: warned ? "#ffffff" : "#9fb3cc",
-              weight: warned ? 1.8 : 1.0,
-              opacity: warned ? 0.95 : 0.5,
-              fillColor: warned ? WARN_FILL[lvl] : "transparent",
-              fillOpacity: warned ? 0.5 : 0,
-            }
-          })
-        } else {
-          // hide labels at low zoom
-          labelLayer.eachLayer((lyr: any) => map.removeLayer(lyr))
-          geoLayer.setStyle((feature: any) => {
-            const lvl = levelByName.get(feature.properties.name) ?? "green"
-            const warned = lvl !== "green"
-            return {
-              color: warned ? "#ffffff" : "#6f8fb0",
-              weight: warned ? 1.4 : 0.7,
-              opacity: warned ? 0.9 : 0.4,
-              fillColor: warned ? WARN_FILL[lvl] : "transparent",
-              fillOpacity: warned ? 0.5 : 0,
-            }
-          })
-        }
+        const strong = z >= 9
+        geoLayer.setStyle((feature: any) => {
+          const lvl = levelByName.get(feature.properties.name) ?? "green"
+          const warned = lvl !== "green"
+          return {
+            color: warned ? "#0f172a" : "#94a3b8",
+            weight: warned ? (strong ? 2.4 : 2) : strong ? 1.1 : 0.9,
+            opacity: warned ? 0.9 : strong ? 0.65 : 0.55,
+            fillColor: warned ? WARN_FILL[lvl] : "transparent",
+            fillOpacity: warned ? 0.55 : 0,
+          }
+        })
       } catch {}
     }
     map.on('zoomend', onZoom)
@@ -576,7 +529,6 @@ export function NcmSources() {
     const cleanup = () => {
       try {
         map.off('zoomend', onZoom)
-        if (labelLayer) labelLayer.clearLayers()
       } catch {}
     }
 
