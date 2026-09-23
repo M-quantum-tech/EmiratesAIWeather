@@ -6,16 +6,18 @@
 // meteorological speed/direction into U (eastward) / V (northward) components.
 // Grids are stored row-major from the NORTH-WEST corner, scanning east then south.
 
-// Grid bounds (degrees). North-west corner is (la1, lo1). A 0.5° grid focused on
-// the UAE + nearby Gulf/Oman gives a finer field that stays accurate when zoomed in.
-const LA1 = 27 // north
-const LA2 = 22 // south
-const LO1 = 51 // west
-const LO2 = 58 // east
+// Grid bounds (degrees). North-west corner is (la1, lo1). A 0.5° grid spanning the
+// wider Gulf (eastern Saudi/Qatar/Bahrain → southern Iran → UAE → northern Oman)
+// so the wind field fills a regional view like NCM's COSMO-UAE map, while staying
+// fine enough to stay accurate when zoomed into the UAE.
+const LA1 = 29 // north
+const LA2 = 20 // south
+const LO1 = 49 // west
+const LO2 = 60 // east
 const DX = 0.5
 const DY = 0.5
-const NX = (LO2 - LO1) / DX + 1 // 15 columns
-const NY = (LA1 - LA2) / DY + 1 // 11 rows
+const NX = (LO2 - LO1) / DX + 1 // 23 columns
+const NY = (LA1 - LA2) / DY + 1 // 19 rows
 const HOURS = 24
 
 export type WindGrid = {
