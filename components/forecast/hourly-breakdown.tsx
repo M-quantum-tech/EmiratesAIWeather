@@ -81,7 +81,7 @@ export function HourlyBreakdown() {
 
   const solarKey = location ? `/api/solar?lat=${location.latitude}&lon=${location.longitude}&days=14` : null
   const { data: solar } = useSWR<SolarPayload>(solarKey, fetcher, {
-    refreshInterval: 3 * 60 * 1000,
+    refreshInterval: 60 * 1000,
     keepPreviousData: true,
   })
 

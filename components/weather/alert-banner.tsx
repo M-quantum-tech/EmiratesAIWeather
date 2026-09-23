@@ -228,6 +228,13 @@ export function AlertBanner() {
   }, [level])
   const alarmActive = level != null && ackedLevel !== level
   const acknowledge = () => setAckedLevel(level)
+  // Auto-silence: whenever the alarm arms on a level change it sounds for at most
+  // 15 seconds, then auto-acknowledges — unless the operator resets it sooner.
+  useEffect(() => {
+    if (!alarmActive) return
+    const timer = window.setTimeout(() => setAckedLevel(level), 15_000)
+    return () => window.clearTimeout(timer)
+  }, [alarmActive, level])
   const [ncm, setNcm] = useState<EmirateWarning | null>(null)
 
   // Live NCM Al Bahar warning for the current hour — matched to the user's emirate
@@ -455,7 +462,7 @@ export function AlertBanner() {
             onClick={acknowledge}
             disabled={!alarmActive}
             aria-label={
-              alarmActive ? `Acknowledge ${alert.title} alarm and silence buzzer` : `Buzzer armed at ${alert.title} level`
+              alarmActive ? `Reset ${alert.title} alarm and silence buzzer now` : `Buzzer armed at ${alert.title} level`
             }
             className={cn(
               "relative inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 font-mono text-[0.625rem] font-bold uppercase tracking-wider transition-all",
@@ -493,11 +500,12 @@ export function AlertBanner() {
           <span className="text-sm font-bold uppercase tracking-wide">{alert.title} buzzer</span>
           <span className="text-xs font-medium text-foreground/80">
             {changedFrom ? `Level changed ${changedFrom.toUpperCase()} → ${alert.title}` : `Armed at ${alert.title}`}
-            {danger ? ` · severe conditions within ${DANGER_RADIUS_KM} km` : ""} — sounding until acknowledged.
+            {danger ? ` · severe conditions within ${DANGER_RADIUS_KM} km` : ""} — sounding for 15 s or until reset.
           </span>
           <button
             type="button"
             onClick={acknowledge}
+            aria-label="Reset alarm and silence buzzer now"
             className={cn(
               "ml-auto inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 font-mono text-[0.625rem] font-bold uppercase tracking-wider transition-opacity hover:opacity-80",
               styles.chip,
@@ -505,7 +513,7 @@ export function AlertBanner() {
             )}
           >
             <Check className="h-3.5 w-3.5" aria-hidden="true" />
-            Acknowledge &amp; silence
+            Reset &amp; silence
           </button>
         </div>
       ) : null}

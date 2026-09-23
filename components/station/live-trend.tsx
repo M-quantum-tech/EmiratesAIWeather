@@ -407,72 +407,95 @@ function buildView(
     }
   }
 
-  // ---- 14-day extended AI outlook ----
+  // ---- 14-day extended AI outlook — every model day broken into its 24 hourly steps ----
   const daily: DailyReading[] = (payload.daily ?? []).slice(0, 14)
   if (daily.length < 2) return null
-  const n = daily.length
-  const xLabels = daily.map((d, i) => (i % 2 === 0 ? dayLabel(d.date, i) : ""))
-  const nowIndex = 0
-  const boundary = Math.min(6, n - 1) // days 0–6 near-term (solid), 7+ extended AI range (dashed)
-  const when14 = (i: number) => dayLabel(daily[i].date, i)
-  const tooltipHead = (i: number) => `${dayLabel(daily[i].date, i)}${i > boundary ? " · extended" : ""}`
-  const projectionNote = "Solid = near-term · dashed = extended AI range (7–14 d)"
+  const dayN = daily.length
+  // Flatten each day into 24 hourly points → one continuous fortnight curve
+  // (14 days × 24 h). Days 0–6 are near-term (solid); 7–13 AI-projected (dashed).
+  const flat: HourlyReading[] = (payload.hourlyByDay ?? []).slice(0, dayN).flatMap((d) => d.slice(0, 24))
+  const useHourly = flat.length >= 2
+  const n = useHourly ? flat.length : dayN
+  const dayOf = (i: number) => Math.min(dayN - 1, Math.floor(i / 24))
+  const hourOf = (i: number) => i % 24
+  // Day name printed once per day (every 2nd day) so the 336-point axis stays readable.
+  const xLabels = useHourly
+    ? flat.map((_, i) => (hourOf(i) === 0 && Math.floor(i / 24) % 2 === 0 ? dayLabel(daily[Math.floor(i / 24)].date, Math.floor(i / 24)) : ""))
+    : daily.map((d, i) => (i % 2 === 0 ? dayLabel(d.date, i) : ""))
+  const nowIndex = useHourly ? (payload.currentHourIndex >= 0 ? payload.currentHourIndex : 0) : 0
+  const boundary = useHourly ? Math.min(7, dayN) * 24 - 1 : Math.min(6, dayN - 1)
+  const when14 = (i: number) =>
+    useHourly ? `${dayLabel(daily[dayOf(i)].date, dayOf(i))} ${clockLabel(hourOf(i))}` : dayLabel(daily[i].date, i)
+  const tooltipHead = (i: number) => `${when14(i)}${dayOf(i) >= 7 ? " · extended" : ""}`
+  const projectionNote = "Solid = near-term · dashed = extended AI range (7–14 d) · each day 00–24 h"
 
   if (metric === "dni") {
-    const days: SolarDay[] = (solar?.days ?? []).slice(0, n)
-    if (days.length < 2) return null
-    const m = days.length
-    const yield_ = days.map((d) => d.dniEnergy)
-    const ghi = days.map((d) => d.ghiEnergy)
+    const sdays: SolarDay[] = (solar?.days ?? []).slice(0, dayN)
+    if (sdays.length < 2) return null
+    const m = sdays.length
+    // 14 stitched daily bell curves — every day arranged hour-by-hour (00 → 24).
+    const dni = sdays.flatMap((d) => d.hourlyDni.slice(0, 24))
+    const ai = sdays.flatMap((d) => (d.hourlyDniAi ?? d.hourlyDni).slice(0, 24))
+    const ghi = sdays.flatMap((d) => d.hourlyGhi.slice(0, 24))
+    const nn = dni.length
+    const dniDay = (i: number) => Math.min(m - 1, Math.floor(i / 24))
+    const dniWhen = (i: number) => `${dayLabel(sdays[dniDay(i)].date, dniDay(i))} ${clockLabel(i % 24)}`
+    const yield_ = sdays.map((d) => d.dniEnergy)
     const { hi, lo } = argExtremes(yield_)
-    const dniWhen = (i: number) => dayLabel(days[i].date, i)
-    const peakDniMax = Math.max(...days.map((d) => d.peakDni))
+    const bestDay = (i: number) => dayLabel(sdays[i].date, i)
+    const peakDniMax = Math.max(...sdays.map((d) => d.peakDni))
     const avg = yield_.reduce((a, b) => a + b, 0) / m
     const excellent = yield_.filter((v) => v >= 7).length
+    const dniBnd = Math.min(7, m) * 24 - 1
     const measures: Measure[] = []
-    measures.push({ tone: "good", text: `Best generation day is ${dniWhen(hi)} (${kwh(yield_[hi])}) — plan peak PV dispatch and pre-clean panels.` })
+    measures.push({ tone: "good", text: `Best generation day is ${bestDay(hi)} (${kwh(yield_[hi])}) — plan peak PV dispatch and pre-clean panels.` })
     if (excellent >= 5) measures.push({ tone: "good", text: `${excellent} of ${m} days rate excellent — sustained high solar resource for the fortnight.` })
-    if (yield_[lo] < 5) measures.push({ tone: "warn", text: `Lowest yield on ${dniWhen(lo)} (${kwh(yield_[lo])}) — schedule storage top-ups or maintenance then.` })
-    measures.push({ tone: "info", text: "Extended DNI (7–14 d) is AI-projected — treat later days as a planning guide, not a commitment." })
+    if (yield_[lo] < 5) measures.push({ tone: "warn", text: `Lowest yield on ${bestDay(lo)} (${kwh(yield_[lo])}) — schedule storage top-ups or maintenance then.` })
+    measures.push({ tone: "info", text: "Extended DNI (7–14 d) is AI-projected — each day is shown hour-by-hour; treat later days as a planning guide." })
     return {
-      n: m,
-      boundary: Math.min(6, m - 1),
+      n: nn,
+      boundary: dniBnd,
       nowIndex,
-      xLabels: days.map((d, i) => (i % 2 === 0 ? dayLabel(d.date, i) : "")),
-      tooltipHead: (i) => `${dayLabel(days[i].date, i)}${i > Math.min(6, m - 1) ? " · extended" : ""}`,
+      xLabels: dni.map((_, i) => (i % 24 === 0 && Math.floor(i / 24) % 2 === 0 ? dayLabel(sdays[i / 24].date, i / 24) : "")),
+      tooltipHead: (i) => `${dniWhen(i)}${Math.floor(i / 24) >= 7 ? " · extended" : ""}`,
       projectionNote,
       series: [
-        { label: "DNI yield", color: "var(--signal)", values: yield_, format: kwh },
-        { label: "GHI yield", color: "var(--accent)", values: ghi, format: kwh },
+        { label: "DNI · model", color: "var(--signal)", values: dni, format: wm2 },
+        { label: "AI beam", color: "var(--accent)", values: ai, format: wm2 },
+      ],
+      extra: (i) => [
+        { label: "GHI (horizontal)", value: wm2(ghi[i]) },
+        { label: "AI Δ vs model", value: `${ai[i] - dni[i] >= 0 ? "+" : ""}${ai[i] - dni[i]} W/m²` },
+        { label: "Hour", value: dniWhen(i) },
       ],
       stats: [
         { label: "Avg yield · 14d", value: kwh(avg), sub: dniBand(avg).label },
         { label: "Peak DNI", value: wm2(peakDniMax), sub: "beam maximum" },
-        { label: "Best day", value: dniWhen(hi), sub: kwh(yield_[hi]) },
+        { label: "Best day", value: bestDay(hi), sub: kwh(yield_[hi]) },
       ],
-      peak: { label: "Best yield", value: kwh(yield_[hi]), when: dniWhen(hi) },
-      trough: { label: "Lowest yield", value: kwh(yield_[lo]), when: dniWhen(lo) },
+      peak: { label: "Best yield", value: kwh(yield_[hi]), when: bestDay(hi) },
+      trough: { label: "Lowest yield", value: kwh(yield_[lo]), when: bestDay(lo) },
       headline: {
         status: "Solar outlook",
         tone: "info",
-        comment: `Best yield ${kwh(yield_[hi])} on ${dniWhen(hi)}; lowest ${kwh(yield_[lo])} on ${dniWhen(lo)}. 14-day average ${kwh(avg)}.`,
+        comment: `Best yield ${kwh(yield_[hi])} on ${bestDay(hi)}; lowest ${kwh(yield_[lo])} on ${bestDay(lo)}. 14-day average ${kwh(avg)}, shown hour-by-hour.`,
       },
       measures,
     }
   }
 
   if (metric === "comfort") {
-    const max = daily.map((d) => d.max)
-    const min = daily.map((d) => d.min)
-    const { hi } = argExtremes(max)
-    const { lo } = argExtremes(min)
+    const temps = flat.map((h) => h.temperature)
+    const feels = flat.map((h) => h.apparentTemperature)
+    const { hi } = argExtremes(feels)
+    const { lo } = argExtremes(temps)
     const hot = isMetric ? 40 : 104
     const cool = isMetric ? 15 : 59
     const measures: Measure[] = []
-    if (max[hi] >= hot) measures.push({ tone: "warn", text: `Hottest day ${when14(hi)} at ${t(max[hi])} — front-load outdoor work to mornings that week.` })
-    if (min[lo] <= cool) measures.push({ tone: "info", text: `Coolest night ${when14(lo)} at ${t(min[lo])} — plan a light layer for evenings.` })
+    if (feels[hi] >= hot) measures.push({ tone: "warn", text: `Hottest hour ${when14(hi)} at ${t(feels[hi])} — front-load outdoor work to mornings that week.` })
+    if (temps[lo] <= cool) measures.push({ tone: "info", text: `Coolest hour ${when14(lo)} at ${t(temps[lo])} — plan a light layer for evenings.` })
     if (measures.length === 0) measures.push({ tone: "good", text: "Stable, comfortable spread across the fortnight." })
-    measures.push({ tone: "info", text: "Days 7–14 are AI-projected — use for planning, confidence narrows nearer the date." })
+    measures.push({ tone: "info", text: "Days 7–14 are AI-projected, shown hour-by-hour — confidence narrows nearer the date." })
     return {
       n,
       boundary,
@@ -481,35 +504,36 @@ function buildView(
       tooltipHead,
       projectionNote,
       series: [
-        { label: "High", color: "var(--signal)", values: max, format: t },
-        { label: "Low", color: "var(--accent)", values: min, format: t },
+        { label: "Temp", color: "var(--signal)", values: temps, format: t },
+        { label: "Feels", color: "var(--accent)", values: feels, format: t },
       ],
+      extra: (i) => [{ label: "Hour", value: when14(i) }],
       stats: [
-        { label: "Warmest", value: t(max[hi]), sub: when14(hi) },
-        { label: "Coolest", value: t(min[lo]), sub: when14(lo) },
-        { label: "14-day mean", value: t(max.reduce((a, b) => a + b, 0) / n), sub: "daily high avg" },
+        { label: "Warmest", value: t(feels[hi]), sub: when14(hi) },
+        { label: "Coolest", value: t(temps[lo]), sub: when14(lo) },
+        { label: "14-day mean", value: t(temps.reduce((a, b) => a + b, 0) / n), sub: "hourly avg" },
       ],
-      peak: { label: "Warmest day", value: t(max[hi]), when: when14(hi) },
-      trough: { label: "Coolest night", value: t(min[lo]), when: when14(lo) },
+      peak: { label: "Warmest hour", value: t(feels[hi]), when: when14(hi) },
+      trough: { label: "Coolest hour", value: t(temps[lo]), when: when14(lo) },
       headline: {
-        status: max[hi] >= hot ? "Hot spell" : "Stable",
-        tone: max[hi] >= hot ? "warn" : "good",
-        comment: `Hottest ${t(max[hi])} on ${when14(hi)}; coolest night ${t(min[lo])} on ${when14(lo)}.`,
+        status: feels[hi] >= hot ? "Hot spell" : "Stable",
+        tone: feels[hi] >= hot ? "warn" : "good",
+        comment: `Hottest ${t(feels[hi])} on ${when14(hi)}; coolest ${t(temps[lo])} on ${when14(lo)}.`,
       },
       measures,
     }
   }
   if (metric === "wind") {
-    const wind = daily.map((d) => spd(d.windMax))
-    const gust = daily.map((d) => spd(d.windGustMax))
+    const wind = flat.map((h) => spd(h.windSpeed))
+    const gust = flat.map((h) => spd(h.windGusts))
     const { hi, lo } = argExtremes(gust)
-    const gustKmh = daily.map((d) => toKmh(d.windGustMax))
+    const gustKmh = flat.map((h) => toKmh(h.windGusts))
     const gMax = Math.max(...gustKmh)
     const measures: Measure[] = []
     if (gMax >= 75) measures.push({ tone: "bad", text: `Damaging gusts expected ${when14(hi)} — secure sites and reschedule crane or high-profile work.` })
     else if (gMax >= 50) measures.push({ tone: "warn", text: `Strong winds and blowing dust peak ${when14(hi)} — plan for reduced visibility and secure loose material.` })
-    else measures.push({ tone: "good", text: "No high-wind days flagged across the fortnight." })
-    measures.push({ tone: "info", text: "Days 7–14 are AI-projected — treat later wind peaks as indicative." })
+    else measures.push({ tone: "good", text: "No high-wind hours flagged across the fortnight." })
+    measures.push({ tone: "info", text: "Days 7–14 are AI-projected, shown hour-by-hour — treat later wind peaks as indicative." })
     return {
       n,
       boundary,
@@ -518,16 +542,17 @@ function buildView(
       tooltipHead,
       projectionNote,
       series: [
-        { label: "Wind max", color: "var(--signal)", values: wind, format: s },
-        { label: "Gust max", color: "var(--accent)", values: gust, format: s },
+        { label: "Wind", color: "var(--signal)", values: wind, format: s },
+        { label: "Gust", color: "var(--accent)", values: gust, format: s },
       ],
+      extra: (i) => [{ label: "Hour", value: when14(i) }],
       stats: [
         { label: "Peak gust", value: s(gust[hi]), sub: when14(hi) },
-        { label: "Windiest", value: s(Math.max(...wind)), sub: "daily sustained" },
-        { label: "Calmest", value: s(Math.min(...wind)), sub: "daily sustained" },
+        { label: "Windiest", value: s(Math.max(...wind)), sub: "hourly sustained" },
+        { label: "Calmest", value: s(Math.min(...wind)), sub: "hourly sustained" },
       ],
       peak: { label: "Peak gust", value: s(gust[hi]), when: when14(hi) },
-      trough: { label: "Calmest day", value: s(gust[lo]), when: when14(lo) },
+      trough: { label: "Calmest hour", value: s(gust[lo]), when: when14(lo) },
       headline: {
         status: gMax >= 75 ? "Damaging gusts" : gMax >= 50 ? "Windy" : "Light",
         tone: gMax >= 75 ? "bad" : gMax >= 50 ? "warn" : "good",
@@ -536,16 +561,17 @@ function buildView(
       measures,
     }
   }
-  const prob = daily.map((d) => d.precipitationProbability)
-  const rain = daily.map((d) => d.precipitationSum)
-  const { hi } = argExtremes(rain)
+  const prob = flat.map((h) => h.precipitationProbability)
+  const hum = flat.map((h) => h.humidity)
+  const cloud = flat.map((h) => h.cloudCover)
+  const { hi } = argExtremes(prob)
   const { lo } = argExtremes(prob)
-  const wetDays = prob.filter((p) => p >= 40).length
+  const wetHours = prob.filter((p) => p >= 40).length
   const measures: Measure[] = []
-  if (rain[hi] > 0 && prob[hi] >= 50) measures.push({ tone: "warn", text: `Wettest day ${when14(hi)} (${rain[hi].toFixed(1)} ${precipUnit(units)}) — plan for wet-weather logistics and drainage checks.` })
-  if (wetDays === 0) measures.push({ tone: "good", text: "Dry fortnight — no significant rain days flagged." })
-  else measures.push({ tone: "info", text: `${wetDays} day(s) carry ≥ 40% rain chance — keep flexible outdoor scheduling.` })
-  measures.push({ tone: "info", text: "Days 7–14 are AI-projected — rainfall confidence narrows nearer the date." })
+  if (prob[hi] >= 50) measures.push({ tone: "warn", text: `Wettest window ${when14(hi)} (${pct(prob[hi])} chance) — plan for wet-weather logistics and drainage checks.` })
+  if (wetHours === 0) measures.push({ tone: "good", text: "Dry fortnight — no significant rain hours flagged." })
+  else measures.push({ tone: "info", text: `${wetHours} hour(s) carry ≥ 40% rain chance — keep flexible outdoor scheduling.` })
+  measures.push({ tone: "info", text: "Days 7–14 are AI-projected, shown hour-by-hour — rainfall confidence narrows nearer the date." })
   return {
     n,
     boundary,
@@ -555,22 +581,27 @@ function buildView(
     projectionNote,
     series: [
       { label: "Rain %", color: "var(--accent)", values: prob, format: pct },
-      { label: "Humidity", color: "var(--signal)", values: daily.map((d) => d.humidityMean), format: pct },
+      { label: "Humidity", color: "var(--signal)", values: hum, format: pct },
+    ],
+    bars: { label: "Cloud cover", color: "var(--muted-foreground)", values: cloud, format: pct, max: 100 },
+    extra: (i) => [
+      { label: "Cloud cover", value: pct(cloud[i]) },
+      { label: "Hour", value: when14(i) },
     ],
     stats: [
-      { label: "Wettest day", value: `${rain[hi].toFixed(1)} ${precipUnit(units)}`, sub: when14(hi) },
-      { label: "Rain days", value: `${wetDays}`, sub: "≥ 40% chance" },
-      { label: "Peak chance", value: pct(Math.max(...prob)), sub: "across 14 days" },
+      { label: "Peak rain chance", value: pct(Math.max(...prob)), sub: when14(hi) },
+      { label: "Rain hours", value: `${wetHours}`, sub: "≥ 40% chance" },
+      { label: "Avg cloud", value: pct(cloud.reduce((a, b) => a + b, 0) / n), sub: "fortnight mean" },
     ],
-    peak: { label: "Wettest day", value: `${rain[hi].toFixed(1)} ${precipUnit(units)}`, when: when14(hi) },
-    trough: { label: "Driest day", value: pct(prob[lo]), when: when14(lo) },
+    peak: { label: "Wettest window", value: pct(prob[hi]), when: when14(hi) },
+    trough: { label: "Driest hour", value: pct(prob[lo]), when: when14(lo) },
     headline: {
-      status: wetDays === 0 ? "Dry fortnight" : `${wetDays} wet day(s)`,
-      tone: wetDays === 0 ? "good" : "info",
+      status: wetHours === 0 ? "Dry fortnight" : `${wetHours} wet hour(s)`,
+      tone: wetHours === 0 ? "good" : "info",
       comment:
-        wetDays === 0
-          ? "No significant rain days flagged across the fortnight."
-          : `${wetDays} day(s) carry ≥ 40% rain chance; wettest ${when14(hi)} (${rain[hi].toFixed(1)} ${precipUnit(units)}).`,
+        wetHours === 0
+          ? "No significant rain hours flagged across the fortnight."
+          : `${wetHours} hour(s) carry ≥ 40% rain chance; wettest ${when14(hi)} (${pct(prob[hi])}).`,
     },
     measures,
   }
@@ -592,7 +623,8 @@ export function LiveTrend() {
   // then sliced client-side so it also feeds the 14-day horizon.
   const solarKey = location ? `/api/solar?lat=${location.latitude}&lon=${location.longitude}&days=14` : null
   const { data: solar } = useSWR<SolarPayload>(solarKey, solarFetcher, {
-    refreshInterval: 3 * 60 * 1000,
+    // Same 1-minute cadence as the weather + alert feeds so every panel updates together.
+    refreshInterval: 60 * 1000,
     keepPreviousData: true,
   })
 
@@ -612,7 +644,11 @@ export function LiveTrend() {
     return <Panel className="h-[42rem] animate-pulse p-0" />
   }
 
-  const aheadCount = view ? view.n - 1 - (view.nowIndex >= 0 ? view.nowIndex : 0) : 0
+  const aheadCount = view
+    ? horizon === "14d"
+      ? Math.max(0, dayCount - 1)
+      : view.n - 1 - (view.nowIndex >= 0 ? view.nowIndex : 0)
+    : 0
 
   return (
     <Panel className="station-rise flex flex-col overflow-hidden p-0">
@@ -862,7 +898,9 @@ function MetricCard({
       <p className={cn("flex items-center gap-1 font-mono text-sm font-semibold tabular-nums", arrowClass)}>
         <Arrow className="h-4 w-4" aria-hidden="true" />
         {serie.format(serie.values[exIdx])}
-        <span className="text-muted-foreground">{ahead > 0 ? `at +${ahead}${unit}` : "now"}</span>
+        <span className="text-muted-foreground">
+          {ahead > 0 ? `at +${unit === "d" ? Math.max(1, Math.round(ahead / 24)) : ahead}${unit}` : "now"}
+        </span>
       </p>
     </div>
   )
@@ -891,7 +929,7 @@ function HeaderTrend({ view, active, horizon }: { view: View; active: number | n
   // Countdown label relative to "now" — reads naturally in the chip.
   const peakLabel = (() => {
     if (horizon === "14d") {
-      const d = peakIdx - view.nowIndex
+      const d = Math.round((peakIdx - view.nowIndex) / 24)
       return d <= 0 ? "Peaks today" : `Peaks in ${d}d`
     }
     if (view.nowIndex < 0) return "Peak" // projected future day — no live "now" anchor
