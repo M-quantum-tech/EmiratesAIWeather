@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CloudSun,
+  LineChart,
   Pause,
   Play,
   Radar,
@@ -34,13 +35,25 @@ type Frame = { time: number; path: string }
 type Maps = { host: string; radar: Frame[]; satellite: Frame[] }
 type Layer = "wind" | "radar" | "satellite" | "warnings"
 
-// Official UAE National Center of Meteorology (Ghaith / Al Bahar) portals. These
-// government viewers block embedding, so they remain reference links below the live map.
+// Official UAE National Center of Meteorology (Ghaith / Al Bahar) portals plus the
+// meteoblue satellite view and the Open-Meteo trend source used for AI prediction.
+// These government viewers block embedding, so they remain deep-link references below
+// the live map.
 const NCM_LINKS = [
-  { label: "Radar Merge UAE", href: "https://ghaith.ncm.gov.ae/?lang=en#trajectory,radar-Merge-UAE", icon: Radar },
-  { label: "COSMO-UAE Wind", href: "https://ghaith.ncm.gov.ae/?lang=en#cosmo-uae-wind", icon: Wind },
   { label: "Official Warnings", href: "https://www.ncm.gov.ae/maps-warnings?lang=en", icon: AlertTriangle },
-  { label: "Satellite HD Global", href: "https://ghaith.ncm.gov.ae/?lang=en#satellite-hd-global", icon: Satellite },
+  { label: "Diverging Winds · COSMO-UAE", href: "https://ghaith.ncm.gov.ae/?lang=en#cosmo-uae-wind", icon: Wind },
+  {
+    label: "Clouds · Radar-Merge GCC",
+    href: "https://ghaith.ncm.gov.ae/?lang=en#radar-Merge-GCC,trajectory",
+    icon: CloudSun,
+  },
+  { label: "Rain / Hail Radar · GCC", href: "https://ghaith.ncm.gov.ae/?lang=en#radar-Merge-GCC,hail", icon: Radar },
+  {
+    label: "meteoblue Satellite",
+    href: "https://www.meteoblue.com/en/weather/maps#map=satellite~radar~none~none~none&coords=4.51/24.4/54.4",
+    icon: Satellite,
+  },
+  { label: "Open-Meteo Trend + AI", href: "https://open-meteo.com/", icon: LineChart },
 ] as const
 
 // NCM Al Bahar-style reflectivity scale (light → extreme): green for moderate rain,
@@ -256,7 +269,7 @@ export function NcmSources() {
         center: [24.2, 55.2],
         zoom: 8,
         minZoom: 4,
-        maxZoom: 12,
+        maxZoom: 15,
         zoomControl: true,
         attributionControl: false,
         scrollWheelZoom: true,
@@ -266,7 +279,7 @@ export function NcmSources() {
       // UAE labels to Arabic) and a muted dark palette that matches the theme.
       basemapRef.current = L.tileLayer(
         "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
-        { maxZoom: 12, attribution: "&copy; Esri, HERE, Garmin, OpenStreetMap contributors" },
+        { maxZoom: 16, attribution: "&copy; Esri, HERE, Garmin, OpenStreetMap contributors" },
       ).addTo(map)
       // High-z pane so city labels sit above the shaded warning polygons (NCM look).
       map.createPane("labels")
@@ -278,7 +291,7 @@ export function NcmSources() {
       // English reference labels on a top pane so cities read over overlays.
       L.tileLayer(
         "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
-        { maxZoom: 12, pane: "labels" },
+        { maxZoom: 16, pane: "labels" },
       ).addTo(map)
       mapRef.current = map
       if (!cancelled) setMapReady(true)
@@ -328,7 +341,8 @@ export function NcmSources() {
     } else {
       overlayRef.current = L.tileLayer(url, {
         opacity: layer === "radar" ? 0.92 : 0.82,
-        maxZoom: 12,
+        maxZoom: 15,
+        maxNativeZoom: 12,
         zIndex: 400,
       }).addTo(map)
     }
@@ -342,7 +356,8 @@ export function NcmSources() {
       } else {
         mergeRef.current = L.tileLayer(rurl, {
           opacity: 0.9,
-          maxZoom: 12,
+          maxZoom: 15,
+          maxNativeZoom: 12,
           zIndex: 410,
         }).addTo(map)
       }
@@ -372,9 +387,9 @@ export function NcmSources() {
       mergeRef.current = null
     }
     if (basemapRef.current) {
-      // Fade the dark basemap on radar/clouds/warnings so the NCM blue tint shows
-      // through instead of a bleak-black map. Wind covers the map with its heatmap.
-      basemapRef.current.setOpacity(layer === "wind" ? 1 : layer === "warnings" ? 0.22 : 0.4)
+      // Keep the clean dark cartographic basemap fully visible for warnings (no blue
+      // wash) so the map reads crisply; fade it a little under the radar/cloud tiles.
+      basemapRef.current.setOpacity(layer === "wind" ? 1 : layer === "warnings" ? 0.95 : 0.4)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layer])
@@ -440,27 +455,20 @@ export function NcmSources() {
     display.forEach((w) => levelByName.set(w.name, w.level))
 
     const group = L.layerGroup()
-    // Medium-blue "water" field echoing the NCM Al Bahar basemap.
-    L.rectangle(
-      [
-        [12, 44],
-        [32, 64],
-      ],
-      { stroke: false, fillColor: "#2f5f96", fillOpacity: 0.9, interactive: false },
-    ).addTo(group)
 
-    // All emirates get a darker-blue land fill with crisp borders visible across the
-    // whole country; warned emirates are shaded by severity (yellow / orange / red).
+    // Clean look: no blue water/land wash — the dark cartographic basemap shows through.
+    // Unwarned emirates keep only a subtle outline; warned emirates are shaded by
+    // severity (yellow / orange / red) over the basemap.
     const geoLayer = L.geoJSON(geoRef.current, {
       style: (feature: any) => {
         const lvl = levelByName.get(feature.properties.name) ?? "green"
         const warned = lvl !== "green"
         return {
-          color: warned ? "#ffffff" : "#a9c4e0",
-          weight: warned ? 1.6 : 0.9,
-          opacity: warned ? 0.95 : 0.85,
-          fillColor: warned ? WARN_FILL[lvl] : "#274d78",
-          fillOpacity: warned ? 0.85 : 0.9,
+          color: warned ? "#ffffff" : "#7d96b6",
+          weight: warned ? 1.6 : 0.8,
+          opacity: warned ? 0.95 : 0.45,
+          fillColor: warned ? WARN_FILL[lvl] : "transparent",
+          fillOpacity: warned ? 0.55 : 0,
         }
       },
       onEachFeature: (feature: any, lyr: any) => {
@@ -518,7 +526,7 @@ export function NcmSources() {
 
     // City labels on top (dedicated high-z pane) for the NCM cartographic look.
     L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/dark_only_labels/{z}/{x}/{y}{r}.png", {
-      maxZoom: 12,
+      maxZoom: 16,
       pane: "labels",
     }).addTo(group)
 
@@ -538,9 +546,9 @@ export function NcmSources() {
             return {
               color: warned ? "#ffffff" : "#9fb3cc",
               weight: warned ? 1.8 : 1.0,
-              opacity: 0.95,
-              fillColor: WARN_FILL[lvl],
-              fillOpacity: warned ? 0.62 : 0.18,
+              opacity: warned ? 0.95 : 0.5,
+              fillColor: warned ? WARN_FILL[lvl] : "transparent",
+              fillOpacity: warned ? 0.5 : 0,
             }
           })
         } else {
@@ -552,9 +560,9 @@ export function NcmSources() {
             return {
               color: warned ? "#ffffff" : "#6f8fb0",
               weight: warned ? 1.4 : 0.7,
-              opacity: warned ? 0.9 : 0.5,
-              fillColor: WARN_FILL[lvl],
-              fillOpacity: warned ? 0.62 : 0.28,
+              opacity: warned ? 0.9 : 0.4,
+              fillColor: warned ? WARN_FILL[lvl] : "transparent",
+              fillOpacity: warned ? 0.5 : 0,
             }
           })
         }
@@ -680,7 +688,7 @@ export function NcmSources() {
         <div
         ref={containerRef}
         className="h-[80vh] min-h-[620px] w-full"
-        style={{ backgroundColor: layer === "warnings" ? "#2f5f96" : "#3a4a63" }}
+        style={{ backgroundColor: layer === "warnings" ? "#0d1626" : "#3a4a63" }}
           role="img"
           aria-label={
             isWarnings

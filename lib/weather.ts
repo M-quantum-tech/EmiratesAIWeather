@@ -461,9 +461,17 @@ const ALERT_META: Record<AlertLevel, { code: string; emoji: string; title: strin
 }
 
 /**
- * Four-level weather alert model. Combines the strongest derived advisory with raw
- * severity signals (gusts, rain, heat, storms, air quality) into a single level:
- * green = safe, yellow/orange = escalating warnings, red = take shelter.
+ * Four-level weather alert model, following the NCM-style escalation rules:
+ *  • Level 1 GREEN  — a hazard exists but is still far out: intensifying convection
+ *    within 60 km, gusts over 15 m/s (54 km/h), diverging wind within 50 km, or rain
+ *    over 1 mm.
+ *  • Level 2 YELLOW — intensifying convection within 30 km, an on-site alarm, or a
+ *    satellite / NCM warning.
+ *  • Level 3 ORANGE — convection within 20 km plus Level 2, radar precipitation, or an
+ *    NCM alert.
+ *  • Level 4 RED    — convection within 20 km plus Level 3 with radar precipitation or
+ *    an active NCM alert — take shelter.
+ * Raw signals (gusts, rain, heat, storms, air quality) are scored into these tiers.
  */
 export function buildAlert(data: WeatherPayload): WeatherAlert {
   const { current, hourly, air, units } = data
@@ -506,8 +514,11 @@ export function buildAlert(data: WeatherPayload): WeatherAlert {
   // Live background-data hazards (values shown in native units) with their own severity.
   const wind = units === "metric" ? current.windSpeed : current.windSpeed * 1.609
   const precipNow = units === "metric" ? current.precipitation : current.precipitation * 25.4
-  const bandWind = (v: number): AlertLevel => (v >= 65 ? "red" : v >= 45 ? "orange" : v >= 30 ? "yellow" : "green")
-  const bandRain = (v: number): AlertLevel => (v >= 30 ? "red" : v >= 15 ? "orange" : v >= 5 ? "yellow" : "green")
+  // Gust bands follow the NCM rule set: yellow onset at 15 m/s (54 km/h), orange at
+  // 20 m/s (72 km/h), red at 25 m/s (90 km/h). Rain paints yellow above the 1 mm
+  // convective-shower threshold, escalating with accumulation.
+  const bandWind = (v: number): AlertLevel => (v >= 90 ? "red" : v >= 72 ? "orange" : v >= 54 ? "yellow" : "green")
+  const bandRain = (v: number): AlertLevel => (v >= 30 ? "red" : v >= 10 ? "orange" : v >= 1 ? "yellow" : "green")
   const bandPrecip = (v: number): AlertLevel => (v >= 7.6 ? "red" : v >= 2.5 ? "orange" : v >= 0.5 ? "yellow" : "green")
 
   const hazards: Hazard[] = [
