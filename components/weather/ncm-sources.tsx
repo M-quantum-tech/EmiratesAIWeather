@@ -180,12 +180,12 @@ export function NcmSources() {
     return `${host}${f.path}/512/{z}/{x}/{y}/6/1_1.png`
   }
 
-  // Load and refresh RainViewer frame catalogue every 5 minutes.
+  // Load and refresh RainViewer frame catalogue every minute (single unified cycle).
   useEffect(() => {
     let cancelled = false
     async function load() {
       try {
-        const res = await fetch("https://api.rainviewer.com/public/weather-maps.json")
+        const res = await fetch("https://api.rainviewer.com/public/weather-maps.json", { cache: "no-store" })
         if (!res.ok) return
         const json = await res.json()
         const radar: Frame[] = [...(json.radar?.past ?? []), ...(json.radar?.nowcast ?? [])].map((f: any) => ({
@@ -199,14 +199,14 @@ export function NcmSources() {
       }
     }
     load()
-    const id = setInterval(load, 5 * 60 * 1000)
+    const id = setInterval(load, 60 * 1000)
     return () => {
       cancelled = true
       clearInterval(id)
     }
   }, [])
 
-  // Load and refresh the live UAE wind forecast every 10 minutes (Windy-style layer).
+  // Load and refresh the live UAE wind forecast every minute (Windy-style layer).
   useEffect(() => {
     const controller = new AbortController()
     async function load() {
@@ -222,14 +222,14 @@ export function NcmSources() {
       }
     }
     load()
-    const id = setInterval(load, 10 * 60 * 1000)
+    const id = setInterval(load, 60 * 1000)
     return () => {
       controller.abort()
       clearInterval(id)
     }
   }, [])
 
-  // Load the real hourly-forecast warning timeline; refresh every 10 minutes.
+  // Load the real hourly-forecast warning timeline; refresh every minute (unified cycle).
   useEffect(() => {
     const controller = new AbortController()
     async function load() {
@@ -244,7 +244,7 @@ export function NcmSources() {
       }
     }
     load()
-    const id = setInterval(load, 10 * 60 * 1000)
+    const id = setInterval(load, 60 * 1000)
     return () => {
       controller.abort()
       clearInterval(id)
@@ -705,7 +705,7 @@ export function NcmSources() {
               ))}
               <p className="rounded-md border border-dashed border-border bg-card/70 px-3 py-2 text-[0.625rem] leading-relaxed text-muted-foreground">
                 Real 24-hour warning timeline derived from live Open-Meteo forecast for the seven emirates, playing one
-                hour every 2 seconds. Refreshes every 10 minutes.
+                hour every 2 seconds. Refreshes every minute — same cycle as wind, radar &amp; clouds.
               </p>
             </div>
 

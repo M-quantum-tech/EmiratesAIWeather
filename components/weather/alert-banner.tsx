@@ -460,30 +460,31 @@ export function AlertBanner() {
           <button
             type="button"
             onClick={acknowledge}
-            disabled={!alarmActive}
             aria-label={
-              alarmActive ? `Reset ${alert.title} alarm and silence buzzer now` : `Buzzer armed at ${alert.title} level`
+              alarmActive
+                ? `Reset ${alert.title} alarm and silence buzzer now`
+                : `Buzzer standing by at ${alert.title} level — press to silence when it sounds`
             }
             className={cn(
-              "relative inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 font-mono text-[0.625rem] font-bold uppercase tracking-wider transition-all",
+              "relative inline-flex items-center gap-2 rounded-xl border-2 px-4 py-2.5 font-mono text-xs font-bold uppercase tracking-wider transition-all",
               alarmActive
-                ? cn(styles.chip, styles.text, "tier-blink shadow-sm")
-                : cn("border-border bg-background/60", styles.text, "cursor-default opacity-80"),
+                ? cn(styles.chip, styles.text, "tier-blink shadow-md hover:scale-[1.03] active:scale-95")
+                : cn("border-border bg-background/60", styles.text, "hover:bg-secondary active:scale-95"),
             )}
           >
             {alarmActive ? (
               <>
                 <span
-                  className={cn("absolute -left-1 -top-1 h-2.5 w-2.5 animate-ping rounded-full", styles.solid)}
+                  className={cn("absolute -left-1 -top-1 h-3 w-3 animate-ping rounded-full", styles.solid)}
                   aria-hidden="true"
                 />
-                <BellRing className="h-3.5 w-3.5" aria-hidden="true" />
-                Acknowledge
+                <BellRing className="h-5 w-5" aria-hidden="true" />
+                Silence buzzer
               </>
             ) : (
               <>
-                <Check className="h-3.5 w-3.5" aria-hidden="true" />
-                Armed · {alert.title}
+                <BellRing className="h-5 w-5 opacity-70" aria-hidden="true" />
+                Silence buzzer
               </>
             )}
           </button>
@@ -507,13 +508,13 @@ export function AlertBanner() {
             onClick={acknowledge}
             aria-label="Reset alarm and silence buzzer now"
             className={cn(
-              "ml-auto inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 font-mono text-[0.625rem] font-bold uppercase tracking-wider transition-opacity hover:opacity-80",
+              "ml-auto inline-flex items-center gap-2 rounded-xl border-2 px-5 py-2.5 font-mono text-sm font-bold uppercase tracking-wider shadow-md transition-transform hover:scale-[1.03] active:scale-95",
               styles.chip,
               styles.text,
             )}
           >
-            <Check className="h-3.5 w-3.5" aria-hidden="true" />
-            Reset &amp; silence
+            <Check className="h-5 w-5" aria-hidden="true" />
+            Silence buzzer
           </button>
         </div>
       ) : null}
