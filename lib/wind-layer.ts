@@ -1,6 +1,6 @@
-// A custom Leaflet canvas layer that paints a Windy-style wind map:
-//   1) a smooth wind-speed heatmap (bilinear-upscaled from a coarse grid)
-//   2) a uniform screen grid of small white direction arrows
+// A custom Leaflet canvas layer that paints an NCM Ghaith COSMO-UAE style wind map:
+//   1) a dim, smooth wind-speed field (bilinear-upscaled from a coarse grid)
+//   2) animated particle streamlines that flow along the wind vectors and fade into trails
 // It is created client-side after Leaflet is dynamically imported.
 
 import type { WindGrid } from "./wind-field"
@@ -59,49 +59,87 @@ function sample(g: WindGrid, lat: number, lon: number) {
   return { speed: bil(g.speed), u: bil(g.u), v: bil(g.v) }
 }
 
+type Particle = { x: number; y: number; age: number; life: number }
+
 export function createWindLayer(L: any, grid: WindGrid) {
   const WindLayer = L.Layer.extend({
     initialize(this: any, g: WindGrid) {
       this._grid = g
+      this._particles = [] as Particle[]
     },
     setGrid(this: any, g: WindGrid) {
       this._grid = g
-      if (this._map) this._render()
+      if (this._map) {
+        this._drawHeat()
+        this._seed()
+      }
     },
     onAdd(this: any, map: any) {
       this._map = map
-      const c = (this._canvas = L.DomUtil.create("canvas", "leaflet-wind-canvas leaflet-layer"))
-      c.style.position = "absolute"
+      const pane = map.getPanes().overlayPane
+
+      // Underlay: static-ish speed field, redrawn only when the view settles.
+      const heat = (this._heat = L.DomUtil.create("canvas", "leaflet-wind-heat leaflet-layer"))
+      heat.style.position = "absolute"
+      // Overlay: animated particle trails, redrawn every frame.
+      const part = (this._part = L.DomUtil.create("canvas", "leaflet-wind-part leaflet-layer"))
+      part.style.position = "absolute"
+
       const s = map.getSize()
-      c.width = s.x
-      c.height = s.y
-      map.getPanes().overlayPane.appendChild(c)
-      this._glue = () => this._reposition()
-      this._draw = () => {
-        this._reposition()
-        this._render()
+      for (const c of [heat, part]) {
+        c.width = s.x
+        c.height = s.y
+        pane.appendChild(c)
       }
-      // Keep the canvas glued to geography during pan/zoom; full redraw when settled.
+
+      this._glue = () => this._reposition()
+      this._settle = () => {
+        this._reposition()
+        this._drawHeat()
+        this._seed()
+      }
+      // Keep both canvases glued to geography during motion; rebuild when settled.
       map.on("move zoomanim", this._glue)
-      map.on("moveend zoomend resize viewreset", this._draw)
+      map.on("moveend zoomend resize viewreset", this._settle)
+      // Suspend the particle sim mid-gesture so trails do not smear across a moving frame.
+      map.on("movestart zoomstart", () => {
+        this._moving = true
+      })
+      map.on("moveend zoomend", () => {
+        this._moving = false
+      })
+
       this._reposition()
-      this._render()
+      this._drawHeat()
+      this._seed()
+      this._running = true
+      this._loop()
     },
     onRemove(this: any, map: any) {
+      this._running = false
+      if (this._raf) cancelAnimationFrame(this._raf)
       map.off("move zoomanim", this._glue)
-      map.off("moveend zoomend resize viewreset", this._draw)
-      L.DomUtil.remove(this._canvas)
+      map.off("moveend zoomend resize viewreset", this._settle)
+      L.DomUtil.remove(this._heat)
+      L.DomUtil.remove(this._part)
     },
     _reposition(this: any) {
       const tl = this._map.containerPointToLayerPoint([0, 0])
-      L.DomUtil.setPosition(this._canvas, tl)
       const s = this._map.getSize()
-      if (this._canvas.width !== s.x) this._canvas.width = s.x
-      if (this._canvas.height !== s.y) this._canvas.height = s.y
+      for (const c of [this._heat, this._part]) {
+        L.DomUtil.setPosition(c, tl)
+        if (c.width !== s.x) c.width = s.x
+        if (c.height !== s.y) c.height = s.y
+      }
     },
-    _render(this: any) {
+    _inGrid(this: any, lat: number, lng: number) {
+      const g = this._grid
+      return lng >= g.lo1 && lng <= g.lo2 && lat <= g.la1 && lat >= g.la2
+    },
+    // Paint the coarse grid into a tiny canvas, then bilinear-upscale it dimly.
+    _drawHeat(this: any) {
       const map = this._map
-      const c = this._canvas
+      const c = this._heat
       const g = this._grid
       if (!map || !c || !g) return
       const ctx = c.getContext("2d")
@@ -109,7 +147,6 @@ export function createWindLayer(L: any, grid: WindGrid) {
       const s = map.getSize()
       ctx.clearRect(0, 0, s.x, s.y)
 
-      // 1) Heatmap — paint the coarse grid into a tiny canvas, then bilinear-upscale.
       const off = document.createElement("canvas")
       off.width = g.nx
       off.height = g.ny
@@ -129,67 +166,93 @@ export function createWindLayer(L: any, grid: WindGrid) {
       const se = map.latLngToContainerPoint([g.la2, g.lo2])
       ctx.imageSmoothingEnabled = true
       ctx.imageSmoothingQuality = "high"
-      ctx.globalAlpha = 0.85
+      // Dim field so the bright particle trails read as the primary layer (NCM look).
+      ctx.globalAlpha = 0.5
       ctx.drawImage(off, nw.x, nw.y, se.x - nw.x, se.y - nw.y)
       ctx.globalAlpha = 1
-
-      // 2) Uniform arrow grid — direction only, larger glyphs for readability.
-      // Each arrow is stroked twice: a dark outline underneath for contrast against
-      // the bright heatmap, then a bright white arrow on top.
-      const step = 58
-      const len = 12
-      const head = 8
-      ctx.lineCap = "round"
-      ctx.lineJoin = "round"
-      for (let y = step / 2; y < s.y; y += step) {
-        for (let x = step / 2; x < s.x; x += step) {
-          const ll = map.containerPointToLatLng([x, y])
-          if (ll.lng < g.lo1 || ll.lng > g.lo2 || ll.lat > g.la1 || ll.lat < g.la2) continue
-          const sm = sample(g, ll.lat, ll.lng)
-          if (sm.speed < 0.4) continue
-          // Screen coords: x = east, y = down, so use -v for the northward part.
-          const ang = Math.atan2(-sm.v, sm.u)
-          const dx = Math.cos(ang)
-          const dy = Math.sin(ang)
-          const tx = x - dx * len
-          const ty = y - dy * len
-          const hx = x + dx * len
-          const hy = y + dy * len
-          const bx1 = hx + Math.cos(ang + 2.6) * head
-          const by1 = hy + Math.sin(ang + 2.6) * head
-          const bx2 = hx + Math.cos(ang - 2.6) * head
-          const by2 = hy + Math.sin(ang - 2.6) * head
-
-          // Dark contrast outline
-          ctx.strokeStyle = "rgba(6,12,26,0.75)"
-          ctx.fillStyle = "rgba(6,12,26,0.75)"
-          ctx.lineWidth = 4.5
-          ctx.beginPath()
-          ctx.moveTo(tx, ty)
-          ctx.lineTo(hx, hy)
-          ctx.stroke()
-          ctx.beginPath()
-          ctx.moveTo(hx, hy)
-          ctx.lineTo(bx1, by1)
-          ctx.lineTo(bx2, by2)
-          ctx.closePath()
-          ctx.fill()
-
-          // Bright arrow on top
-          ctx.strokeStyle = "rgba(255,255,255,0.96)"
-          ctx.fillStyle = "rgba(255,255,255,0.96)"
-          ctx.lineWidth = 2.2
-          ctx.beginPath()
-          ctx.moveTo(tx, ty)
-          ctx.lineTo(hx, hy)
-          ctx.stroke()
-          ctx.beginPath()
-          ctx.moveTo(hx, hy)
-          ctx.lineTo(bx1, by1)
-          ctx.lineTo(bx2, by2)
-          ctx.closePath()
-          ctx.fill()
+    },
+    _count(this: any) {
+      const s = this._map.getSize()
+      // ~1 particle per 1,300 px², capped for performance.
+      return Math.max(300, Math.min(2600, Math.round((s.x * s.y) / 1300)))
+    },
+    _spawn(this: any): Particle {
+      const map = this._map
+      const s = map.getSize()
+      // Rejection-sample screen points that fall inside the wind grid.
+      for (let tries = 0; tries < 12; tries++) {
+        const x = Math.random() * s.x
+        const y = Math.random() * s.y
+        const ll = map.containerPointToLatLng([x, y])
+        if (this._inGrid(ll.lat, ll.lng)) {
+          return { x, y, age: 0, life: 40 + Math.random() * 90 }
         }
+      }
+      return { x: Math.random() * s.x, y: Math.random() * s.y, age: 0, life: 40 + Math.random() * 90 }
+    },
+    _seed(this: any) {
+      const n = this._count()
+      const arr: Particle[] = []
+      for (let i = 0; i < n; i++) arr.push(this._spawn())
+      this._particles = arr
+      // Clear any lingering trails from the previous view.
+      const pctx = this._part?.getContext("2d")
+      if (pctx) pctx.clearRect(0, 0, this._part.width, this._part.height)
+    },
+    _loop(this: any) {
+      if (!this._running) return
+      this._raf = requestAnimationFrame(() => this._loop())
+      const map = this._map
+      const part = this._part
+      const g = this._grid
+      if (!map || !part || !g) return
+      const ctx = part.getContext("2d")
+      if (!ctx) return
+      const s = map.getSize()
+
+      // Do not advance the sim while the map is being dragged/zoomed.
+      if (this._moving) return
+
+      // Fade existing trails without darkening the heatmap beneath (transparent erase).
+      ctx.globalCompositeOperation = "destination-out"
+      ctx.fillStyle = "rgba(0,0,0,0.10)"
+      ctx.fillRect(0, 0, s.x, s.y)
+      ctx.globalCompositeOperation = "source-over"
+
+      ctx.lineCap = "round"
+      ctx.lineWidth = 1.4
+
+      const particles: Particle[] = this._particles
+      for (let i = 0; i < particles.length; i++) {
+        const p = particles[i]
+        const ll = map.containerPointToLatLng([p.x, p.y])
+        if (!this._inGrid(ll.lat, ll.lng) || p.age > p.life) {
+          particles[i] = this._spawn()
+          continue
+        }
+        const sm = sample(g, ll.lat, ll.lng)
+        const spd = sm.speed
+        // Screen coords: x east, y down → use -v for the northward component.
+        const ang = Math.atan2(-sm.v, sm.u)
+        // Step length scales gently with speed for a lively but readable flow.
+        const step = 0.6 + Math.min(spd, 30) * 0.22
+        const nx = p.x + Math.cos(ang) * step
+        const ny = p.y + Math.sin(ang) * step
+
+        const [r, gg, b] = windColor(spd)
+        // Brighten toward white for contrast, blended with the speed color.
+        const cr = Math.round(r + (255 - r) * 0.45)
+        const cg = Math.round(gg + (255 - gg) * 0.45)
+        const cb = Math.round(b + (255 - b) * 0.45)
+        ctx.strokeStyle = `rgba(${cr},${cg},${cb},0.9)`
+        ctx.beginPath()
+        ctx.moveTo(p.x, p.y)
+        ctx.lineTo(nx, ny)
+        ctx.stroke()
+
+        p.x = nx
+        p.y = ny
+        p.age += 1
       }
     },
   })
