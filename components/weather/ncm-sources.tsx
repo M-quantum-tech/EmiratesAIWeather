@@ -356,7 +356,9 @@ export function NcmSources() {
       overlayRef.current.setUrl(url)
     } else {
       overlayRef.current = L.tileLayer(url, {
-        opacity: layer === "radar" ? 0.92 : 0.82,
+        // Clouds/IR rendered near-opaque and radar bold so the imagery reads big and
+        // vivid (NCM Radar-Merge-Sat look), not a faint wash over the basemap.
+        opacity: layer === "radar" ? 0.95 : 0.92,
         maxZoom: 15,
         maxNativeZoom: 12,
         zIndex: 400,
@@ -371,7 +373,7 @@ export function NcmSources() {
         mergeRef.current.setUrl(rurl)
       } else {
         mergeRef.current = L.tileLayer(rurl, {
-          opacity: 0.9,
+          opacity: 0.95,
           maxZoom: 15,
           maxNativeZoom: 12,
           zIndex: 410,
@@ -408,7 +410,9 @@ export function NcmSources() {
       const light = layer === "warnings"
       basemapRef.current.setUrl(light ? BASE_LIGHT : BASE_DARK)
       referenceRef.current.setUrl(light ? REF_LIGHT : REF_DARK)
-      basemapRef.current.setOpacity(layer === "radar" || layer === "satellite" ? 0.55 : 1)
+      // Fade the basemap harder under radar/clouds so the coloured imagery dominates
+      // the frame (bigger, bolder cloud field) rather than competing with map detail.
+      basemapRef.current.setOpacity(layer === "radar" || layer === "satellite" ? 0.4 : 1)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layer])
@@ -747,13 +751,23 @@ export function NcmSources() {
                   <span key={s.c} className="flex-1" style={{ backgroundColor: s.c }} aria-hidden="true" />
                 ))}
               </div>
-              <div className="mt-1 flex justify-between font-mono text-[0.5rem] uppercase tracking-wide text-white/70">
-                {scale
-                  .filter((s) => s.label)
-                  .map((s) => (
-                    <span key={s.label}>{s.label}</span>
-                  ))}
-              </div>
+              {/* Wind field shows a clean colour ramp with only low/high anchors — the
+                  dense numeric ticks are dropped per NCM's diverging-wind look. Radar and
+                  cloud legends keep their intensity labels. */}
+              {layer === "wind" ? (
+                <div className="mt-1 flex justify-between font-mono text-[0.5rem] uppercase tracking-wide text-white/70">
+                  <span>Calm</span>
+                  <span>Strong</span>
+                </div>
+              ) : (
+                <div className="mt-1 flex justify-between font-mono text-[0.5rem] uppercase tracking-wide text-white/70">
+                  {scale
+                    .filter((s) => s.label)
+                    .map((s) => (
+                      <span key={s.label}>{s.label}</span>
+                    ))}
+                </div>
+              )}
             </div>
 
             {layer === "radar" && (
