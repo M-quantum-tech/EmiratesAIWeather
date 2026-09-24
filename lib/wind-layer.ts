@@ -166,15 +166,17 @@ export function createWindLayer(L: any, grid: WindGrid) {
       const se = map.latLngToContainerPoint([g.la2, g.lo2])
       ctx.imageSmoothingEnabled = true
       ctx.imageSmoothingQuality = "high"
-      // Dim field so the bright particle trails read as the primary layer (NCM look).
-      ctx.globalAlpha = 0.5
+      // Richer colour field (NCM COSMO-UAE look) while still letting the bright
+      // particle trails read as the primary animated layer on top.
+      ctx.globalAlpha = 0.62
       ctx.drawImage(off, nw.x, nw.y, se.x - nw.x, se.y - nw.y)
       ctx.globalAlpha = 1
     },
     _count(this: any) {
       const s = this._map.getSize()
-      // ~1 particle per 1,300 px², capped for performance.
-      return Math.max(300, Math.min(2600, Math.round((s.x * s.y) / 1300)))
+      // Denser streamlines for the NCM COSMO-UAE flow (~1 particle per 1,050 px²),
+      // capped for performance.
+      return Math.max(400, Math.min(3200, Math.round((s.x * s.y) / 1050)))
     },
     _spawn(this: any): Particle {
       const map = this._map

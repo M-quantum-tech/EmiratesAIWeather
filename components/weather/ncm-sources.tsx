@@ -36,11 +36,14 @@ type Frame = { time: number; path: string }
 type Maps = { host: string; radar: Frame[]; satellite: Frame[] }
 type Layer = "wind" | "radar" | "satellite" | "warnings"
 
-// Esri keyless canvas basemaps. Warnings use the LIGHT-grey canvas (clean, as
-// requested); animated radar/cloud/wind layers use the DARK canvas so colours pop.
-// Esri canvas uses English/Latin place names (OSM localises UAE labels to Arabic).
-const BASE_LIGHT =
-  "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+// Warnings layer uses the COLOURED, Google-Maps-style Esri World Street Map
+// (keyless, colored land/water/roads with English/Latin labels baked in) so it reads
+// like the NCM live map instead of a washed-out white canvas. Its own labels are in
+// English, so the separate Esri reference-label layer is hidden on the warnings view
+// to avoid doubled names. Animated radar/cloud/wind layers use the Esri DARK canvas
+// so colours pop, with the dark English reference labels on top.
+const BASE_WARN =
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"
 const REF_LIGHT =
   "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
 const BASE_DARK =
@@ -294,9 +297,9 @@ export function NcmSources() {
         scrollWheelZoom: true,
       })
       map.zoomControl.setPosition("bottomright")
-      // Start on the clean LIGHT-grey canvas (warnings is the default layer).
-      basemapRef.current = L.tileLayer(BASE_LIGHT, {
-        maxZoom: 16,
+      // Start on the coloured Google-Maps-style canvas (warnings is the default layer).
+      basemapRef.current = L.tileLayer(BASE_WARN, {
+        maxZoom: 19,
         attribution: "&copy; Esri, HERE, Garmin, OpenStreetMap contributors",
       }).addTo(map)
       // High-z pane so city labels sit above the shaded warning polygons (NCM look).
@@ -405,11 +408,13 @@ export function NcmSources() {
       mergeRef.current = null
     }
     if (basemapRef.current && referenceRef.current) {
-      // Warnings → clean LIGHT-grey canvas. Radar/clouds/wind → DARK canvas so the
-      // coloured overlays read clearly. Swap both the base and reference-label tiles.
+      // Warnings → coloured Google-Maps-style canvas (World Street Map ships its own
+      // English labels, so the separate reference layer is hidden to avoid doubling).
+      // Radar/clouds/wind → DARK canvas with the dark English reference labels on top.
       const light = layer === "warnings"
-      basemapRef.current.setUrl(light ? BASE_LIGHT : BASE_DARK)
+      basemapRef.current.setUrl(light ? BASE_WARN : BASE_DARK)
       referenceRef.current.setUrl(light ? REF_LIGHT : REF_DARK)
+      referenceRef.current.setOpacity(light ? 0 : 1)
       // Fade the basemap harder under radar/clouds so the coloured imagery dominates
       // the frame (bigger, bolder cloud field) rather than competing with map detail.
       basemapRef.current.setOpacity(layer === "radar" || layer === "satellite" ? 0.4 : 1)
