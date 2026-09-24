@@ -149,8 +149,8 @@ export function ProximityRings({
         Distance from your location (km)
       </span>
 
-      {/* Live readout — wind in m/s + AI front call */}
-      <div className="grid w-full grid-cols-2 gap-2">
+      {/* Live readout — wind in m/s */}
+      <div className="grid w-full grid-cols-1 gap-2">
         <div className="rounded-lg border border-border/70 bg-background/40 px-3 py-2">
           <span className="flex items-center gap-1 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
             <Wind className="h-3 w-3" aria-hidden="true" /> Wind now
@@ -163,30 +163,6 @@ export function ProximityRings({
           </p>
           <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
             Gust {gustMs != null ? `${Math.round(gustMs * 3.6)} km/h · ${gustMs.toFixed(1)} m/s` : "—"}
-          </span>
-        </div>
-        <div
-          className={cn(
-            "rounded-lg border px-3 py-2",
-            approaching ? "border-alert-orange/50 bg-alert-orange/5" : "border-alert-green/40 bg-alert-green/5",
-          )}
-        >
-          <span
-            className={cn(
-              "flex items-center gap-1 font-mono text-[0.5625rem] uppercase tracking-wider",
-              approaching ? "text-alert-orange" : "text-alert-green",
-            )}
-          >
-            <span className={cn("h-1.5 w-1.5 rounded-full", activeTier.dot, "animate-pulse")} aria-hidden="true" />
-            AI front call
-          </span>
-          <p className="mt-0.5 font-mono text-sm font-bold text-foreground">
-            {approaching ? `Closing · ${ALERT_RADII_KM[active]} km` : "No front closing"}
-          </p>
-          <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-            {approaching
-              ? `${etaLabel ? `ETA ~${etaLabel}` : "Tracking"}${originCompass ? ` · from ${originCompass}` : ""}`
-              : `Steady${originCompass ? ` · ${originCompass}` : ""}`}
           </span>
         </div>
       </div>
