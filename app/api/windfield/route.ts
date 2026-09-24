@@ -31,7 +31,7 @@ export async function GET() {
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${lats.join(",")}` +
     `&longitude=${lons.join(",")}` +
-    `&hourly=wind_speed_10m,wind_direction_10m,cloud_cover&wind_speed_unit=ms&forecast_hours=${HOURS}&timezone=auto`
+    `&hourly=wind_speed_10m,wind_direction_10m,cloud_cover,direct_normal_irradiance&wind_speed_unit=ms&forecast_hours=${HOURS}&timezone=auto`
 
   try {
     const res = await fetch(url, { next: { revalidate: 600 } })
@@ -57,6 +57,7 @@ export async function GET() {
       const u = new Array(NX * NY).fill(0)
       const v = new Array(NX * NY).fill(0)
       const cover = new Array(NX * NY).fill(0)
+      const dni = new Array(NX * NY).fill(0)
       for (let i = 0; i < NX * NY; i++) {
         const hourly = list[i]?.hourly
         const sp = Number(hourly?.wind_speed_10m?.[h] ?? 0)
@@ -67,8 +68,9 @@ export async function GET() {
         u[i] = -sp * Math.sin(rad)
         v[i] = -sp * Math.cos(rad)
         cover[i] = Math.max(0, Math.min(100, Number(hourly?.cloud_cover?.[h] ?? 0)))
+        dni[i] = Math.max(0, Number(hourly?.direct_normal_irradiance?.[h] ?? 0))
       }
-      frames.push({ nx: NX, ny: NY, la1: LA1, la2: LA2, lo1: LO1, lo2: LO2, dx: DX, dy: DY, speed, u, v, cover })
+      frames.push({ nx: NX, ny: NY, la1: LA1, la2: LA2, lo1: LO1, lo2: LO2, dx: DX, dy: DY, speed, u, v, cover, dni })
     }
 
     const payload: WindFrames = { times: times.slice(0, nFrames), frames }

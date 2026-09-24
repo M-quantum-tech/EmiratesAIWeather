@@ -1,7 +1,9 @@
 // A custom Leaflet canvas layer that paints an NCM Ghaith COSMO-UAE "total clouds"
-// style field: total cloud cover (0–100 %) rendered as soft white cloud masses over
-// the dark basemap. Thin cloud reads as a faint blue-grey haze, thick overcast as
-// bright opaque white — bilinear-upscaled from the coarse forecast grid.
+// style field: total cloud cover (0–100 %) rendered as soft, continuous white cloud
+// masses over the dark basemap. Thin cloud reads as a faint blue-grey haze, thick
+// overcast as bright opaque white. The coarse forecast grid is bilinear-upscaled to
+// an intermediate buffer and then Gaussian-blurred so the result looks like real
+// satellite cloud fields instead of blocky cells.
 
 /** A single forecast frame's total-cloud-cover grid (row-major from the NW corner). */
 export type CloudGrid = {
@@ -17,18 +19,20 @@ export type CloudGrid = {
   cover: number[]
 }
 
-/** Cloud shade for a cover fraction (0..1): dark-transparent → blue-grey → white. */
+/** Cloud shade for a cover percentage (0..100): transparent → cool haze → bright white. */
 function cloudRGBA(coverPct: number): [number, number, number, number] {
   const t = Math.max(0, Math.min(1, coverPct / 100))
-  // Below ~8% treat as clear sky (fully transparent) so the map/geography shows.
-  if (t < 0.08) return [0, 0, 0, 0]
-  // Ramp colour from cool grey (thin) to white (overcast).
-  const r = Math.round(150 + 105 * t)
-  const g = Math.round(165 + 90 * t)
-  const b = Math.round(190 + 65 * t)
-  // Alpha grows with cover so overcast dominates while thin cloud stays translucent.
-  const a = Math.round(40 + 205 * Math.pow(t, 0.85))
-  return [r, g, b, a]
+  // Below ~5% treat as clear sky (fully transparent) so the map/geography shows.
+  if (t < 0.05) return [0, 0, 0, 0]
+  // Thin cloud = cool blue-grey; overcast = near-pure white. Ease toward white so
+  // mid-range cover already reads as a solid cloud mass (NCM total-clouds look).
+  const w = Math.pow(t, 0.6)
+  const r = Math.round(168 + 84 * w)
+  const g = Math.round(184 + 70 * w)
+  const b = Math.round(206 + 46 * w)
+  // Alpha grows quickly so even moderate cover looks substantial, capping opaque.
+  const a = Math.round(36 + 219 * Math.pow(t, 0.62))
+  return [r, g, b, Math.min(255, a)]
 }
 
 export function createCloudLayer(L: any, grid: CloudGrid) {
@@ -84,12 +88,13 @@ export function createCloudLayer(L: any, grid: CloudGrid) {
       const s = map.getSize()
       ctx.clearRect(0, 0, s.x, s.y)
 
-      const off = document.createElement("canvas")
-      off.width = g.nx
-      off.height = g.ny
-      const octx = off.getContext("2d")
-      if (!octx) return
-      const img = octx.createImageData(g.nx, g.ny)
+      // 1) Paint the raw grid into a tiny offscreen (one texel per cell).
+      const src = document.createElement("canvas")
+      src.width = g.nx
+      src.height = g.ny
+      const sctx = src.getContext("2d")
+      if (!sctx) return
+      const img = sctx.createImageData(g.nx, g.ny)
       for (let i = 0; i < g.nx * g.ny; i++) {
         const [r, gg, b, a] = cloudRGBA(g.cover[i])
         const p = i * 4
@@ -98,15 +103,35 @@ export function createCloudLayer(L: any, grid: CloudGrid) {
         img.data[p + 2] = b
         img.data[p + 3] = a
       }
-      octx.putImageData(img, 0, 0)
+      sctx.putImageData(img, 0, 0)
 
+      // 2) Upscale to an intermediate buffer with high-quality smoothing so the
+      //    field is continuous before we blur it (kills the blocky cell look).
       const nw = map.latLngToContainerPoint([g.la1, g.lo1])
       const se = map.latLngToContainerPoint([g.la2, g.lo2])
+      const destW = Math.max(1, Math.round(se.x - nw.x))
+      const destH = Math.max(1, Math.round(se.y - nw.y))
+      const scale = 0.5 // intermediate at half screen-res is plenty once blurred
+      const mid = document.createElement("canvas")
+      mid.width = Math.max(1, Math.round(destW * scale))
+      mid.height = Math.max(1, Math.round(destH * scale))
+      const mctx = mid.getContext("2d")
+      if (!mctx) return
+      mctx.imageSmoothingEnabled = true
+      mctx.imageSmoothingQuality = "high"
+      mctx.drawImage(src, 0, 0, mid.width, mid.height)
+
+      // 3) Blit the intermediate onto the map canvas with a Gaussian blur sized to
+      //    the on-screen cell so clouds bleed into soft, natural masses.
+      const cellPx = (se.x - nw.x) / g.nx
+      const blur = Math.max(2, Math.min(22, cellPx * 0.55))
+      ctx.save()
       ctx.imageSmoothingEnabled = true
       ctx.imageSmoothingQuality = "high"
-      ctx.globalAlpha = 0.9
-      ctx.drawImage(off, nw.x, nw.y, se.x - nw.x, se.y - nw.y)
-      ctx.globalAlpha = 1
+      ctx.filter = `blur(${blur.toFixed(1)}px)`
+      ctx.globalAlpha = 0.96
+      ctx.drawImage(mid, nw.x, nw.y, destW, destH)
+      ctx.restore()
     },
   })
   return new CloudLayer(grid)

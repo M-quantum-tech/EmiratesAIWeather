@@ -10,6 +10,7 @@ import {
   Cloud,
   CloudSun,
   LineChart,
+  MapPin,
   Pause,
   Play,
   Radar,
@@ -24,7 +25,9 @@ import { MeasureMap } from "@/components/weather/measure-map"
 import { fetchWindFrames, type WindFrames } from "@/lib/wind-field"
 import { createWindLayer } from "@/lib/wind-layer"
 
-import { createCloudLayer } from "@/lib/cloud-layer"
+ import { createCloudLayer } from "@/lib/cloud-layer"
+import { createStationLayer, type StationMode } from "@/lib/station-layer"
+import { stationReadings } from "@/lib/stations"
 import {
   fetchWarningFrames,
   WARN_FILL,
@@ -166,6 +169,7 @@ export function NcmSources() {
   const basemapRef = useRef<any>(null)
   const referenceRef = useRef<any>(null)
   const windLayerRef = useRef<any>(null)
+  const stationLayerRef = useRef<any>(null)
   const warnLayerRef = useRef<any>(null)
   const geoRef = useRef<any>(null)
   const leafletRef = useRef<any>(null)
@@ -180,6 +184,9 @@ export function NcmSources() {
   const [windIdx, setWindIdx] = useState(0)
   const [windPlaying, setWindPlaying] = useState(true)
   const [windSpeed, setWindSpeed] = useState<1 | 2>(1)
+  // NCM AWS station overlay on the wind tab: point observations sampled from our grid.
+  const [showStations, setShowStations] = useState(true)
+  const [stationMode, setStationMode] = useState<StationMode>("wind")
   const [cloudIdx, setCloudIdx] = useState(0)
   const [cloudPlaying, setCloudPlaying] = useState(true)
   const [warnFrames, setWarnFrames] = useState<WarningFrames | null>(null)
@@ -497,6 +504,28 @@ export function NcmSources() {
     const id = setInterval(() => setWindIdx((i) => (i + 1) % windData.frames.length), 900 / (windSpeed || 1))
     return () => clearInterval(id)
   }, [layer, windPlaying, windData, windSpeed])
+
+  // Manage the NCM-style AWS station overlay (wind km/h + flow arrow, or DNI W/m²),
+  // sampled from the active wind frame. Shown only on the wind tab when enabled.
+  useEffect(() => {
+    const L = leafletRef.current
+    const map = mapRef.current
+    if (!L || !map || !mapReady) return
+
+    const grid = windData?.frames[Math.min(windIdx, windData.frames.length - 1)]
+    if (layer === "wind" && showStations && grid) {
+      const readings = stationReadings(grid)
+      if (stationLayerRef.current) {
+        stationLayerRef.current.setData(readings, stationMode)
+      } else {
+        stationLayerRef.current = createStationLayer(L, readings, stationMode)
+        stationLayerRef.current.addTo(map)
+      }
+    } else if (stationLayerRef.current) {
+      map.removeLayer(stationLayerRef.current)
+      stationLayerRef.current = null
+    }
+  }, [layer, windData, windIdx, mapReady, showStations, stationMode])
 
   // Manage the total-cloud-cover field layer, swapping the active forecast frame.
   useEffect(() => {
@@ -1015,8 +1044,44 @@ export function NcmSources() {
             )}
             {layer === "wind" && (
               <span className="absolute right-3 top-3 z-[500] inline-flex items-center gap-1.5 rounded-md bg-signal/90 px-2 py-1 font-mono text-[0.5625rem] uppercase tracking-wider text-black backdrop-blur">
-                Forecast · 10 m surface wind
+                {showStations && stationMode === "solar" ? "AWS · direct normal irradiance" : "Forecast · 10 m surface wind"}
               </span>
+            )}
+            {layer === "wind" && (
+              <div className="absolute right-3 top-12 z-[500] flex flex-col items-end gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setShowStations((s) => !s)}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-[0.5625rem] uppercase tracking-wider backdrop-blur transition-colors",
+                    showStations
+                      ? "border-white/25 bg-black/60 text-white hover:bg-black/70"
+                      : "border-white/15 bg-black/40 text-white/60 hover:bg-black/55",
+                  )}
+                  aria-pressed={showStations}
+                >
+                  <MapPin className="h-3 w-3" aria-hidden="true" /> AWS stations {showStations ? "on" : "off"}
+                </button>
+                {showStations && (
+                  <div className="flex overflow-hidden rounded-md border border-white/20 bg-black/60 backdrop-blur">
+                    {(["wind", "solar"] as StationMode[]).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setStationMode(m)}
+                        className={cn(
+                          "px-2.5 py-1 font-mono text-[0.5625rem] uppercase tracking-wider transition-colors",
+                          m === "solar" && "border-l border-white/15",
+                          stationMode === m ? "bg-signal text-black" : "text-white/70 hover:bg-white/10",
+                        )}
+                        aria-pressed={stationMode === m}
+                      >
+                        {m === "wind" ? "Wind km/h" : "Solar DNI"}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
             {layer === "clouds" && (
               <span className="absolute right-3 top-3 z-[500] inline-flex items-center gap-1.5 rounded-md bg-accent/90 px-2 py-1 font-mono text-[0.5625rem] uppercase tracking-wider text-black backdrop-blur">

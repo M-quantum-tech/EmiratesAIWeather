@@ -37,6 +37,8 @@ export type WindGrid = {
   v: number[]
   /** Total cloud cover (0–100 %), same grid — fetched in the same request. */
   cover: number[]
+  /** Direct normal irradiance (W/m²), same grid — fetched in the same request. */
+  dni?: number[]
 }
 
 export type WindFrames = {
