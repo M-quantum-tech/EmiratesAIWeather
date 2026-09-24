@@ -14,9 +14,12 @@ import {
   Gauge,
   MapPin,
   Navigation,
+  Radar,
+  Radio,
   ShieldCheck,
   Siren,
   Sparkles,
+  SunDim,
   Timer,
   Wind,
 } from "lucide-react"
@@ -32,6 +35,7 @@ import {
   offsetLocation,
   precipUnit,
   predictArrivals,
+  rainAttenuation,
   speedUnit,
   type AlertLevel,
   type ArrivalKey,
@@ -47,6 +51,7 @@ import {
   type WindMonitorTier,
 } from "@/lib/escalation"
 import { ProximityRings } from "@/components/weather/proximity-rings"
+import { WindDirectionRadar } from "@/components/weather/wind-direction-radar"
 import { useWeather } from "@/components/weather/weather-provider"
 import { cn } from "@/lib/utils"
 
@@ -105,6 +110,23 @@ const HAZARD_ICON: Record<HazardKey, typeof Wind> = {
   wind: Wind,
   rain: CloudRain,
   precip: Droplets,
+}
+
+/** Neutral → escalating tones for the live parameter cells. */
+type ParamTone = "neutral" | "info" | "warn" | "bad"
+const PARAM_TONE: Record<ParamTone, string> = {
+  neutral: "border-border/70 bg-background/40 text-foreground",
+  info: "border-signal/40 bg-signal/5 text-signal",
+  warn: "border-alert-yellow/40 bg-alert-yellow/10 text-alert-yellow",
+  bad: "border-alert-orange/40 bg-alert-orange/10 text-alert-orange",
+}
+
+type ParamCell = {
+  label: string
+  value: string
+  unit?: string
+  icon: typeof Wind
+  tone: ParamTone
 }
 
 const ARRIVAL_ICON: Record<ArrivalKey, typeof Wind> = {
@@ -348,10 +370,31 @@ export function AlertBanner() {
   const arrivalClock = etaMinutes != null ? safeTime(new Date(now.getTime() + etaMinutes * 60_000)) : null
   // Front position along the 60 km watch ring (0% = watch edge, 100% = on you).
   const frontProgress = Math.max(0, Math.min(100, (1 - ALERT_RADII_KM.yellow / ALERT_RADII_KM.green) * 100))
-  const rankedHazards = [...alert.hazards].sort((a, b) => {
-    const order = { red: 3, orange: 2, yellow: 1, green: 0 } as const
-    return order[b.level] - order[a.level]
-  })
+  // Live parameter grid — atmospheric channels plus derived radar/optical values.
+  const paramCells: ParamCell[] = (() => {
+    const cur = payload.current
+    const hourNow = payload.hourly[payload.currentHourIndex] ?? payload.hourly[0]
+    // Rain / precipitation rate normalised to mm/h for the physics helpers.
+    const rainMmH = payload.units === "metric" ? cur.precipitation : cur.precipitation * 25.4
+    const precipProb = hourNow?.precipitationProbability ?? 0
+    // ITU-R P.838 rain attenuation (dB/km) through the current cell.
+    const atten = rainAttenuation(rainMmH)
+    // Kasten–Czeplak atmospheric transmittance (clearness index) from cloud cover.
+    const transmittance = Math.round((1 - 0.75 * Math.pow(cur.cloudCover / 100, 3.4)) * 100)
+    // Marshall–Palmer radar reflectivity: Z = 200·R^1.6, in dBZ.
+    const reflectivity = rainMmH > 0 ? 10 * Math.log10(200 * Math.pow(rainMmH, 1.6)) : 0
+
+    return [
+      { label: "Rain", value: rainMmH.toFixed(1), unit: precipUnit(payload.units) + "/h", icon: CloudRain, tone: rainMmH > 0.2 ? "warn" : "neutral" },
+      { label: "Clouds", value: `${Math.round(cur.cloudCover)}`, unit: "%", icon: Cloud, tone: cur.cloudCover > 70 ? "info" : "neutral" },
+      { label: "Precipitation", value: `${Math.round(precipProb)}`, unit: "% prob", icon: Droplets, tone: precipProb > 50 ? "warn" : "neutral" },
+      { label: "Wind speed", value: `${Math.round(cur.windSpeed)}`, unit: speedUnit(payload.units), icon: Wind, tone: cur.windSpeed > 40 ? "bad" : cur.windSpeed > 20 ? "warn" : "neutral" },
+      { label: "Attenuation", value: atten.toFixed(2), unit: "dB/km", icon: Radio, tone: atten >= 1 ? "bad" : atten >= 0.1 ? "warn" : "neutral" },
+      { label: "Transmittance", value: `${Math.max(0, transmittance)}`, unit: "%", icon: SunDim, tone: transmittance < 40 ? "warn" : "info" },
+      { label: "Reflectivity", value: reflectivity > 0 ? reflectivity.toFixed(0) : "—", unit: reflectivity > 0 ? "dBZ" : undefined, icon: Radar, tone: reflectivity >= 40 ? "bad" : reflectivity >= 20 ? "warn" : "neutral" },
+      { label: "Relative humidity", value: `${Math.round(cur.humidity)}`, unit: "%", icon: Droplets, tone: cur.humidity > 80 ? "info" : "neutral" },
+    ]
+  })()
 
   // Live evaluation of the escalation rules against real signals (Open-Meteo current
   // reading, the 50 km upwind sample, and the NCM Al Bahar warning) for the prediction table.
@@ -579,8 +622,8 @@ export function AlertBanner() {
           </div>
         </div>
 
-        {/* Proximity radar */}
-        <div className="flex justify-center lg:justify-end">
+        {/* Proximity radar + wind-direction radar, side by side */}
+        <div className="flex flex-col items-center justify-center gap-8 lg:justify-end xl:flex-row xl:items-start">
           <ProximityRings
             active={alert.level}
             showFarSite
@@ -590,6 +633,11 @@ export function AlertBanner() {
             originCompass={originCompass}
             approaching={approaching}
             etaLabel={etaMinutes != null ? formatEta(etaMinutes) : null}
+            windDirection={payload.current.windDirection}
+          />
+          <WindDirectionRadar
+            windMs={windMs}
+            gustMs={gustMs}
             windDirection={payload.current.windDirection}
           />
         </div>
@@ -851,27 +899,29 @@ export function AlertBanner() {
         </div>
       </div>
 
-      {/* Live background hazard data feeding the model */}
+      {/* Live parameter grid feeding the model — atmospheric + radar/optical channels */}
       <div className="border-t border-border/60 px-4 pb-4 pt-3">
         <span className="flex items-center gap-1.5 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
           <Activity className="h-3 w-3" aria-hidden="true" />
-          Live background data · {DANGER_RADIUS_KM} km scan
+          Live parameters · {DANGER_RADIUS_KM} km scan
         </span>
         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {rankedHazards.map((h) => {
-            const Icon = HAZARD_ICON[h.key]
-            const hs = LEVEL_STYLES[h.level]
+          {paramCells.map((p) => {
+            const Icon = p.icon
             return (
               <div
-                key={h.key}
-                className={cn("flex items-center gap-2 rounded-lg border px-2.5 py-2", hs.chip)}
+                key={p.label}
+                className={cn("flex items-center gap-2 rounded-lg border px-2.5 py-2", PARAM_TONE[p.tone])}
               >
                 <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
                 <span className="min-w-0">
                   <span className="block truncate font-mono text-[0.5625rem] uppercase tracking-wider opacity-80">
-                    {h.label}
+                    {p.label}
                   </span>
-                  <span className="block text-sm font-bold tabular-nums">{h.value}</span>
+                  <span className="block text-sm font-bold tabular-nums">
+                    {p.value}
+                    {p.unit ? <span className="ml-0.5 text-[0.625rem] font-medium opacity-70">{p.unit}</span> : null}
+                  </span>
                 </span>
               </div>
             )
