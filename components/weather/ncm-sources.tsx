@@ -735,7 +735,6 @@ export function NcmSources() {
     { id: "warnings", label: "Warnings", Icon: ShieldAlert },
     { id: "wind", label: "Wind field", Icon: Wind },
     { id: "radar", label: "Rain radar", Icon: Radar },
-    { id: "satellite", label: "Clouds / IR", Icon: CloudSun },
     { id: "clouds", label: "Total clouds", Icon: Cloud },
   ]
 

@@ -166,17 +166,17 @@ export function createWindLayer(L: any, grid: WindGrid) {
       const se = map.latLngToContainerPoint([g.la2, g.lo2])
       ctx.imageSmoothingEnabled = true
       ctx.imageSmoothingQuality = "high"
-      // Richer colour field (NCM COSMO-UAE look) while still letting the bright
-      // particle trails read as the primary animated layer on top.
-      ctx.globalAlpha = 0.62
+      // Vivid colour field matching the NCM COSMO-UAE render; the bright particle
+      // trails still read as the primary animated layer on top.
+      ctx.globalAlpha = 0.8
       ctx.drawImage(off, nw.x, nw.y, se.x - nw.x, se.y - nw.y)
       ctx.globalAlpha = 1
     },
     _count(this: any) {
       const s = this._map.getSize()
-      // Denser streamlines for the NCM COSMO-UAE flow (~1 particle per 1,050 px²),
+      // Dense streamlines for the NCM COSMO-UAE flow (~1 particle per 620 px²),
       // capped for performance.
-      return Math.max(400, Math.min(3200, Math.round((s.x * s.y) / 1050)))
+      return Math.max(700, Math.min(6000, Math.round((s.x * s.y) / 620)))
     },
     _spawn(this: any): Particle {
       const map = this._map
@@ -216,13 +216,14 @@ export function createWindLayer(L: any, grid: WindGrid) {
       if (this._moving) return
 
       // Fade existing trails without darkening the heatmap beneath (transparent erase).
+      // A softer erase leaves longer, comet-like streamlines — the NCM COSMO-UAE look.
       ctx.globalCompositeOperation = "destination-out"
-      ctx.fillStyle = "rgba(0,0,0,0.10)"
+      ctx.fillStyle = "rgba(0,0,0,0.075)"
       ctx.fillRect(0, 0, s.x, s.y)
       ctx.globalCompositeOperation = "source-over"
 
       ctx.lineCap = "round"
-      ctx.lineWidth = 1.4
+      ctx.lineJoin = "round"
 
       const particles: Particle[] = this._particles
       for (let i = 0; i < particles.length; i++) {
@@ -237,16 +238,18 @@ export function createWindLayer(L: any, grid: WindGrid) {
         // Screen coords: x east, y down → use -v for the northward component.
         const ang = Math.atan2(-sm.v, sm.u)
         // Step length scales gently with speed for a lively but readable flow.
-        const step = 0.6 + Math.min(spd, 30) * 0.22
+        const step = 0.7 + Math.min(spd, 30) * 0.24
         const nx = p.x + Math.cos(ang) * step
         const ny = p.y + Math.sin(ang) * step
 
         const [r, gg, b] = windColor(spd)
         // Brighten toward white for contrast, blended with the speed color.
-        const cr = Math.round(r + (255 - r) * 0.45)
-        const cg = Math.round(gg + (255 - gg) * 0.45)
-        const cb = Math.round(b + (255 - b) * 0.45)
-        ctx.strokeStyle = `rgba(${cr},${cg},${cb},0.9)`
+        const cr = Math.round(r + (255 - r) * 0.55)
+        const cg = Math.round(gg + (255 - gg) * 0.55)
+        const cb = Math.round(b + (255 - b) * 0.55)
+        // Faster air draws slightly thicker, brighter streaks.
+        ctx.lineWidth = 1.1 + Math.min(spd, 24) * 0.05
+        ctx.strokeStyle = `rgba(${cr},${cg},${cb},0.95)`
         ctx.beginPath()
         ctx.moveTo(p.x, p.y)
         ctx.lineTo(nx, ny)
