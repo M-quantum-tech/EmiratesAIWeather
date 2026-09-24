@@ -1,7 +1,10 @@
 "use client"
 
-import { Navigation2, Wind } from "lucide-react"
+import { useEffect, useState } from "react"
+import { ExternalLink, Navigation2, Wind } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { fetchWindFrames } from "@/lib/wind-field"
+import { stationReadings } from "@/lib/stations"
 
 const MAX_PX = 288 // diameter of the outer ring — matches the proximity radar
 
@@ -43,6 +46,25 @@ type WindDirectionRadarProps = {
   gustMs?: number | null
   /** Meteorological wind direction in degrees — the bearing the wind blows FROM. */
   windDirection?: number
+  /** Viewer location — used to pull the nearest AWS station wind speeds. */
+  lat?: number | null
+  lon?: number | null
+  /** Configurable feed the radar is sourced from (defaults to NCM COSMO-UAE Wind). */
+  sourceUrl?: string
+  sourceLabel?: string
+}
+
+type NearbyStation = { name: string; kmh: number; ms: number; fromDeg: number; km: number }
+
+/** Great-circle distance (km) between two lat/lon points. */
+function haversineKm(aLat: number, aLon: number, bLat: number, bLon: number) {
+  const R = 6371
+  const dLat = ((bLat - aLat) * Math.PI) / 180
+  const dLon = ((bLon - aLon) * Math.PI) / 180
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((aLat * Math.PI) / 180) * Math.cos((bLat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)))
 }
 
 /**
@@ -51,13 +73,61 @@ type WindDirectionRadarProps = {
  * flow arrow points downwind, the origin blip sits on the "from" bearing, and the
  * lit ring reflects the live speed band.
  */
-export function WindDirectionRadar({ windMs = null, gustMs = null, windDirection = 0 }: WindDirectionRadarProps) {
+export function WindDirectionRadar({
+  windMs = null,
+  gustMs = null,
+  windDirection = 0,
+  lat = null,
+  lon = null,
+  sourceUrl = "https://ghaith.ncm.gov.ae/?lang=en#cosmo-uae-wind",
+  sourceLabel = "NCM COSMO-UAE Wind",
+}: WindDirectionRadarProps) {
   const speed = windMs ?? 0
   const band = bandFor(speed)
   const fromDeg = ((windDirection % 360) + 360) % 360
   const flowDeg = (fromDeg + 180) % 360 // direction the wind is heading toward
-  // Vector length scales with speed, capped at the outer ring.
-  const vectorPx = Math.max(28, Math.min(MAX_PX / 2 - 14, (speed / 16) * (MAX_PX / 2 - 14)))
+  // Vector length scales with speed, capped near the outer ring — longer floor and
+  // reach so the direction arrow reads bigger on the scope.
+  const vectorPx = Math.max(46, Math.min(MAX_PX / 2 - 6, (speed / 16) * (MAX_PX / 2 - 6)))
+
+  // Pull the nearest AWS station wind speeds around the viewer from the live grid,
+  // mirroring the NCM COSMO-UAE wind field. Refreshes on the same one-minute cadence.
+  const [nearby, setNearby] = useState<NearbyStation[]>([])
+  useEffect(() => {
+    if (lat == null || lon == null) return
+    const controller = new AbortController()
+    async function load() {
+      try {
+        const data = await fetchWindFrames("live", controller.signal)
+        if (!data || data.frames.length === 0) return
+        const readings = stationReadings(data.frames[0])
+        const ranked = readings
+          .map((r) => {
+            const km = haversineKm(lat as number, lon as number, r.lat, r.lon)
+            const dLon = ((r.lon - (lon as number)) * Math.PI) / 180
+            const y = Math.sin(dLon) * Math.cos((r.lat * Math.PI) / 180)
+            const x =
+              Math.cos(((lat as number) * Math.PI) / 180) * Math.sin((r.lat * Math.PI) / 180) -
+              Math.sin(((lat as number) * Math.PI) / 180) * Math.cos((r.lat * Math.PI) / 180) * Math.cos(dLon)
+            const bearing = (((Math.atan2(y, x) * 180) / Math.PI) + 360) % 360
+            return { name: r.name, kmh: Math.round(r.windKmh), ms: r.windKmh / 3.6, fromDeg: bearing, km }
+          })
+          .filter((r) => r.km > 1)
+          .sort((a, b) => a.km - b.km)
+          .slice(0, 5)
+        setNearby(ranked)
+      } catch (err) {
+        if ((err as any)?.name !== "AbortError")
+          console.log("[v0] radar nearby stations failed:", err instanceof Error ? err.message : err)
+      }
+    }
+    load()
+    const id = setInterval(load, 60 * 1000)
+    return () => {
+      controller.abort()
+      clearInterval(id)
+    }
+  }, [lat, lon])
   // Origin blip sits on the range ring matching the live speed band.
   const originRadius = (MAX_PX / 2) * (band === BANDS[0] ? 0.34 : band === BANDS[1] ? 0.66 : 1)
   const originX = Math.sin((fromDeg * Math.PI) / 180) * originRadius
@@ -118,20 +188,50 @@ export function WindDirectionRadar({ windMs = null, gustMs = null, windDirection
           </span>
         ))}
 
+        {/* nearby AWS station wind speeds — plotted by bearing from the viewer */}
+        {nearby.map((n, i) => {
+          const r = (MAX_PX / 2) * (0.42 + (i % 3) * 0.18)
+          const nx = Math.sin((n.fromDeg * Math.PI) / 180) * r
+          const ny = -Math.cos((n.fromDeg * Math.PI) / 180) * r
+          const nb = bandFor(n.ms)
+          return (
+            <span
+              key={n.name}
+              className="absolute left-1/2 top-1/2 z-[5] flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-0.5"
+              style={{ transform: `translate(calc(-50% + ${nx}px), calc(-50% + ${ny}px))` }}
+              title={`${n.name} · ${n.kmh} km/h · ${n.ms.toFixed(1)} m/s · ${Math.round(n.km)} km away`}
+            >
+              <span
+                className={cn(
+                  "grid h-6 min-w-6 place-items-center rounded-full border px-1 font-mono text-[0.625rem] font-bold tabular-nums text-background",
+                  nb.dot,
+                  nb.text.replace("text-", "border-"),
+                )}
+              >
+                {n.kmh}
+              </span>
+              <span className="max-w-[4.5rem] truncate rounded bg-background/80 px-1 font-mono text-[0.5rem] uppercase tracking-wider text-muted-foreground">
+                {n.name}
+              </span>
+            </span>
+          )
+        })}
+
         {/* wind flow vector — points the way the wind is heading */}
         <div
           aria-hidden="true"
-          className={cn("absolute bottom-1/2 left-1/2 w-[3px] rounded-full", band.dot)}
+          className={cn("absolute bottom-1/2 left-1/2 w-[5px] rounded-full", band.dot)}
           style={{
             height: vectorPx,
             transformOrigin: "50% 100%",
             transform: `translateX(-50%) rotate(${flowDeg}deg)`,
+            boxShadow: `0 0 12px -1px color-mix(in oklch, ${band.glow} 70%, transparent)`,
           }}
         />
         {/* flow arrowhead */}
         <Navigation2
           aria-hidden="true"
-          className={cn("absolute left-1/2 top-1/2 z-10 h-5 w-5", band.text)}
+          className={cn("absolute left-1/2 top-1/2 z-10 h-9 w-9 drop-shadow", band.text)}
           style={{ transform: `translate(-50%, -50%) rotate(${flowDeg}deg) translateY(-${vectorPx}px)` }}
         />
 
@@ -180,6 +280,18 @@ export function WindDirectionRadar({ windMs = null, gustMs = null, windDirection
           </span>
         </div>
       </div>
+
+      {/* configurable feed the radar is connected to */}
+      <a
+        href={sourceUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground transition-colors hover:text-signal"
+      >
+        <span className="h-1.5 w-1.5 rounded-full bg-signal" aria-hidden="true" />
+        Source · {sourceLabel}
+        <ExternalLink className="h-2.5 w-2.5" aria-hidden="true" />
+      </a>
     </div>
   )
 }

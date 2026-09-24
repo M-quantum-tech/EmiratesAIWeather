@@ -644,11 +644,15 @@ export function AlertBanner() {
             etaLabel={etaMinutes != null ? formatEta(etaMinutes) : null}
             windDirection={payload.current.windDirection}
           />
-          <WindDirectionRadar
-            windMs={windMs}
-            gustMs={gustMs}
-            windDirection={payload.current.windDirection}
-          />
+<WindDirectionRadar
+  windMs={windMs}
+  gustMs={gustMs}
+  windDirection={payload.current.windDirection}
+  lat={payload.location.latitude}
+  lon={payload.location.longitude}
+  sourceUrl={windSource.url}
+  sourceLabel={windSource.label}
+  />
         </div>
       </div>
 
