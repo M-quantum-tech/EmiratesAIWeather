@@ -288,7 +288,7 @@ export function buildSpotPopupHtml(
   const tmin = temps.length ? Math.round(Math.min(...temps)) : 0
   const wind =
     units === "metric"
-      ? `${Math.round(cur.windSpeed ?? 0)} km/h`
+                    ? `${Math.round(cur.windSpeed ?? 0)} km/h · ${((cur.windSpeed ?? 0) / 3.6).toFixed(1)} m/s`
       : `${Math.round(cur.windSpeed ?? 0)} mph`
   const emojiRow = [0, 4, 8, 12, 16, 20, 23]
     .map((i) =>

@@ -33,8 +33,8 @@ export function WeatherAssistant() {
     const c = payload.current
     const alert = buildAlert(payload)
     const cond = describeCode(c.weatherCode).label
-    const speed = units === "metric" ? `${Math.round(c.windSpeed)} km/h` : `${c.windSpeed} ${speedUnit(units)}`
-    const gust = units === "metric" ? `${Math.round(c.windGusts)} km/h` : `${c.windGusts} ${speedUnit(units)}`
+  const speed = units === "metric" ? `${Math.round(c.windSpeed)} km/h · ${(c.windSpeed / 3.6).toFixed(1)} m/s` : `${c.windSpeed} ${speedUnit(units)}`
+  const gust = units === "metric" ? `${Math.round(c.windGusts)} km/h · ${(c.windGusts / 3.6).toFixed(1)} m/s` : `${c.windGusts} ${speedUnit(units)}`
     return [
       `Location: ${payload.location.name}${payload.location.country ? `, ${payload.location.country}` : ""}`,
       `Condition: ${cond}`,

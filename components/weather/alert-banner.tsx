@@ -417,7 +417,7 @@ export function AlertBanner() {
     {
       signal: "Wind gust over 54 km/h",
       source: "Open-Meteo",
-      value: `${Math.round(gustKmh)} km/h`,
+      value: `${Math.round(gustKmh)} km/h · ${(gustKmh / MS_TO_KMH).toFixed(1)} m/s`,
       met: gustMs >= 15,
     },
     {
@@ -661,7 +661,7 @@ export function AlertBanner() {
               <span className="text-sm text-muted-foreground">km/h gust</span>
             </div>
             <span className="mt-0.5 block font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
-              {compass(payload.current.windDirection)} wind
+              {(gustKmh / MS_TO_KMH).toFixed(1)} m/s · {compass(payload.current.windDirection)} wind
             </span>
           </div>
 
@@ -690,7 +690,7 @@ export function AlertBanner() {
               <span className="text-sm text-muted-foreground">km/h gust</span>
             </div>
             <span className="mt-0.5 block font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
-              {farGust == null ? "Sampling · " : ""}
+              {farGustMs == null ? "Sampling · " : `${farGustMs.toFixed(1)} m/s · `}
               {compass(payload.current.windDirection)} origin
             </span>
           </div>
@@ -1041,7 +1041,7 @@ function WindEventMonitor({ windMs, tiers }: { windMs: number; tiers: WindMonito
           <div className="flex items-end gap-3">
             <span className={cn("text-4xl font-bold tabular-nums leading-none", activeStyle?.text ?? "text-foreground")}>
               {Math.round(windMs * MS_TO_KMH)}
-              <span className="ml-1 text-base font-medium text-muted-foreground">km/h</span>
+              <span className="ml-1 text-base font-medium text-muted-foreground">km/h · {fmtMs(windMs)} m/s</span>
             </span>
           </div>
           {/* Compact live gauge with tier markers */}
@@ -1070,6 +1070,7 @@ function WindEventMonitor({ windMs, tiers }: { windMs: number; tiers: WindMonito
           const isActive = active?.id === t.id
           const met = windMs >= t.minSpeed
           const kmhRange = upper == null ? `≥ ${fmtKmh(lower)}` : `${fmtKmh(lower)}–${fmtKmh(upper)}`
+          const msRange = upper == null ? `≥ ${fmtMs(lower)}` : `${fmtMs(lower)}–${fmtMs(upper)}`
           return (
             <div
               key={t.id}
@@ -1095,6 +1096,9 @@ function WindEventMonitor({ windMs, tiers }: { windMs: number; tiers: WindMonito
               <div className="flex flex-col gap-0.5">
                 <span className={cn("font-mono text-base font-bold tabular-nums leading-none", isActive ? s.text : "text-foreground")}>
                   {kmhRange} <span className="text-[0.625rem] font-medium text-muted-foreground">km/h</span>
+                </span>
+                <span className="font-mono text-[0.625rem] font-medium tabular-nums text-muted-foreground">
+                  {msRange} m/s
                 </span>
               </div>
               <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">{t.note}</span>
