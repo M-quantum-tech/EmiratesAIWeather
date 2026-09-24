@@ -18,7 +18,12 @@ const HOURS = 24
 
 export const revalidate = 600
 
-export async function GET() {
+export async function GET(request: Request) {
+  // "live" = next 24 hourly steps; "7day" = 7-day outlook sampled every 3 h
+  // (56 frames) so the timeline stays smooth without a huge payload.
+  const range = new URL(request.url).searchParams.get("range") === "7day" ? "7day" : "live"
+  const step = range === "7day" ? 3 : 1
+
   const lats: number[] = []
   const lons: number[] = []
   for (let la = LA1; la >= LA2; la -= DY) {
@@ -28,10 +33,11 @@ export async function GET() {
     }
   }
 
+  const horizon = range === "7day" ? "&forecast_days=7" : `&forecast_hours=${HOURS}`
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${lats.join(",")}` +
     `&longitude=${lons.join(",")}` +
-    `&hourly=wind_speed_10m,wind_direction_10m,cloud_cover,direct_normal_irradiance&wind_speed_unit=ms&forecast_hours=${HOURS}&timezone=auto`
+    `&hourly=wind_speed_10m,wind_direction_10m,cloud_cover,direct_normal_irradiance&wind_speed_unit=ms${horizon}&timezone=auto`
 
   try {
     const res = await fetch(url, { next: { revalidate: 600 } })
@@ -45,14 +51,18 @@ export async function GET() {
       return Response.json({ error: "Unexpected wind field response." }, { status: 502 })
     }
 
-    const times: string[] = list[0]?.hourly?.time ?? []
-    const nFrames = Math.min(times.length, HOURS)
-    if (nFrames === 0) {
+    const allTimes: string[] = list[0]?.hourly?.time ?? []
+    if (allTimes.length === 0) {
       return Response.json({ error: "No wind field data available." }, { status: 502 })
     }
 
+    // Sampled hour indices: every hour for "live", every 3rd hour for "7day".
+    const hourIdx: number[] = []
+    for (let h = 0; h < allTimes.length; h += step) hourIdx.push(h)
+    const times = hourIdx.map((h) => allTimes[h])
+
     const frames: WindGrid[] = []
-    for (let h = 0; h < nFrames; h++) {
+    for (const h of hourIdx) {
       const speed = new Array(NX * NY).fill(0)
       const u = new Array(NX * NY).fill(0)
       const v = new Array(NX * NY).fill(0)
@@ -73,7 +83,7 @@ export async function GET() {
       frames.push({ nx: NX, ny: NY, la1: LA1, la2: LA2, lo1: LO1, lo2: LO2, dx: DX, dy: DY, speed, u, v, cover, dni })
     }
 
-    const payload: WindFrames = { times: times.slice(0, nFrames), frames }
+    const payload: WindFrames = { times, frames }
     return Response.json(payload)
   } catch (error) {
     console.log("[v0] windfield route error:", error instanceof Error ? error.message : error)

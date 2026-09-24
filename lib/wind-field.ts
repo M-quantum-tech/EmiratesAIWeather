@@ -47,11 +47,14 @@ export type WindFrames = {
   frames: WindGrid[]
 }
 
-export async function fetchWindFrames(signal?: AbortSignal): Promise<WindFrames | null> {
+export async function fetchWindFrames(
+  range: "live" | "7day" = "live",
+  signal?: AbortSignal,
+): Promise<WindFrames | null> {
   // Read the grid from our own cached server route rather than calling Open-Meteo
   // directly from the browser. One shared upstream request per revalidate window
   // keeps the heavy multi-location call clear of per-client rate limits (429s).
-  const res = await fetch("/api/windfield", { signal })
+  const res = await fetch(`/api/windfield?range=${range}`, { signal })
   if (!res.ok) return null
   const json = (await res.json()) as WindFrames | { error: string }
   if (!json || "error" in json || !Array.isArray((json as WindFrames).frames)) return null

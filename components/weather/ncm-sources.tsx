@@ -184,9 +184,10 @@ export function NcmSources() {
   const [windIdx, setWindIdx] = useState(0)
   const [windPlaying, setWindPlaying] = useState(true)
   const [windSpeed, setWindSpeed] = useState<1 | 2>(1)
-  // NCM AWS station overlay on the wind tab: point observations sampled from our grid.
+  // NCM AWS station overlay: wind km/h on the wind tab, live DNI (W/m²) on the clouds tab.
   const [showStations, setShowStations] = useState(true)
-  const [stationMode, setStationMode] = useState<StationMode>("wind")
+  // Wind forecast horizon: "live" = next 24 h, "7day" = 7-day outlook (3-hourly steps).
+  const [windRange, setWindRange] = useState<"live" | "7day">("live")
   const [cloudIdx, setCloudIdx] = useState(0)
   const [cloudPlaying, setCloudPlaying] = useState(true)
   const [warnFrames, setWarnFrames] = useState<WarningFrames | null>(null)
@@ -268,10 +269,11 @@ export function NcmSources() {
     const controller = new AbortController()
     async function load() {
       try {
-        const data = await fetchWindFrames(controller.signal)
+        const data = await fetchWindFrames(windRange, controller.signal)
         if (data) {
           setWindData(data)
           setWindIdx(0)
+          setCloudIdx(0)
         }
       } catch (err) {
         if ((err as any)?.name !== "AbortError")
@@ -505,15 +507,18 @@ export function NcmSources() {
     return () => clearInterval(id)
   }, [layer, windPlaying, windData, windSpeed])
 
-  // Manage the NCM-style AWS station overlay (wind km/h + flow arrow, or DNI W/m²),
-  // sampled from the active wind frame. Shown only on the wind tab when enabled.
+  // Manage the NCM-style AWS station overlay: wind km/h + flow arrow on the wind tab,
+  // live direct-normal-irradiance (W/m²) on the Total Clouds tab. Sampled from our grid.
   useEffect(() => {
     const L = leafletRef.current
     const map = mapRef.current
     if (!L || !map || !mapReady) return
 
-    const grid = windData?.frames[Math.min(windIdx, windData.frames.length - 1)]
-    if (layer === "wind" && showStations && grid) {
+    const stationMode: StationMode = layer === "clouds" ? "solar" : "wind"
+    const activeIdx = layer === "clouds" ? cloudIdx : windIdx
+    const grid = windData?.frames[Math.min(activeIdx, windData.frames.length - 1)]
+    const onStationTab = layer === "wind" || layer === "clouds"
+    if (onStationTab && showStations && grid) {
       const readings = stationReadings(grid)
       if (stationLayerRef.current) {
         stationLayerRef.current.setData(readings, stationMode)
@@ -525,7 +530,7 @@ export function NcmSources() {
       map.removeLayer(stationLayerRef.current)
       stationLayerRef.current = null
     }
-  }, [layer, windData, windIdx, mapReady, showStations, stationMode])
+  }, [layer, windData, windIdx, cloudIdx, mapReady, showStations])
 
   // Manage the total-cloud-cover field layer, swapping the active forecast frame.
   useEffect(() => {
@@ -1044,10 +1049,10 @@ export function NcmSources() {
             )}
             {layer === "wind" && (
               <span className="absolute right-3 top-3 z-[500] inline-flex items-center gap-1.5 rounded-md bg-signal/90 px-2 py-1 font-mono text-[0.5625rem] uppercase tracking-wider text-black backdrop-blur">
-                {showStations && stationMode === "solar" ? "AWS · direct normal irradiance" : "Forecast · 10 m surface wind"}
+                {windRange === "7day" ? "7-day forecast · 10 m surface wind" : "Live · 10 m surface wind"}
               </span>
             )}
-            {layer === "wind" && (
+            {(layer === "wind" || layer === "clouds") && (
               <div className="absolute right-3 top-12 z-[500] flex flex-col items-end gap-1.5">
                 <button
                   type="button"
@@ -1060,23 +1065,24 @@ export function NcmSources() {
                   )}
                   aria-pressed={showStations}
                 >
-                  <MapPin className="h-3 w-3" aria-hidden="true" /> AWS stations {showStations ? "on" : "off"}
+                  <MapPin className="h-3 w-3" aria-hidden="true" />{" "}
+                  {layer === "clouds" ? "DNI stations" : "AWS stations"} {showStations ? "on" : "off"}
                 </button>
-                {showStations && (
+                {layer === "wind" && (
                   <div className="flex overflow-hidden rounded-md border border-white/20 bg-black/60 backdrop-blur">
-                    {(["wind", "solar"] as StationMode[]).map((m) => (
+                    {(["live", "7day"] as const).map((r) => (
                       <button
-                        key={m}
+                        key={r}
                         type="button"
-                        onClick={() => setStationMode(m)}
+                        onClick={() => setWindRange(r)}
                         className={cn(
                           "px-2.5 py-1 font-mono text-[0.5625rem] uppercase tracking-wider transition-colors",
-                          m === "solar" && "border-l border-white/15",
-                          stationMode === m ? "bg-signal text-black" : "text-white/70 hover:bg-white/10",
+                          r === "7day" && "border-l border-white/15",
+                          windRange === r ? "bg-signal text-black" : "text-white/70 hover:bg-white/10",
                         )}
-                        aria-pressed={stationMode === m}
+                        aria-pressed={windRange === r}
                       >
-                        {m === "wind" ? "Wind km/h" : "Solar DNI"}
+                        {r === "live" ? "Live" : "7 days"}
                       </button>
                     ))}
                   </div>
@@ -1085,11 +1091,11 @@ export function NcmSources() {
             )}
             {layer === "clouds" && (
               <span className="absolute right-3 top-3 z-[500] inline-flex items-center gap-1.5 rounded-md bg-accent/90 px-2 py-1 font-mono text-[0.5625rem] uppercase tracking-wider text-black backdrop-blur">
-                Forecast · total cloud cover
+                Total cloud cover · live DNI stations
               </span>
             )}
 
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[500] flex items-center gap-3 bg-gradient-to-t from-black/80 to-transparent px-4 py-3">
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[500] flex items-center gap-3 bg-gradient-to-t from-black/80 to-transparent py-3 pl-4 pr-16">
               {layer === "wind" ? (
                 fieldData && fieldData.frames.length > 0 ? (
                   <>
