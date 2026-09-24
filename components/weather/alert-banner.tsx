@@ -10,12 +10,15 @@ import {
   Cloud,
   CloudRain,
   Droplets,
+  ExternalLink,
   Gauge,
   MapPin,
   Navigation,
+  Radar,
+  Radio,
   ShieldCheck,
   Siren,
-  Sparkles,
+  SunDim,
   Timer,
   Wind,
 } from "lucide-react"
@@ -31,6 +34,7 @@ import {
   offsetLocation,
   precipUnit,
   predictArrivals,
+  rainAttenuation,
   speedUnit,
   type AlertLevel,
   type ArrivalKey,
@@ -38,8 +42,17 @@ import {
   type WeatherPayload,
 } from "@/lib/weather"
 import { fetchWarningFrames, type EmirateWarning } from "@/lib/ncm-warnings"
-import { BUZZER_TONE, DEFAULT_RULES, type EscalationRule } from "@/lib/escalation"
+import {
+  BUZZER_TONE,
+  DEFAULT_RULES,
+  DEFAULT_WIND_MONITOR,
+  DEFAULT_WIND_SOURCE,
+  type EscalationRule,
+  type WindMonitorTier,
+  type WindSourceConfig,
+} from "@/lib/escalation"
 import { ProximityRings } from "@/components/weather/proximity-rings"
+import { WindDirectionRadar } from "@/components/weather/wind-direction-radar"
 import { useWeather } from "@/components/weather/weather-provider"
 import { cn } from "@/lib/utils"
 
@@ -100,10 +113,21 @@ const HAZARD_ICON: Record<HazardKey, typeof Wind> = {
   precip: Droplets,
 }
 
-const ARRIVAL_ICON: Record<ArrivalKey, typeof Wind> = {
-  wind: Wind,
-  rain: CloudRain,
-  cloud: Cloud,
+/** Neutral → escalating tones for the live parameter cells. */
+type ParamTone = "neutral" | "info" | "warn" | "bad"
+const PARAM_TONE: Record<ParamTone, string> = {
+  neutral: "border-border/70 bg-background/40 text-foreground",
+  info: "border-signal/40 bg-signal/5 text-signal",
+  warn: "border-alert-yellow/40 bg-alert-yellow/10 text-alert-yellow",
+  bad: "border-alert-orange/40 bg-alert-orange/10 text-alert-orange",
+}
+
+type ParamCell = {
+  label: string
+  value: string
+  unit?: string
+  icon: typeof Wind
+  tone: ParamTone
 }
 
 /** Looping level-tuned alarm via the Web Audio API (no asset needed). */
@@ -164,6 +188,20 @@ export function AlertBanner() {
     revalidateOnFocus: false,
   })
   const rules = rulesData?.rules ?? DEFAULT_RULES
+  // Wind Event Monitor thresholds — persisted overrides from the Engineering Console.
+  const { data: windMonitorData } = useSWR<{ tiers: WindMonitorTier[] }>(
+    "/api/wind-monitor",
+    farFetcher as never,
+    { refreshInterval: 60_000, revalidateOnFocus: false },
+  )
+  const windTiers = windMonitorData?.tiers ?? DEFAULT_WIND_MONITOR
+  // Wind speed & gust source link — NCM COSMO-UAE by default, editable in the Engineering Console.
+  const { data: windSourceData } = useSWR<{ source: WindSourceConfig }>(
+    "/api/wind-source",
+    farFetcher as never,
+    { refreshInterval: 300_000, revalidateOnFocus: false },
+  )
+  const windSource = windSourceData?.source ?? DEFAULT_WIND_SOURCE
   const alert = useMemo(() => (payload ? buildAlert(payload) : null), [payload])
   const level = alert?.level ?? null
   // Acknowledgment latch: the alarm sounds whenever the detected level differs from the
@@ -307,7 +345,6 @@ export function AlertBanner() {
   // predict when the wind, rain and cloud fields reach the site — replacing the old
   // distance ÷ speed ETA with a gust-weighted, confidence-scored model.
   const originCompass = compass(payload.current.windDirection)
-  const advectionSpeed = payload.current.windSpeed // km/h mean transport of the front
   const arrivals = predictArrivals({
     distanceKm: ALERT_RADII_KM.yellow,
     units: payload.units,
@@ -327,17 +364,32 @@ export function AlertBanner() {
       : null,
   })
   const windArrival = arrivals.find((a) => a.key === "wind") ?? null
-  const soonest = arrivals
-    .filter((a) => a.etaMinutes != null)
-    .sort((a, b) => (a.etaMinutes ?? 0) - (b.etaMinutes ?? 0))[0]
   const etaMinutes = windArrival?.etaMinutes ?? null
-  const arrivalClock = etaMinutes != null ? safeTime(new Date(now.getTime() + etaMinutes * 60_000)) : null
-  // Front position along the 60 km watch ring (0% = watch edge, 100% = on you).
-  const frontProgress = Math.max(0, Math.min(100, (1 - ALERT_RADII_KM.yellow / ALERT_RADII_KM.green) * 100))
-  const rankedHazards = [...alert.hazards].sort((a, b) => {
-    const order = { red: 3, orange: 2, yellow: 1, green: 0 } as const
-    return order[b.level] - order[a.level]
-  })
+  // Live parameter grid — atmospheric channels plus derived radar/optical values.
+  const paramCells: ParamCell[] = (() => {
+    const cur = payload.current
+    const hourNow = payload.hourly[payload.currentHourIndex] ?? payload.hourly[0]
+    // Rain / precipitation rate normalised to mm/h for the physics helpers.
+    const rainMmH = payload.units === "metric" ? cur.precipitation : cur.precipitation * 25.4
+    const precipProb = hourNow?.precipitationProbability ?? 0
+    // ITU-R P.838 rain attenuation (dB/km) through the current cell.
+    const atten = rainAttenuation(rainMmH)
+    // Kasten–Czeplak atmospheric transmittance (clearness index) from cloud cover.
+    const transmittance = Math.round((1 - 0.75 * Math.pow(cur.cloudCover / 100, 3.4)) * 100)
+    // Marshall–Palmer radar reflectivity: Z = 200·R^1.6, in dBZ.
+    const reflectivity = rainMmH > 0 ? 10 * Math.log10(200 * Math.pow(rainMmH, 1.6)) : 0
+
+    return [
+      { label: "Rain", value: rainMmH.toFixed(1), unit: precipUnit(payload.units) + "/h", icon: CloudRain, tone: rainMmH > 0.2 ? "warn" : "neutral" },
+      { label: "Clouds", value: `${Math.round(cur.cloudCover)}`, unit: "%", icon: Cloud, tone: cur.cloudCover > 70 ? "info" : "neutral" },
+      { label: "Precipitation", value: `${Math.round(precipProb)}`, unit: "% prob", icon: Droplets, tone: precipProb > 50 ? "warn" : "neutral" },
+      { label: "Wind speed", value: `${Math.round(cur.windSpeed)}`, unit: speedUnit(payload.units), icon: Wind, tone: cur.windSpeed > 40 ? "bad" : cur.windSpeed > 20 ? "warn" : "neutral" },
+      { label: "Attenuation", value: atten.toFixed(2), unit: "dB/km", icon: Radio, tone: atten >= 1 ? "bad" : atten >= 0.1 ? "warn" : "neutral" },
+      { label: "Transmittance", value: `${Math.max(0, transmittance)}`, unit: "%", icon: SunDim, tone: transmittance < 40 ? "warn" : "info" },
+      { label: "Reflectivity", value: reflectivity > 0 ? reflectivity.toFixed(0) : "—", unit: reflectivity > 0 ? "dBZ" : undefined, icon: Radar, tone: reflectivity >= 40 ? "bad" : reflectivity >= 20 ? "warn" : "neutral" },
+      { label: "Relative humidity", value: `${Math.round(cur.humidity)}`, unit: "%", icon: Droplets, tone: cur.humidity > 80 ? "info" : "neutral" },
+    ]
+  })()
 
   // Live evaluation of the escalation rules against real signals (Open-Meteo current
   // reading, the 50 km upwind sample, and the NCM Al Bahar warning) for the prediction table.
@@ -347,42 +399,6 @@ export function AlertBanner() {
   const toMs = (v: number) => (payload.units === "metric" ? v : v * 1.609) / 3.6
   const windMs = toMs(payload.current.windSpeed)
   const farGustMs = farGust != null ? toMs(farGust) : null
-  const precipNow = payload.units === "metric" ? payload.current.precipitation : payload.current.precipitation * 25.4
-  const isStorm = describeCode(payload.current.weatherCode).group === "storm"
-  const ncmActive = !!ncm && ncm.level !== "green"
-  const predictionRows: { signal: string; source: string; value: string; met: boolean }[] = [
-    {
-      signal: "Intensifying convection",
-      source: "Satellite · radar",
-      value: approaching || isStorm ? `Closing · ~${ALERT_RADII_KM[alert.level]} km` : "Steady · 60 km +",
-      met: approaching || isStorm,
-    },
-    {
-      signal: "Wind gust over 15 m/s",
-      source: "Open-Meteo",
-      value: `${gustMs.toFixed(1)} m/s · ${Math.round(gustKmh)} km/h`,
-      met: gustMs >= 15,
-    },
-    {
-      signal: "Diverging wind under 50 km",
-      source: "Upwind sample",
-      value: gustDelta == null ? "Sampling" : `${gustDelta > 0 ? "+" : ""}${Math.round(gustDelta)} ${speedUnit(payload.units)}`,
-      met: approaching,
-    },
-    {
-      signal: "Rain precipitation over 1 mm",
-      source: "Open-Meteo",
-      value: `${precipNow.toFixed(1)} ${precipUnit(payload.units)}/h`,
-      met: precipNow >= 1,
-    },
-    {
-      signal: "NCM / satellite warning",
-      source: "NCM Al Bahar",
-      value: ncm ? `${ncm.name} · ${ncm.headline}` : "No active warning",
-      met: ncmActive,
-    },
-  ]
-
   return (
     <section aria-label="Advance AI safety model" className={cn("station-rise rounded-xl border", styles.bar)}>
       {/* Header ribbon */}
@@ -565,8 +581,8 @@ export function AlertBanner() {
           </div>
         </div>
 
-        {/* Proximity radar */}
-        <div className="flex justify-center lg:justify-end">
+        {/* Proximity radar + wind-direction radar, side by side */}
+        <div className="flex flex-col items-center justify-center gap-8 lg:justify-end xl:flex-row xl:items-start">
           <ProximityRings
             active={alert.level}
             showFarSite
@@ -578,15 +594,22 @@ export function AlertBanner() {
             etaLabel={etaMinutes != null ? formatEta(etaMinutes) : null}
             windDirection={payload.current.windDirection}
           />
+<WindDirectionRadar
+  windMs={windMs}
+  gustMs={gustMs}
+  windDirection={payload.current.windDirection}
+  lat={payload.location.latitude}
+  lon={payload.location.longitude}
+  sourceUrl={windSource.url}
+  sourceLabel={windSource.label}
+  />
         </div>
       </div>
 
       {/* Approach tracker — on-site vs far-site (50 km upwind) gust + distance legend */}
       <div className="border-t border-border/60 p-5 sm:p-7">
-        <span className="flex items-center gap-1.5 label-caps text-muted-foreground">
-          <Navigation className="h-3.5 w-3.5" aria-hidden="true" />
-          Approach tracker · wind gust on site vs 50 km upwind
-        </span>
+        {/* Live Wind Event Monitor — active tier driven by on-site sustained wind */}
+        <WindEventMonitor windMs={windMs} tiers={windTiers} />
 
         <div className="mt-3 grid items-stretch gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
           {/* ON SITE (near) */}
@@ -595,12 +618,13 @@ export function AlertBanner() {
               <MapPin className="h-3 w-3" aria-hidden="true" /> On site · near
             </span>
             <div className="mt-1.5 flex items-baseline gap-1.5">
-              <span className="text-4xl font-black tabular-nums text-foreground">{gustMs.toFixed(1)}</span>
-              <span className="text-sm text-muted-foreground">m/s gust</span>
+              <span className="text-4xl font-black tabular-nums text-foreground">{Math.round(gustKmh)}</span>
+              <span className="text-sm text-muted-foreground">km/h gust</span>
             </div>
             <span className="mt-0.5 block font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
-              {Math.round(onGust)} {speedUnit(payload.units)} · {compass(payload.current.windDirection)} wind
+              {(gustKmh / MS_TO_KMH).toFixed(1)} m/s · {compass(payload.current.windDirection)} wind
             </span>
+            <WindSourceLink source={windSource} />
           </div>
 
           {/* delta */}
@@ -623,117 +647,16 @@ export function AlertBanner() {
             </span>
             <div className="mt-1.5 flex items-baseline gap-1.5">
               <span className="text-4xl font-black tabular-nums text-foreground">
-                {farGustMs == null ? "—" : farGustMs.toFixed(1)}
+                {farGustMs == null ? "—" : Math.round(farGustMs * 3.6)}
               </span>
-              <span className="text-sm text-muted-foreground">m/s gust</span>
+              <span className="text-sm text-muted-foreground">km/h gust</span>
             </div>
             <span className="mt-0.5 block font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
-              {farGust == null ? "Sampling" : `${Math.round(farGust)} ${speedUnit(payload.units)}`} ·{" "}
+              {farGustMs == null ? "Sampling · " : `${farGustMs.toFixed(1)} m/s · `}
               {compass(payload.current.windDirection)} origin
             </span>
+            <WindSourceLink source={windSource} />
           </div>
-        </div>
-
-        {/* AI advection nowcast — predicts when wind, rain and cloud fields reach the site */}
-        <div className={cn("mt-3 rounded-xl border p-4", approaching ? deltaBorder : "border-border bg-background/40")}>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span className={cn("flex items-center gap-1.5 label-caps", approaching ? deltaTone : "text-signal")}>
-              <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-              AI arrival nowcast · wind · rain · cloud
-            </span>
-            <span
-              className={cn(
-                "rounded-full border px-2 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider",
-                soonest ? deltaTone : "border-border text-muted-foreground",
-              )}
-            >
-              {soonest && soonest.etaMinutes != null ? `Soonest · ${soonest.label} ~${formatEta(soonest.etaMinutes)}` : "Nothing inbound"}
-            </span>
-          </div>
-
-          <p className="mt-2 text-pretty text-sm text-muted-foreground">
-            Blending the on-site reading with the {ALERT_RADII_KM.yellow} km upwind sample, the model predicts field
-            arrival from the <span className="font-semibold text-foreground">{originCompass}</span> at a{" "}
-            <span className="font-semibold tabular-nums text-foreground">
-              {Math.round(advectionSpeed)} {speedUnit(payload.units)}
-            </span>{" "}
-            closing speed.
-          </p>
-
-          <div className="mt-3 grid gap-2 sm:grid-cols-3">
-            {arrivals.map((a) => {
-              const Icon = ARRIVAL_ICON[a.key]
-              const tone =
-                a.status === "Approaching"
-                  ? "text-alert-orange"
-                  : a.status === "Easing"
-                    ? "text-alert-green"
-                    : "text-muted-foreground"
-              const border =
-                a.status === "Approaching"
-                  ? "border-alert-orange/40 bg-alert-orange/10"
-                  : a.status === "Easing"
-                    ? "border-alert-green/40 bg-alert-green/10"
-                    : "border-border bg-background/50"
-              const barColor =
-                a.status === "Approaching" ? "bg-alert-orange" : a.status === "Easing" ? "bg-alert-green" : "bg-muted-foreground/50"
-              return (
-                <div key={a.key} className={cn("rounded-lg border p-3", border)}>
-                  <span className="flex items-center justify-between">
-                    <span className={cn("flex items-center gap-1.5 font-mono text-[0.625rem] uppercase tracking-wider", tone)}>
-                      <Icon className="h-3.5 w-3.5" aria-hidden="true" /> {a.label}
-                    </span>
-                    <span className={cn("font-mono text-[0.5625rem] uppercase tracking-wider", tone)}>{a.status}</span>
-                  </span>
-                  <div className="mt-1.5 flex items-baseline gap-1.5">
-                    <span className={cn("text-2xl font-black tabular-nums", tone)}>
-                      {a.etaMinutes == null ? "—" : `~${formatEta(a.etaMinutes)}`}
-                    </span>
-                    {a.etaMinutes != null ? (
-                      <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">ETA on site</span>
-                    ) : null}
-                  </div>
-                  <span className="mt-0.5 block font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground tabular-nums">
-                    {a.detail}
-                  </span>
-                  <div className="mt-2 flex items-center gap-1.5">
-                    <span className="font-mono text-[0.5rem] uppercase tracking-wider text-muted-foreground">Conf</span>
-                    <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-secondary">
-                      <div className={cn("absolute inset-y-0 left-0 rounded-full transition-all", barColor)} style={{ width: `${a.confidence}%` }} />
-                    </div>
-                    <span className="font-mono text-[0.5625rem] tabular-nums text-muted-foreground">{a.confidence}%</span>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-
-          {/* Closing track — shown when a wind front is genuinely inbound */}
-          {approaching ? (
-            <div className="mt-3">
-              <div className="relative h-2.5 rounded-full bg-secondary">
-                <div
-                  className={cn("absolute inset-y-0 right-0 rounded-full opacity-30", styles.solid)}
-                  style={{ width: `${100 - frontProgress}%` }}
-                />
-                <span
-                  className={cn(
-                    "absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-background",
-                    styles.solid,
-                  )}
-                  style={{ left: `${frontProgress}%` }}
-                  aria-hidden="true"
-                />
-                <span className="absolute -right-0.5 top-1/2 grid h-4 w-4 -translate-y-1/2 place-items-center rounded-full border-2 border-background bg-signal text-signal">
-                  <MapPin className="h-2.5 w-2.5 text-background" aria-hidden="true" />
-                </span>
-              </div>
-              <div className="mt-1 flex justify-between font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-                <span>{ALERT_RADII_KM.green} km · watch edge</span>
-                <span>You{arrivalClock ? ` · arrives ${arrivalClock}` : ""}</span>
-              </div>
-            </div>
-          ) : null}
         </div>
 
         {/* Escalation rules table — the fixed NCM-style ladder, active tier highlighted */}
@@ -764,44 +687,32 @@ export function AlertBanner() {
                     </span>
                   </td>
                   <td className="px-3 py-2 text-xs leading-snug text-muted-foreground">{rule.triggers}</td>
-                  <td className="hidden whitespace-nowrap px-3 py-2 text-right align-top font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground sm:table-cell">
-                    {rule.sources}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Live prediction table — each rule signal evaluated against real data now */}
-        <div className="mt-3 overflow-hidden rounded-lg border border-border/70">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-background/40 px-3 py-1.5">
-            <span className="flex items-center gap-1.5 label-caps text-muted-foreground">
-              <Activity className="h-3 w-3" aria-hidden="true" />
-              Live prediction
-            </span>
-            <span className={cn("flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider", styles.chip)}>
-              <span className={cn("h-2 w-2 rounded-full", styles.solid)} aria-hidden="true" />
-              Predicted {alert.title}
-              {approaching && etaMinutes != null ? ` · ETA ${formatEta(etaMinutes)}` : ""}
-            </span>
-          </div>
-          <table className="w-full border-collapse text-left">
-            <tbody>
-              {predictionRows.map((row) => (
-                <tr key={row.signal} className="border-t border-border/40 first:border-t-0">
-                  <td className="px-3 py-1.5">
-                    <span className="block text-xs font-medium text-foreground">{row.signal}</span>
-                    <span className="block font-mono text-[0.5rem] uppercase tracking-wider text-muted-foreground">
-                      {row.source}
+                  <td className="hidden px-3 py-2 text-right align-top sm:table-cell">
+                    <span className="flex flex-wrap justify-end gap-1">
+                      {rule.sourceLinks.length > 0
+                        ? rule.sourceLinks.map((src, i) =>
+                            src.url ? (
+                              <a
+                                key={i}
+                                href={src.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-1.5 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider text-accent transition-colors hover:bg-accent/20"
+                              >
+                                {src.label}
+                                <ExternalLink className="h-2.5 w-2.5" aria-hidden="true" />
+                              </a>
+                            ) : (
+                              <span
+                                key={i}
+                                className="inline-flex items-center rounded border border-border/60 bg-background/40 px-1.5 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground"
+                              >
+                                {src.label}
+                              </span>
+                            ),
+                          )
+                        : <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">{rule.sources}</span>}
                     </span>
-                  </td>
-                  <td className="px-3 py-1.5 text-right text-xs tabular-nums text-muted-foreground">{row.value}</td>
-                  <td className="w-8 px-3 py-1.5 text-right">
-                    <span
-                      className={cn("inline-flex h-2.5 w-2.5 rounded-full", row.met ? "bg-alert-orange" : "bg-alert-green/40")}
-                      aria-label={row.met ? "Triggered" : "Clear"}
-                    />
                   </td>
                 </tr>
               ))}
@@ -810,27 +721,29 @@ export function AlertBanner() {
         </div>
       </div>
 
-      {/* Live background hazard data feeding the model */}
+      {/* Live parameter grid feeding the model — atmospheric + radar/optical channels */}
       <div className="border-t border-border/60 px-4 pb-4 pt-3">
         <span className="flex items-center gap-1.5 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
           <Activity className="h-3 w-3" aria-hidden="true" />
-          Live background data · {DANGER_RADIUS_KM} km scan
+          Live parameters · {DANGER_RADIUS_KM} km scan
         </span>
         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {rankedHazards.map((h) => {
-            const Icon = HAZARD_ICON[h.key]
-            const hs = LEVEL_STYLES[h.level]
+          {paramCells.map((p) => {
+            const Icon = p.icon
             return (
               <div
-                key={h.key}
-                className={cn("flex items-center gap-2 rounded-lg border px-2.5 py-2", hs.chip)}
+                key={p.label}
+                className={cn("flex items-center gap-2 rounded-lg border px-2.5 py-2", PARAM_TONE[p.tone])}
               >
                 <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
                 <span className="min-w-0">
                   <span className="block truncate font-mono text-[0.5625rem] uppercase tracking-wider opacity-80">
-                    {h.label}
+                    {p.label}
                   </span>
-                  <span className="block text-sm font-bold tabular-nums">{h.value}</span>
+                  <span className="block text-sm font-bold tabular-nums">
+                    {p.value}
+                    {p.unit ? <span className="ml-0.5 text-[0.625rem] font-medium opacity-70">{p.unit}</span> : null}
+                  </span>
                 </span>
               </div>
             )
@@ -838,5 +751,302 @@ export function AlertBanner() {
         </div>
       </div>
     </section>
+  )
+}
+
+const WIND_TIER_STYLES: Record<
+  WindMonitorTier["level"],
+  { chip: string; dot: string; text: string; bar: string; track: string }
+> = {
+  green: {
+    chip: "border-alert-green/40 bg-alert-green/10 text-alert-green",
+    dot: "bg-alert-green",
+    text: "text-alert-green",
+    bar: "bg-alert-green",
+    track: "bg-alert-green/20",
+  },
+  yellow: {
+    chip: "border-alert-yellow/40 bg-alert-yellow/10 text-alert-yellow",
+    dot: "bg-alert-yellow",
+    text: "text-alert-yellow",
+    bar: "bg-alert-yellow",
+    track: "bg-alert-yellow/20",
+  },
+  orange: {
+    chip: "border-alert-orange/40 bg-alert-orange/10 text-alert-orange",
+    dot: "bg-alert-orange",
+    text: "text-alert-orange",
+    bar: "bg-alert-orange",
+    track: "bg-alert-orange/20",
+  },
+  red: {
+    chip: "border-alert-red/40 bg-alert-red/10 text-alert-red",
+    dot: "bg-alert-red",
+    text: "text-alert-red",
+    bar: "bg-alert-red",
+    track: "bg-alert-red/20",
+  },
+}
+
+/** m/s → km/h. Wind thresholds are stored in m/s; the UI shows both units. */
+const MS_TO_KMH = 3.6
+const fmtMs = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1))
+const fmtKmh = (v: number) => Math.round(v * MS_TO_KMH)
+/** Capitalise an alert level key for display, e.g. "red" → "Red". */
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
+
+/** Fixed 4-level station status lamps — always shown, highest active level blinks. */
+const STATION_LEVELS: { level: keyof typeof WIND_TIER_STYLES; label: string; sub: string }[] = [
+  { level: "green", label: "Green", sub: "Normal" },
+  { level: "yellow", label: "Yellow", sub: "Watch" },
+  { level: "orange", label: "Orange", sub: "Alert" },
+  { level: "red", label: "Red", sub: "Severe" },
+]
+
+/** Small "connected source" chip that links wind speed & gust readouts to the configured NCM feed. */
+function WindSourceLink({ source }: { source: WindSourceConfig }) {
+  if (!source.url) return null
+  return (
+    <a
+      href={source.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="mt-2 inline-flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-1.5 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider text-accent transition-colors hover:bg-accent/20"
+    >
+      {source.label}
+      <ExternalLink className="h-2.5 w-2.5" aria-hidden="true" />
+    </a>
+  )
+}
+
+function WindEventMonitor({ windMs, tiers }: { windMs: number; tiers: WindMonitorTier[] }) {
+  // Tiers are evaluated high→low; the highest threshold the live wind meets is active.
+  const sorted = useMemo(
+    () => [...tiers].sort((a, b) => b.minSpeed - a.minSpeed),
+    [tiers],
+  )
+  const active = useMemo(
+    () => sorted.find((t) => windMs >= t.minSpeed) ?? null,
+    [sorted, windMs],
+  )
+  // Scale gauge to the highest configured threshold, with headroom.
+  const ceiling = useMemo(() => {
+    const max = sorted.length > 0 ? sorted[0].minSpeed : 16
+    return Math.max(max * 1.15, windMs * 1.05, 1)
+  }, [sorted, windMs])
+  const fillPct = Math.min(100, Math.round((windMs / ceiling) * 100))
+  const activeStyle = active ? WIND_TIER_STYLES[active.level] : null
+  const currentLevel: keyof typeof WIND_TIER_STYLES = active?.level ?? "green"
+
+  // Each tier owns the band from its own threshold up to the next-higher one, so the
+  // dashboard shows an individual range (min→max) per box in both m/s and km/h.
+  const boxes = sorted.map((t, i) => {
+    const upper = i > 0 ? sorted[i - 1].minSpeed : null
+    return { tier: t, lower: t.minSpeed, upper }
+  })
+
+  return (
+    <div className="mt-3 overflow-hidden rounded-lg border border-border/70">
+      <div className="flex items-center justify-between gap-2 border-b border-border/60 bg-gradient-to-r from-background/60 to-card px-3 py-2.5">
+        <span className="flex items-center gap-2.5">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-accent/40 bg-accent/10 text-accent">
+            <Wind className="h-4 w-4" aria-hidden="true" />
+          </span>
+          <span className="flex flex-col leading-tight">
+            <span className="text-sm font-bold tracking-tight text-foreground">Wind Event Monitor</span>
+            <span className="label-caps text-muted-foreground">Live sustained wind · escalation ladder</span>
+          </span>
+        </span>
+        {active ? (
+          <span
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[0.5625rem] font-bold uppercase tracking-wider",
+              activeStyle!.chip,
+            )}
+          >
+            <span className={cn("h-1.5 w-1.5 rounded-full tier-blink", activeStyle!.dot, activeStyle!.text)} aria-hidden="true" />
+            {active.note}
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-alert-green/40 bg-alert-green/10 px-2 py-0.5 font-mono text-[0.5625rem] font-bold uppercase tracking-wider text-alert-green">
+            <span className="h-1.5 w-1.5 rounded-full bg-alert-green" aria-hidden="true" />
+            Below thresholds
+          </span>
+        )}
+      </div>
+
+      {/* Weather-station status lamps — green / yellow / orange / red; the live level blinks */}
+      <div className="border-b border-border/60">
+        <div className="grid grid-cols-2 gap-px bg-border/60 sm:grid-cols-4">
+          {STATION_LEVELS.map(({ level, label, sub }) => {
+            const s = WIND_TIER_STYLES[level]
+            const on = currentLevel === level
+            return (
+              <div
+                key={level}
+                className={cn("flex items-center gap-2.5 bg-card px-3 py-2.5 transition-colors", on ? s.chip : "")}
+                aria-current={on ? "true" : undefined}
+              >
+                <span
+                  className={cn(
+                    "h-4 w-4 shrink-0 rounded-full border",
+                    s.dot,
+                    s.text,
+                    on ? "tier-blink border-transparent" : "border-border/50 opacity-25",
+                  )}
+                  aria-hidden="true"
+                />
+                <div className="flex min-w-0 flex-col leading-tight">
+                  <span
+                    className={cn(
+                      "font-mono text-[0.6875rem] font-bold uppercase tracking-wider",
+                      on ? s.text : "text-muted-foreground",
+                    )}
+                  >
+                    {label}
+                  </span>
+                  <span className="font-mono text-[0.5625rem] uppercase tracking-wide text-muted-foreground">{sub}</span>
+                </div>
+                {on ? (
+                  <span className={cn("ml-auto font-mono text-[0.5rem] font-bold uppercase tracking-wider", s.text)}>
+                    Live
+                  </span>
+                ) : null}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Live on-site reading strip — dual-unit with tier-marker gauge */}
+      <div
+        className={cn(
+          "flex flex-col gap-3 border-b border-border/60 bg-card p-4",
+          activeStyle ? activeStyle.chip.replace(/text-\S+/, "") : "",
+        )}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <span className="label-caps text-muted-foreground">On-site sustained wind</span>
+          {active ? (
+            <span className={cn("font-mono text-[0.5625rem] font-bold uppercase tracking-wider", activeStyle!.text)}>
+              {active.label}
+            </span>
+          ) : null}
+        </div>
+        <div className="flex items-end gap-3">
+          <span className={cn("text-4xl font-bold tabular-nums leading-none", activeStyle?.text ?? "text-foreground")}>
+            {Math.round(windMs * MS_TO_KMH)}
+            <span className="ml-1 text-base font-medium text-muted-foreground">km/h · {fmtMs(windMs)} m/s</span>
+          </span>
+        </div>
+        <div className="relative h-2 w-full rounded-full bg-muted/60">
+          <div
+            className={cn("absolute inset-y-0 left-0 rounded-full transition-all duration-500", activeStyle?.bar ?? "bg-alert-green")}
+            style={{ width: `${fillPct}%` }}
+          />
+          {sorted.map((t) => {
+            const pos = Math.min(100, (t.minSpeed / ceiling) * 100)
+            return (
+              <span
+                key={t.id}
+                className="absolute top-1/2 h-3 w-0.5 -translate-y-1/2 rounded-full bg-foreground/50"
+                style={{ left: `${pos}%` }}
+                title={`${t.label} · ${fmtKmh(t.minSpeed)} km/h`}
+              />
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Escalation ladder — one row per configured tier, mirrors the engineering console table.
+          Columns: Wind ≥ · Alert level · Severity label · Note. The live-active tier blinks. */}
+      <div role="table" aria-label="Wind event escalation ladder">
+        <div
+          role="row"
+          className="grid grid-cols-[1.1fr_1fr_1.2fr_1.1fr] gap-2 border-b border-border/60 bg-background/40 px-3 py-2"
+        >
+          <span role="columnheader" className="label-caps text-muted-foreground">Wind ≥</span>
+          <span role="columnheader" className="label-caps text-muted-foreground">Alert level</span>
+          <span role="columnheader" className="label-caps text-muted-foreground">Severity label</span>
+          <span role="columnheader" className="label-caps text-muted-foreground">Note</span>
+        </div>
+        <div className="flex flex-col gap-px bg-border/60">
+          {boxes.map(({ tier: t, lower, upper }) => {
+            const s = WIND_TIER_STYLES[t.level]
+            const isActive = active?.id === t.id
+            const met = windMs >= t.minSpeed
+            const kmhRange = upper == null ? `≥ ${fmtKmh(lower)}` : `${fmtKmh(lower)}–${fmtKmh(upper)}`
+            const msRange = upper == null ? `≥ ${fmtMs(lower)}` : `${fmtMs(lower)}–${fmtMs(upper)}`
+            return (
+              <div
+                role="row"
+                key={t.id}
+                aria-current={isActive ? "true" : undefined}
+                className={cn(
+                  "grid grid-cols-[1.1fr_1fr_1.2fr_1.1fr] items-center gap-2 px-3 py-2.5 transition-colors",
+                  isActive ? s.chip : met ? "bg-card" : "bg-card/60",
+                )}
+              >
+                {/* Wind range — dual unit */}
+                <span role="cell" className="flex flex-col leading-tight">
+                  <span
+                    className={cn(
+                      "font-mono text-sm font-bold tabular-nums",
+                      isActive ? s.text : met ? "text-foreground" : "text-muted-foreground",
+                    )}
+                  >
+                    {kmhRange} <span className="text-[0.5625rem] font-medium text-muted-foreground">km/h</span>
+                  </span>
+                  <span className="font-mono text-[0.5625rem] font-medium tabular-nums text-muted-foreground">
+                    {msRange} m/s
+                  </span>
+                </span>
+                {/* Alert level — coloured lamp + name */}
+                <span role="cell" className="flex items-center gap-1.5">
+                  <span
+                    className={cn(
+                      "h-2.5 w-2.5 shrink-0 rounded-full",
+                      met ? s.dot : "bg-muted-foreground/30",
+                      met && s.text,
+                      isActive && "tier-blink",
+                    )}
+                    aria-hidden="true"
+                  />
+                  <span
+                    className={cn(
+                      "font-mono text-[0.6875rem] font-bold uppercase tracking-wide",
+                      isActive ? s.text : met ? "text-foreground" : "text-muted-foreground",
+                    )}
+                  >
+                    {cap(t.level)}
+                  </span>
+                </span>
+                {/* Severity label */}
+                <span
+                  role="cell"
+                  className={cn(
+                    "font-mono text-[0.6875rem] uppercase tracking-wide",
+                    isActive ? s.text : "text-muted-foreground",
+                  )}
+                >
+                  {t.label}
+                </span>
+                {/* Note (escalation level) + live tag */}
+                <span role="cell" className="flex items-center justify-between gap-2">
+                  <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+                    {t.note}
+                  </span>
+                  {isActive ? (
+                    <span className={cn("shrink-0 font-mono text-[0.5rem] font-bold uppercase tracking-wider tier-blink", s.text)}>
+                      Live
+                    </span>
+                  ) : null}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
   )
 }

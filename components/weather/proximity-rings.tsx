@@ -125,7 +125,7 @@ export function ProximityRings({
               <span className="relative inline-flex h-3.5 w-3.5 rounded-full bg-alert-yellow" />
             </span>
             <span className="mt-1 rounded bg-background px-1.5 py-0.5 font-mono text-[0.625rem] font-bold uppercase tracking-wide text-alert-yellow">
-              {farGustMs != null ? `${farGustMs.toFixed(1)} m/s` : "Far 50km"}
+              {farGustMs != null ? `${Math.round(farGustMs * 3.6)} km/h · ${farGustMs.toFixed(1)} m/s` : "Far 50km"}
             </span>
           </span>
         ) : null}
@@ -149,42 +149,20 @@ export function ProximityRings({
         Distance from your location (km)
       </span>
 
-      {/* Live readout — wind in m/s + AI front call */}
-      <div className="grid w-full grid-cols-2 gap-2">
-        <div className="rounded-lg border border-border/70 bg-background/40 px-3 py-2">
+      {/* Live readout — wind in m/s */}
+      <div className="grid w-full grid-cols-1 gap-2">
+        <div className="flex min-h-[4.75rem] flex-col justify-between rounded-lg border border-border/70 bg-background/40 px-3 py-2">
           <span className="flex items-center gap-1 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
             <Wind className="h-3 w-3" aria-hidden="true" /> Wind now
           </span>
-          <p className="mt-0.5 font-mono text-lg font-bold tabular-nums text-foreground">
-            {windMs != null ? windMs.toFixed(1) : "—"}
-            <span className="ml-1 text-xs font-medium text-muted-foreground">m/s</span>
+          <p className="font-mono text-lg font-bold tabular-nums text-foreground">
+            {windMs != null ? Math.round(windMs * 3.6) : "—"}
+            <span className="ml-1 text-xs font-medium text-muted-foreground">
+              km/h{windMs != null ? ` · ${windMs.toFixed(1)} m/s` : ""}
+            </span>
           </p>
           <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-            Gust {gustMs != null ? `${gustMs.toFixed(1)} m/s` : "—"}
-          </span>
-        </div>
-        <div
-          className={cn(
-            "rounded-lg border px-3 py-2",
-            approaching ? "border-alert-orange/50 bg-alert-orange/5" : "border-alert-green/40 bg-alert-green/5",
-          )}
-        >
-          <span
-            className={cn(
-              "flex items-center gap-1 font-mono text-[0.5625rem] uppercase tracking-wider",
-              approaching ? "text-alert-orange" : "text-alert-green",
-            )}
-          >
-            <span className={cn("h-1.5 w-1.5 rounded-full", activeTier.dot, "animate-pulse")} aria-hidden="true" />
-            AI front call
-          </span>
-          <p className="mt-0.5 font-mono text-sm font-bold text-foreground">
-            {approaching ? `Closing · ${ALERT_RADII_KM[active]} km` : "No front closing"}
-          </p>
-          <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-            {approaching
-              ? `${etaLabel ? `ETA ~${etaLabel}` : "Tracking"}${originCompass ? ` · from ${originCompass}` : ""}`
-              : `Steady${originCompass ? ` · ${originCompass}` : ""}`}
+            Gust {gustMs != null ? `${Math.round(gustMs * 3.6)} km/h · ${gustMs.toFixed(1)} m/s` : "—"}
           </span>
         </div>
       </div>

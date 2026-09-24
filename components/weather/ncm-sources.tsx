@@ -21,7 +21,6 @@ import {
   Wind,
 } from "lucide-react"
 import { Panel } from "@/components/station/panel"
-import { MeasureMap } from "@/components/weather/measure-map"
 import { fetchWindFrames, type WindFrames } from "@/lib/wind-field"
 import { createWindLayer } from "@/lib/wind-layer"
 
@@ -127,16 +126,16 @@ const CLOUD_COVER_SCALE = [
   { c: "#f5f8fc", label: "100" },
 ] as const
 
-// Wind-speed legend (m/s) matching the COSMO-UAE heatmap palette in lib/wind-layer.
-// Numeric ticks (m/s) mirror the NCM diverging-winds scale calm → gale.
+// Wind-speed legend (km/h) matching the COSMO-UAE heatmap palette in lib/wind-layer.
+// Numeric ticks (km/h) mirror the NCM diverging-winds scale calm → gale.
 const WIND_SCALE = [
   { c: "#2642a8", label: "0" },
-  { c: "#1ea5cd", label: "5" },
-  { c: "#2ec39e", label: "10" },
-  { c: "#80d26c", label: "15" },
-  { c: "#e8d658", label: "20" },
-  { c: "#f69c3c", label: "25" },
-  { c: "#e84a3a", label: "30+" },
+  { c: "#1ea5cd", label: "18" },
+  { c: "#2ec39e", label: "36" },
+  { c: "#80d26c", label: "54" },
+  { c: "#e8d658", label: "72" },
+  { c: "#f69c3c", label: "90" },
+  { c: "#e84a3a", label: "108+" },
 ] as const
 
 /** Format a local ISO timestamp like "2026-08-26T12:00" into "Wed 26/08/2026 · 12:00". */
@@ -194,7 +193,6 @@ export function NcmSources() {
   const [warnIdx, setWarnIdx] = useState(0)
   const [warnPlaying, setWarnPlaying] = useState(true)
   const [geoReady, setGeoReady] = useState(false)
-  const [showMeasure, setShowMeasure] = useState(false)
 
   // Trajectory / distance measuring tool (NCM Ghaith-style): click multiple points
   // on the live map to build a route and read per-segment + total great-circle distance.
@@ -1255,38 +1253,11 @@ export function NcmSources() {
         </ul>
       </div>
 
-      {/* Optional multi-model measure & forecast map — hidden by default */}
-      <div className="flex flex-wrap items-center gap-3 border-t border-border px-4 py-3">
-        <button
-          type="button"
-          onClick={() => setShowMeasure((s) => !s)}
-          aria-expanded={showMeasure}
-          className={cn(
-            "inline-flex items-center gap-2 rounded-md border px-3 py-1.5 font-mono text-[0.625rem] uppercase tracking-wider transition-colors",
-            showMeasure
-              ? "border-signal bg-signal text-black"
-              : "border-border bg-card text-foreground hover:bg-secondary",
-          )}
-        >
-          <Ruler className="h-3.5 w-3.5" aria-hidden="true" />
-          {showMeasure ? "Hide measure & forecast map" : "Measure & forecast map (optional)"}
-        </button>
-        <p className="min-w-0 flex-1 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-          Pick any spot for an all-model 24-hour meteogram, or measure the distance between two points.
-        </p>
-      </div>
-
       <div className="border-t border-border px-4 py-2 font-mono text-[0.5625rem] text-muted-foreground">
         Live wind &amp; warnings via Open-Meteo · radar &amp; cloud loops © RainViewer · basemap © CARTO / OSM · boundaries ©
         geoBoundaries · official imagery &amp; warnings via NCM Al Bahar (opens in a new tab)
       </div>
     </Panel>
-
-    {showMeasure && (
-      <div className="mt-6">
-        <MeasureMap />
-      </div>
-    )}
     </>
   )
 }
