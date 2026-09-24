@@ -971,6 +971,14 @@ const MS_TO_KMH = 3.6
 const fmtMs = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1))
 const fmtKmh = (v: number) => Math.round(v * MS_TO_KMH)
 
+/** Fixed 4-level station status lamps — always shown, highest active level blinks. */
+const STATION_LEVELS: { level: keyof typeof WIND_TIER_STYLES; label: string; sub: string }[] = [
+  { level: "green", label: "Green", sub: "Normal" },
+  { level: "yellow", label: "Yellow", sub: "Watch" },
+  { level: "orange", label: "Orange", sub: "Alert" },
+  { level: "red", label: "Red", sub: "Severe" },
+]
+
 function WindEventMonitor({ windMs, tiers }: { windMs: number; tiers: WindMonitorTier[] }) {
   // Tiers are evaluated high→low; the highest threshold the live wind meets is active.
   const sorted = useMemo(
@@ -988,6 +996,7 @@ function WindEventMonitor({ windMs, tiers }: { windMs: number; tiers: WindMonito
   }, [sorted, windMs])
   const fillPct = Math.min(100, Math.round((windMs / ceiling) * 100))
   const activeStyle = active ? WIND_TIER_STYLES[active.level] : null
+  const currentLevel: keyof typeof WIND_TIER_STYLES = active?.level ?? "green"
 
   // Each tier owns the band from its own threshold up to the next-higher one, so the
   // dashboard shows an individual range (min→max) per box in both m/s and km/h.
@@ -1010,7 +1019,7 @@ function WindEventMonitor({ windMs, tiers }: { windMs: number; tiers: WindMonito
               activeStyle!.chip,
             )}
           >
-            <span className={cn("h-1.5 w-1.5 animate-pulse rounded-full", activeStyle!.dot)} aria-hidden="true" />
+            <span className={cn("h-1.5 w-1.5 rounded-full tier-blink", activeStyle!.dot, activeStyle!.text)} aria-hidden="true" />
             {active.note}
           </span>
         ) : (
@@ -1019,6 +1028,49 @@ function WindEventMonitor({ windMs, tiers }: { windMs: number; tiers: WindMonito
             Below thresholds
           </span>
         )}
+      </div>
+
+      {/* Weather-station status lamps — green / yellow / orange / red; the live level blinks */}
+      <div className="border-b border-border/60">
+        <div className="grid grid-cols-2 gap-px bg-border/60 sm:grid-cols-4">
+          {STATION_LEVELS.map(({ level, label, sub }) => {
+            const s = WIND_TIER_STYLES[level]
+            const on = currentLevel === level
+            return (
+              <div
+                key={level}
+                className={cn("flex items-center gap-2.5 bg-card px-3 py-2.5 transition-colors", on ? s.chip : "")}
+                aria-current={on ? "true" : undefined}
+              >
+                <span
+                  className={cn(
+                    "h-4 w-4 shrink-0 rounded-full border",
+                    s.dot,
+                    s.text,
+                    on ? "tier-blink border-transparent" : "border-border/50 opacity-25",
+                  )}
+                  aria-hidden="true"
+                />
+                <div className="flex min-w-0 flex-col leading-tight">
+                  <span
+                    className={cn(
+                      "font-mono text-[0.6875rem] font-bold uppercase tracking-wider",
+                      on ? s.text : "text-muted-foreground",
+                    )}
+                  >
+                    {label}
+                  </span>
+                  <span className="font-mono text-[0.5625rem] uppercase tracking-wide text-muted-foreground">{sub}</span>
+                </div>
+                {on ? (
+                  <span className={cn("ml-auto font-mono text-[0.5rem] font-bold uppercase tracking-wider", s.text)}>
+                    Live
+                  </span>
+                ) : null}
+              </div>
+            )
+          })}
+        </div>
       </div>
 
       {/* Box-panel dashboard: live reading box + one box per configured tier */}
@@ -1082,7 +1134,12 @@ function WindEventMonitor({ windMs, tiers }: { windMs: number; tiers: WindMonito
               <div className="flex items-center justify-between gap-2">
                 <span className="flex items-center gap-1.5">
                   <span
-                    className={cn("h-2 w-2 rounded-full", met ? s.dot : "bg-muted-foreground/30", isActive && "animate-pulse")}
+                    className={cn(
+                      "h-2.5 w-2.5 rounded-full",
+                      met ? s.dot : "bg-muted-foreground/30",
+                      met && s.text,
+                      isActive && "tier-blink",
+                    )}
                     aria-hidden="true"
                   />
                   <span className={cn("font-mono text-[0.625rem] font-bold uppercase tracking-wide", isActive ? s.text : met ? "text-foreground" : "text-muted-foreground")}>
