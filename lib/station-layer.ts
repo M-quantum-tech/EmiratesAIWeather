@@ -15,40 +15,55 @@ function windColor(kmh: number): string {
   return "#e5563a"
 }
 
-/** DNI colour ramp (W/m²): night slate → cool → warm gold → hot orange. */
+/** DNI colour ramp (W/m²) matching the NCM aws-solar-radiation labels:
+ *  dim night → cool → green → yellow-green → gold → bright yellow. */
 function solarColor(dni: number): string {
-  if (dni < 10) return "#5a6884"
-  if (dni < 200) return "#6b83b0"
-  if (dni < 450) return "#f2c14e"
-  if (dni < 700) return "#f59e2c"
-  return "#ec6a2c"
+  if (dni < 10) return "#8a94a6"
+  if (dni < 250) return "#7dd3fc"
+  if (dni < 500) return "#86efac"
+  if (dni < 700) return "#d9f99d"
+  if (dni < 820) return "#fde047"
+  return "#fbbf24"
 }
 
-function markerHtml(r: StationReading, mode: StationMode): string {
-  const isWind = mode === "wind"
-  const value = isWind ? r.windKmh : r.dni
-  const color = isWind ? windColor(r.windKmh) : solarColor(r.dni)
-  // Dark text on the light/warm fills keeps the number legible.
+function windMarkerHtml(r: StationReading): string {
+  const color = windColor(r.windKmh)
   const textColor = "#0b1220"
-  const arrow = isWind
-    ? `<div style="position:absolute;inset:0;transform:rotate(${r.flowDeg.toFixed(0)}deg);">
+  const arrow = `<div style="position:absolute;inset:0;transform:rotate(${r.flowDeg.toFixed(0)}deg);">
          <div style="position:absolute;left:50%;top:-1px;transform:translateX(-50%);width:0;height:0;
            border-left:5px solid transparent;border-right:5px solid transparent;
            border-bottom:8px solid ${color};filter:drop-shadow(0 0 1px rgba(0,0,0,0.5));"></div>
        </div>`
-    : ""
   return `<div style="position:relative;width:46px;height:46px;pointer-events:none;">
       ${arrow}
       <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
         width:26px;height:26px;border-radius:9999px;background:${color};
         border:1.5px solid rgba(255,255,255,0.9);box-shadow:0 1px 4px rgba(0,0,0,0.45);
         display:flex;align-items:center;justify-content:center;">
-        <span style="font:700 11px ui-monospace,SFMono-Regular,Menlo,monospace;color:${textColor};line-height:1;">${value}</span>
+        <span style="font:700 11px ui-monospace,SFMono-Regular,Menlo,monospace;color:${textColor};line-height:1;">${r.windKmh}</span>
       </div>
       <div style="position:absolute;left:50%;top:47px;transform:translateX(-50%);white-space:nowrap;
         font:600 8px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:0.04em;
         color:rgba(255,255,255,0.92);text-shadow:0 1px 2px rgba(0,0,0,0.85);">${r.name}</div>
     </div>`
+}
+
+// NCM aws-solar-radiation look: bare colour-coded DNI value (W/m²), no pin — a bold
+// number with a dark halo so it reads cleanly over the dark map, name beneath.
+function solarMarkerHtml(r: StationReading): string {
+  const color = solarColor(r.dni)
+  return `<div style="position:relative;width:46px;height:34px;pointer-events:none;
+      display:flex;flex-direction:column;align-items:center;justify-content:center;">
+      <span style="font:800 15px ui-monospace,SFMono-Regular,Menlo,monospace;color:${color};line-height:1;
+        text-shadow:0 0 3px rgba(0,0,0,0.95),0 1px 2px rgba(0,0,0,0.9);">${r.dni}</span>
+      <span style="margin-top:2px;white-space:nowrap;
+        font:600 8px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:0.04em;
+        color:rgba(255,255,255,0.82);text-shadow:0 1px 2px rgba(0,0,0,0.85);">${r.name}</span>
+    </div>`
+}
+
+function markerHtml(r: StationReading, mode: StationMode): string {
+  return mode === "wind" ? windMarkerHtml(r) : solarMarkerHtml(r)
 }
 
 export function createStationLayer(L: any, readings: StationReading[], mode: StationMode) {

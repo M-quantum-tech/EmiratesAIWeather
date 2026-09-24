@@ -183,7 +183,7 @@ export function NcmSources() {
   const [windData, setWindData] = useState<WindFrames | null>(null)
   const [windIdx, setWindIdx] = useState(0)
   const [windPlaying, setWindPlaying] = useState(true)
-  const [windSpeed, setWindSpeed] = useState<1 | 2>(1)
+  const [windSpeed, setWindSpeed] = useState<0.5 | 1 | 2>(1)
   // NCM AWS station overlay: wind km/h on the wind tab, live DNI (W/m²) on the clouds tab.
   const [showStations, setShowStations] = useState(true)
   // Wind forecast horizon: "live" = next 24 h, "7day" = 7-day outlook (3-hourly steps).
@@ -213,6 +213,25 @@ export function NcmSources() {
   }, [measurePts])
 
   const frames = layer === "radar" ? (maps?.radar ?? []) : layer === "satellite" ? (maps?.satellite ?? []) : []
+
+  // Index of the forecast frame nearest to the current UAE time (Asia/Dubai = UTC+4,
+  // no DST). Used to pin the DNI station overlay to the live reading, so the numbers
+  // reflect "now" and never animate/blink with the cloud field.
+  const liveWindIdx = useMemo(() => {
+    if (!windData || windData.times.length === 0) return 0
+    const now = Date.now()
+    let best = 0
+    let bestDiff = Number.POSITIVE_INFINITY
+    windData.times.forEach((t, i) => {
+      const ms = new Date(`${t}:00+04:00`).getTime()
+      const diff = Math.abs(ms - now)
+      if (diff < bestDiff) {
+        bestDiff = diff
+        best = i
+      }
+    })
+    return best
+  }, [windData])
 
   // Real forecast warnings for the currently displayed hour (frame). No fabricated data.
   const frameCount = warnFrames?.frames.length ?? 0
@@ -286,7 +305,8 @@ export function NcmSources() {
       controller.abort()
       clearInterval(id)
     }
-  }, [])
+    // Refetch whenever the horizon changes so "7 days" pulls the full 7-day grid.
+  }, [windRange])
 
   // The total-cloud-cover field is carried on the same wind forecast frames
   // (fetched in a single Open-Meteo request), so no separate cloud fetch is needed.
@@ -515,7 +535,9 @@ export function NcmSources() {
     if (!L || !map || !mapReady) return
 
     const stationMode: StationMode = layer === "clouds" ? "solar" : "wind"
-    const activeIdx = layer === "clouds" ? cloudIdx : windIdx
+    // DNI stations read the live frame (nearest to now) so their numbers stay put and
+    // never blink as the cloud-cover field animates. Wind stations track the frame.
+    const activeIdx = layer === "clouds" ? liveWindIdx : windIdx
     const grid = windData?.frames[Math.min(activeIdx, windData.frames.length - 1)]
     const onStationTab = layer === "wind" || layer === "clouds"
     if (onStationTab && showStations && grid) {
@@ -530,7 +552,7 @@ export function NcmSources() {
       map.removeLayer(stationLayerRef.current)
       stationLayerRef.current = null
     }
-  }, [layer, windData, windIdx, cloudIdx, mapReady, showStations])
+  }, [layer, windData, windIdx, liveWindIdx, mapReady, showStations])
 
   // Manage the total-cloud-cover field layer, swapping the active forecast frame.
   useEffect(() => {
@@ -1133,7 +1155,7 @@ export function NcmSources() {
                     </div>
                     <div className="pointer-events-auto flex shrink-0 items-center gap-1 rounded-md border border-white/20 bg-black/55 px-1.5 py-1 font-mono text-[0.625rem] uppercase tracking-wider text-white/70 backdrop-blur">
                       <span>Speed</span>
-                      {([1, 2] as const).map((sp) => (
+                      {([0.5, 1, 2] as const).map((sp) => (
                         <button
                           key={sp}
                           type="button"
