@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation"
-import { Building2, Clock, Tag, Ticket, TrendingUp, User, UserCheck, Users } from "lucide-react"
+import Link from "next/link"
+import { Building2, Clock, Cpu, Tag, Ticket, TrendingUp, User, UserCheck, Users } from "lucide-react"
 import { computeStats, ensureUserAccessColumns, getAdminMembers, getSessionUser } from "@/lib/admin"
 import { formatCents } from "@/lib/plans"
 import { getEffectivePlans } from "@/lib/pricing"
@@ -31,14 +32,23 @@ export default async function AdminPage() {
     <main className="min-h-screen">
       <SiteNav />
       <section className="mx-auto w-full max-w-6xl px-4 py-12 sm:px-6">
-        <div className="flex flex-col gap-1">
-          <span className="label-caps">Admin console</span>
-          <h1 className="text-balance text-3xl font-semibold tracking-tight text-foreground">
-            Operations dashboard
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Members, subscriptions and revenue across EmiratesAIWeather.
-          </p>
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div className="flex flex-col gap-1">
+            <span className="label-caps">Admin console</span>
+            <h1 className="text-balance text-3xl font-semibold tracking-tight text-foreground">
+              Operations dashboard
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              Members, subscriptions and revenue across EmiratesAIWeather.
+            </p>
+          </div>
+          <Link
+            href="/admin/engineering"
+            className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-background/60"
+          >
+            <Cpu className="h-4 w-4 text-accent" aria-hidden="true" />
+            Engineering console
+          </Link>
         </div>
 
         <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

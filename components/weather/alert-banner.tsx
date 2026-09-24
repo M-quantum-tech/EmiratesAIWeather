@@ -38,6 +38,7 @@ import {
   type WeatherPayload,
 } from "@/lib/weather"
 import { fetchWarningFrames, type EmirateWarning } from "@/lib/ncm-warnings"
+import { BUZZER_TONE, DEFAULT_RULES, type EscalationRule } from "@/lib/escalation"
 import { ProximityRings } from "@/components/weather/proximity-rings"
 import { useWeather } from "@/components/weather/weather-provider"
 import { cn } from "@/lib/utils"
@@ -92,44 +93,6 @@ const LADDER: { level: AlertLevel; label: string; solid: string }[] = [
   { level: "red", label: "RED", solid: "bg-alert-red" },
 ]
 
-/**
- * Fixed escalation rules — the NCM-style ladder. Each tier lists the trigger
- * criteria that promote the model to that level and the data source behind them.
- */
-const RULES: { level: AlertLevel; label: string; km: string; triggers: string; sources: string }[] = [
-  {
-    level: "green",
-    label: "L1 · Green",
-    km: "60 km +",
-    triggers:
-      "Convection 60 km + · gust under 15 m/s · rain under 1 mm · no weather warnings under 50 km from location — all clear",
-    sources: "Open-Meteo · Satellite · NCM",
-  },
-  {
-    level: "yellow",
-    label: "L2 · Yellow",
-    km: "within 50 km",
-    triggers:
-      "Intensifying convection under 30 km · any warning alarm on site · satellite image warnings",
-    sources: "Satellite · NCM Al Bahar",
-  },
-  {
-    level: "orange",
-    label: "L3 · Orange",
-    km: "within 30 km",
-    triggers:
-      "Satellite image · intensifying convection under 20 km + Level 2 alerts · radar precipitation · NCM website alerts",
-    sources: "Satellite · Radar · NCM Al Bahar",
-  },
-  {
-    level: "red",
-    label: "L4 · Red",
-    km: "within 20 km",
-    triggers: "Convection under 20 km + L3 · radar precipitation · active NCM alert — take shelter",
-    sources: "Radar · NCM Al Bahar",
-  },
-]
-
 const HAZARD_ICON: Record<HazardKey, typeof Wind> = {
   gust: Gauge,
   wind: Wind,
@@ -141,18 +104,6 @@ const ARRIVAL_ICON: Record<ArrivalKey, typeof Wind> = {
   wind: Wind,
   rain: CloudRain,
   cloud: Cloud,
-}
-
-/**
- * Per-level buzzer character — each tier has its own pitch set, cadence and loudness so
- * the alarm is audibly identifiable, escalating from a soft green chime to an urgent red
- * three-tone. The buzzer sounds on any level change until the operator acknowledges it.
- */
-const BUZZER_TONE: Record<AlertLevel, { pattern: number[]; step: number; interval: number; gain: number; type: OscillatorType }> = {
-  green: { pattern: [523], step: 0, interval: 2600, gain: 0.05, type: "sine" },
-  yellow: { pattern: [659, 784], step: 0.26, interval: 1800, gain: 0.09, type: "triangle" },
-  orange: { pattern: [784, 988], step: 0.24, interval: 1200, gain: 0.13, type: "square" },
-  red: { pattern: [988, 740, 988], step: 0.22, interval: 820, gain: 0.18, type: "square" },
 }
 
 /** Looping level-tuned alarm via the Web Audio API (no asset needed). */
@@ -207,6 +158,12 @@ function useBuzzer(active: boolean, level: AlertLevel) {
 
 export function AlertBanner() {
   const { payload, isValidating, refresh } = useWeather()
+  // Escalation ladder — persisted overrides from the Engineering Console, defaults otherwise.
+  const { data: rulesData } = useSWR<{ rules: EscalationRule[] }>("/api/escalation", farFetcher as never, {
+    refreshInterval: 60_000,
+    revalidateOnFocus: false,
+  })
+  const rules = rulesData?.rules ?? DEFAULT_RULES
   const alert = useMemo(() => (payload ? buildAlert(payload) : null), [payload])
   const level = alert?.level ?? null
   // Acknowledgment latch: the alarm sounds whenever the detected level differs from the
@@ -787,7 +744,7 @@ export function AlertBanner() {
           </div>
           <table className="w-full border-collapse text-left">
             <tbody>
-              {RULES.map((rule) => (
+              {rules.map((rule) => (
                 <tr
                   key={rule.level}
                   className={cn(
