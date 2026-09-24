@@ -6,7 +6,7 @@ export function Panel({
   className,
   as: Tag = "section",
 }: {
-  children: ReactNode
+  children?: ReactNode
   className?: string
   as?: "section" | "div" | "aside"
 }) {

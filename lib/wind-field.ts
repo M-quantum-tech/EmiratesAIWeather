@@ -6,15 +6,18 @@
 // meteorological speed/direction into U (eastward) / V (northward) components.
 // Grids are stored row-major from the NORTH-WEST corner, scanning east then south.
 
-// Grid bounds (degrees). North-west corner is (la1, lo1).
+// Grid bounds (degrees). North-west corner is (la1, lo1). A 0.5° grid spanning the
+// wider Gulf (eastern Saudi/Qatar/Bahrain → southern Iran → UAE → northern Oman)
+// so the wind field fills a regional view like NCM's COSMO-UAE map, while staying
+// fine enough to stay accurate when zoomed into the UAE.
 const LA1 = 29 // north
 const LA2 = 20 // south
 const LO1 = 49 // west
 const LO2 = 60 // east
-const DX = 1
-const DY = 1
-const NX = (LO2 - LO1) / DX + 1 // 12 columns
-const NY = (LA1 - LA2) / DY + 1 // 10 rows
+const DX = 0.5
+const DY = 0.5
+const NX = (LO2 - LO1) / DX + 1 // 23 columns
+const NY = (LA1 - LA2) / DY + 1 // 19 rows
 const HOURS = 24
 
 export type WindGrid = {
@@ -32,6 +35,10 @@ export type WindGrid = {
   u: number[]
   /** Northward component (m/s). */
   v: number[]
+  /** Total cloud cover (0–100 %), same grid — fetched in the same request. */
+  cover: number[]
+  /** Direct normal irradiance (W/m²), same grid — fetched in the same request. */
+  dni?: number[]
 }
 
 export type WindFrames = {
@@ -40,50 +47,18 @@ export type WindFrames = {
   frames: WindGrid[]
 }
 
-export async function fetchWindFrames(signal?: AbortSignal): Promise<WindFrames | null> {
-  // Coordinate lists in scan order: north→south, west→east.
-  const lats: number[] = []
-  const lons: number[] = []
-  for (let la = LA1; la >= LA2; la -= DY) {
-    for (let lo = LO1; lo <= LO2; lo += DX) {
-      lats.push(la)
-      lons.push(lo)
-    }
-  }
-
-  const url =
-    `https://api.open-meteo.com/v1/forecast?latitude=${lats.join(",")}` +
-    `&longitude=${lons.join(",")}` +
-    `&hourly=wind_speed_10m,wind_direction_10m&wind_speed_unit=ms&forecast_hours=${HOURS}&timezone=auto`
-
-  const res = await fetch(url, { signal })
+export async function fetchWindFrames(
+  range: "live" | "7day" = "live",
+  signal?: AbortSignal,
+): Promise<WindFrames | null> {
+  // Read the grid from our own cached server route rather than calling Open-Meteo
+  // directly from the browser. One shared upstream request per revalidate window
+  // keeps the heavy multi-location call clear of per-client rate limits (429s).
+  const res = await fetch(`/api/windfield?range=${range}`, { signal })
   if (!res.ok) return null
-  const json = await res.json()
-  // Multi-location responses come back as an array; a single point as an object.
-  const list = Array.isArray(json) ? json : [json]
-  if (list.length < NX * NY) return null
-
-  const times: string[] = list[0]?.hourly?.time ?? []
-  const nFrames = Math.min(times.length, HOURS)
-  if (nFrames === 0) return null
-
-  const frames: WindGrid[] = []
-  for (let h = 0; h < nFrames; h++) {
-    const speed = new Array(NX * NY).fill(0)
-    const u = new Array(NX * NY).fill(0)
-    const v = new Array(NX * NY).fill(0)
-    for (let i = 0; i < NX * NY; i++) {
-      const hourly = list[i]?.hourly
-      const sp = Number(hourly?.wind_speed_10m?.[h] ?? 0)
-      const dir = Number(hourly?.wind_direction_10m?.[h] ?? 0)
-      const rad = (dir * Math.PI) / 180
-      speed[i] = sp
-      // Meteorological direction is where the wind blows FROM, so negate.
-      u[i] = -sp * Math.sin(rad)
-      v[i] = -sp * Math.cos(rad)
-    }
-    frames.push({ nx: NX, ny: NY, la1: LA1, la2: LA2, lo1: LO1, lo2: LO2, dx: DX, dy: DY, speed, u, v })
-  }
-
-  return { times: times.slice(0, nFrames), frames }
+  const json = (await res.json()) as WindFrames | { error: string }
+  if (!json || "error" in json || !Array.isArray((json as WindFrames).frames)) return null
+  const data = json as WindFrames
+  if (data.frames.length === 0) return null
+  return data
 }

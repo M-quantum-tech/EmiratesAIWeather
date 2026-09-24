@@ -3,14 +3,11 @@ import { SiteNav } from "@/components/site-nav"
 import { LeftNav } from "@/components/left-nav"
 import { WeatherProvider } from "@/components/weather/weather-provider"
 import { AlertBanner } from "@/components/weather/alert-banner"
-import { ForecastStrip } from "@/components/forecast/forecast-strip"
-import { DniForecast } from "@/components/solar/dni-forecast"
-import { WeekMeteogram } from "@/components/forecast/week-meteogram"
-import { MeasureMap } from "@/components/weather/measure-map"
+import { HourlyBreakdown } from "@/components/forecast/hourly-breakdown"
 import { NcmSources } from "@/components/weather/ncm-sources"
 import { Webcams } from "@/components/weather/webcams"
 import { StationDashboard } from "@/components/station/station-dashboard"
-import { DeepDiveMap } from "@/components/analysis/deep-dive-map"
+import { LiveTrend } from "@/components/station/live-trend"
 import { RegisterPanel } from "@/components/players/register-panel"
 import { AdUnit } from "@/components/station/ad-unit"
 import { ChessGame } from "@/components/games/chess-game"
@@ -20,9 +17,9 @@ import { TipsPopup } from "@/components/wellness/tips-popup"
 import { Hero } from "@/components/hero"
 
 export const metadata: Metadata = {
-  title: "EmiratesAIWeather — 7-Day Forecast, EmiratesConsensus Model & Live Radar",
+  title: "EmiratesAIWeather — AI Prediction, EmiratesConsensus Model & Live Radar",
   description:
-    "Free 7-day forecast with a selectable hourly meteogram, live UAE radar & satellite loops with zoom and a time slider, a large multi-model measure & forecast map with location search and the EmiratesConsensus blend, official NCM Al Bahar sources, name + phone player registration, and pass-and-play chess.",
+    "AI weather prediction with a trendable 24-hour and 14-day multi-model outlook (ECMWF, DWD, NOAA, Météo-France, JMA, KMA, UK Met Office, BOM), a selectable hourly breakdown, live UAE radar & satellite loops, a multi-model measure & forecast map, official NCM Al Bahar sources, player registration, and pass-and-play chess.",
 }
 
 export default function Page() {
@@ -49,27 +46,19 @@ export default function Page() {
               <AlertBanner />
             </div>
 
-            {/* 1 · 7-day forecast (drives the hourly meteogram) */}
+            {/* 1 · Live trend + AI projection — normalized multi-metric forecast (24H / 14-day)
+                    with predictive timing + measures, that drives the breakdown below */}
             <section id="forecast" className="mt-6 scroll-mt-6">
-              <ForecastStrip />
+              <LiveTrend />
             </section>
 
-            {/* 1b · DNI (Direct Normal Irradiance) 7 & 14-day solar-resource forecast */}
-            <section id="solar" className="mt-6 scroll-mt-6">
-              <DniForecast />
-            </section>
-
-            {/* 2 · Hourly breakdown / meteogram for the selected day */}
+            {/* 3 · The selected day's 24-hour breakdown. Scrub the trend or tap a day
+                    in the panel above to drive this hour-by-hour panel. */}
             <section id="hourly" className="mt-6 scroll-mt-6">
-              <DeepDiveMap />
+              <HourlyBreakdown />
             </section>
 
-            {/* 7-day multi-panel meteogram */}
-            <div className="mt-6">
-              <WeekMeteogram />
-            </div>
-
-            {/* 3 · Live observations */}
+            {/* 4 · Live observations */}
             <section id="observations" className="mt-6 scroll-mt-6">
               <StationDashboard />
             </section>
@@ -77,11 +66,6 @@ export default function Page() {
             {/* 4 · NCM live radar & satellite loops (zoom + time slider) */}
             <section id="radar" className="mt-6 scroll-mt-6">
               <NcmSources />
-            </section>
-
-            {/* 5 · Big multi-model measure & forecast map */}
-            <section id="map" className="mt-6 scroll-mt-6">
-              <MeasureMap />
             </section>
 
             {/* 6 · Local webcams */}

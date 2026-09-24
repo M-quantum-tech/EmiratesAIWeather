@@ -10,7 +10,8 @@ import { X, ShieldCheck, CreditCard } from "lucide-react"
 import { PLANS, formatCents, type PlanId } from "@/lib/plans"
 import { startCheckoutSession, fulfillCheckout } from "@/app/actions/stripe"
 
-const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY as string)
+const stripePublishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
+const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null
 
 type Status = "form" | "done"
 
@@ -99,6 +100,17 @@ export function CheckoutDialog({
               <h3 className="text-base font-semibold text-foreground">Payment received</h3>
               <p className="max-w-xs text-sm text-muted-foreground">
                 Your {plan.name} is now active. Enjoy full Pro access across the platform.
+              </p>
+            </div>
+          ) : !stripePromise ? (
+            <div className="flex flex-col items-center gap-3 py-10 text-center">
+              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                <CreditCard className="h-7 w-7" aria-hidden="true" />
+              </div>
+              <h3 className="text-base font-semibold text-foreground">Payments not configured yet</h3>
+              <p className="max-w-xs text-sm text-muted-foreground">
+                Online checkout is temporarily unavailable. Please connect the Stripe integration to
+                enable secure card payments.
               </p>
             </div>
           ) : (

@@ -7,6 +7,11 @@ export const user = pgTable("user", {
   emailVerified: boolean("emailVerified").default(false).notNull(),
   image: text("image"),
   role: text("role").default("user").notNull(),
+  // Admin-controlled access gate. New sign-ups land as "pending" (a user request)
+  // until an admin allows or denies them, with an optional service window.
+  accessStatus: text("accessStatus").default("pending").notNull(),
+  serviceStart: timestamp("serviceStart"),
+  serviceEnd: timestamp("serviceEnd"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 })

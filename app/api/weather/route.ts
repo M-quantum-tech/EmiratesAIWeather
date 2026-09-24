@@ -28,6 +28,7 @@ const HOURLY = [
   "wind_direction_10m",
   "relative_humidity_2m",
   "weather_code",
+  "cloud_cover",
   "is_day",
 ].join(",")
 
@@ -85,7 +86,7 @@ export async function GET(request: NextRequest) {
   forecastUrl.searchParams.set("hourly", HOURLY)
   forecastUrl.searchParams.set("daily", DAILY)
   forecastUrl.searchParams.set("timezone", "auto")
-  forecastUrl.searchParams.set("forecast_days", "7")
+  forecastUrl.searchParams.set("forecast_days", "14")
   // Single model → Open-Meteo keeps base variable names, so downstream parsing is unchanged.
   if (model !== "best_match") forecastUrl.searchParams.set("models", model)
   if (units === "imperial") {
@@ -146,6 +147,7 @@ export async function GET(request: NextRequest) {
       windDirection: num(hourlyRaw.wind_direction_10m?.[index]),
       humidity: num(hourlyRaw.relative_humidity_2m?.[index]),
       weatherCode: num(hourlyRaw.weather_code?.[index]),
+      cloudCover: num(hourlyRaw.cloud_cover?.[index]),
       isDay: num(hourlyRaw.is_day?.[index], 1) === 1,
     }))
 

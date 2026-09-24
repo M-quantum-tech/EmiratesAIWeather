@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react"
 import {
+  Activity,
   CalendarDays,
   Camera,
   Gauge,
-  LineChart,
   type LucideIcon,
   Map as MapIcon,
   Satellite,
@@ -16,9 +16,9 @@ import { cn } from "@/lib/utils"
 type NavItem = { id: string; label: string; icon: LucideIcon }
 
 export const NAV_ITEMS: NavItem[] = [
-  { id: "forecast", label: "7-Day Weather", icon: CalendarDays },
-  { id: "hourly", label: "Hourly Meteogram", icon: LineChart },
-  { id: "observations", label: "Live Observations", icon: Gauge },
+  { id: "forecast", label: "Live Trend + AI", icon: Activity },
+  { id: "hourly", label: "Hourly Breakdown", icon: CalendarDays },
+  { id: "observations", label: "Air Quality", icon: Gauge },
   { id: "radar", label: "Radar & Satellite", icon: Satellite },
   { id: "map", label: "Weather Map", icon: MapIcon },
   { id: "webcams", label: "Webcams", icon: Camera },

@@ -40,6 +40,8 @@ export type HourlyReading = {
   windDirection: number
   humidity: number
   weatherCode: number
+  /** Total cloud cover for the hour (%), used for the on-site sky-cover forecast. */
+  cloudCover: number
   isDay: boolean
 }
 
@@ -351,6 +353,29 @@ export type SolarDay = {
   peakHour: number
   /** Number of hours with usable DNI (≥ 120 W/m²). */
   sunHours: number
+  /** Direct normal irradiance per local hour (W/m²), always 24 entries 00:00 → 23:00. */
+  hourlyDni: number[]
+  /** Global horizontal irradiance per local hour (W/m²), 24 entries. */
+  hourlyGhi: number[]
+  /**
+   * AI-predicted beam irradiance per local hour (W/m²), 24 entries. The model
+   * DNI corrected for on-site influence factors (cloud cover, humidity haze)
+   * then temporally smoothed — a beam nowcast rather than the raw model value.
+   */
+  hourlyDniAi: number[]
+  /** Atmospheric transmittance per hour — clearness index Kt = GHI / extraterrestrial, as %. */
+  hourlyTransmittance: number[]
+  /** Sky reflectivity per hour — diffuse fraction (scattered / total), as %. */
+  hourlyReflectivity: number[]
+  /** Beam optical attenuation per hour (dB) — cloud + aerosol loss vs a clear sky. */
+  hourlyAttenuation: number[]
+  /** Daytime-mean transmittance (%), reflectivity (%) and attenuation (dB). */
+  clearness: number
+  reflectivity: number
+  attenuation: number
+  /** Local sunrise / sunset ISO timestamps for the day. */
+  sunrise: string
+  sunset: string
 }
 
 export type SolarPayload = {
@@ -386,6 +411,122 @@ export const ALERT_RADII_KM: Record<AlertLevel, number> = {
 
 /** Proximity radius (km) the danger buzzer scans for severe conditions (red tier). */
 export const DANGER_RADIUS_KM = ALERT_RADII_KM.red
+
+/**
+ * Great-circle destination point `distanceKm` away from (lat, lon) along
+ * `bearingDeg` (degrees clockwise from true north). Used to sample a "far site"
+ * upwind of the user so the model can preview hazards before they arrive on site.
+ */
+export function offsetLocation(lat: number, lon: number, bearingDeg: number, distanceKm: number) {
+  const R = 6371
+  const brng = (bearingDeg * Math.PI) / 180
+  const lat1 = (lat * Math.PI) / 180
+  const lon1 = (lon * Math.PI) / 180
+  const dr = distanceKm / R
+  const lat2 = Math.asin(Math.sin(lat1) * Math.cos(dr) + Math.cos(lat1) * Math.sin(dr) * Math.cos(brng))
+  const lon2 =
+    lon1 + Math.atan2(Math.sin(brng) * Math.sin(dr) * Math.cos(lat1), Math.cos(dr) - Math.sin(lat1) * Math.sin(lat2))
+  return { lat: (lat2 * 180) / Math.PI, lon: (((lon2 * 180) / Math.PI + 540) % 360) - 180 }
+}
+
+/**
+ * Minutes for an upwind hazard `distanceKm` away to advect to the user, carried by
+ * the mean wind at `speedKmh`. Returns null when the wind is too calm (< 3 km/h) to
+ * transport the front in any meaningful time.
+ */
+export function windArrivalMinutes(distanceKm: number, speedKmh: number): number | null {
+  if (speedKmh < 3) return null
+  return Math.round((distanceKm / speedKmh) * 60)
+}
+
+/** Compact "1h 28m" / "42m" label for a minute count. */
+export function formatEta(minutes: number): string {
+  if (minutes < 60) return `${minutes}m`
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  return m === 0 ? `${h}h` : `${h}h ${m}m`
+}
+
+export type ArrivalKey = "wind" | "rain" | "cloud"
+
+export type ArrivalSignal = {
+  key: ArrivalKey
+  label: string
+  /** AI-predicted minutes until the feature reaches the site (null when not inbound). */
+  etaMinutes: number | null
+  /** 0-100 model confidence blended from advection strength + signal agreement. */
+  confidence: number
+  status: "Approaching" | "Steady" | "Easing" | "Clear"
+  /** "68 → 54 km/h", "0.8 → 0.1 mm/h", "72 → 40%" — upwind value → on-site value. */
+  detail: string
+  tone: "warn" | "info" | "good"
+}
+
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v))
+
+/**
+ * AI advection nowcast — replaces the naive distance ÷ speed ETA with a blended
+ * prediction of when wind, rain and cloud fields reach the site. For each field it
+ * compares the on-site reading with an upwind sample `distanceKm` away and:
+ *  • estimates a gust-weighted transport speed (fronts advect faster than the mean wind),
+ *  • accelerates the ETA when the field is markedly stronger upwind (an intensifying,
+ *    faster-closing feature), and
+ *  • scores a confidence from the transport strength and how strongly the upwind/on-site
+ *    signals agree, so a calm or ambiguous field reads as low-confidence.
+ * Returns one signal per field; `etaMinutes` is null unless the field is genuinely inbound.
+ */
+export function predictArrivals(params: {
+  distanceKm: number
+  units: Units
+  near: { windSpeed: number; windGusts: number; cloudCover: number; precipitation: number }
+  far: { windSpeed: number; windGusts: number; cloudCover: number; precipitation: number } | null
+}): ArrivalSignal[] {
+  const { distanceKm, units, near, far } = params
+  const toKmh = (v: number) => (units === "metric" ? v : v * 1.609)
+  const nearWind = toKmh(near.windSpeed)
+  const farWind = far ? toKmh(far.windSpeed) : nearWind
+  const nearGust = toKmh(near.windGusts)
+  const farGust = far ? toKmh(far.windGusts) : nearGust
+  // Effective transport speed: mean wind blended 60/40 with the gust envelope, floored
+  // by the on-site wind so a locally gusty site never under-reads the closing speed.
+  const transport = Math.max(nearWind, ((nearWind + farWind) / 2) * 0.6 + ((nearGust + farGust) / 2) * 0.4)
+  const baseEta = transport >= 3 ? (distanceKm / transport) * 60 : null
+  const transportConf = clamp01(transport / 45)
+
+  const build = (
+    key: ArrivalKey,
+    label: string,
+    farVal: number,
+    nearVal: number,
+    scale: number,
+    onset: number,
+    fmt: (v: number) => string,
+  ): ArrivalSignal => {
+    const delta = farVal - nearVal
+    const approaching = far != null && delta > onset && baseEta != null
+    const easing = far != null && delta < -onset
+    // Stronger-upwind fields close faster: shrink the ETA up to 35% with the delta.
+    const accel = 1 - clamp01(delta / scale) * 0.35
+    const etaMinutes = approaching && baseEta != null ? Math.max(1, Math.round(baseEta * accel)) : null
+    const signalConf = clamp01(Math.abs(delta) / scale)
+    const confidence = Math.round(
+      far == null ? 15 : (approaching ? 0.55 * transportConf + 0.45 * signalConf : 0.35 + 0.4 * (1 - signalConf)) * 100,
+    )
+    const status: ArrivalSignal["status"] = approaching ? "Approaching" : easing ? "Easing" : far == null ? "Steady" : "Clear"
+    const tone: ArrivalSignal["tone"] = approaching ? "warn" : easing ? "good" : "info"
+    return { key, label, etaMinutes, confidence: Math.max(0, Math.min(100, confidence)), status, detail: `${fmt(farVal)} → ${fmt(nearVal)}`, tone }
+  }
+
+  const su = speedUnit(units)
+  const pu = precipUnit(units)
+  const farPrecip = far ? (units === "metric" ? far.precipitation : far.precipitation * 25.4) : 0
+  const nearPrecip = units === "metric" ? near.precipitation : near.precipitation * 25.4
+  return [
+    build("wind", "Wind front", farGust, nearGust, 30, 3, (v) => `${Math.round(v)} ${su}`),
+    build("rain", "Rain band", farPrecip, nearPrecip, 5, 0.2, (v) => `${v.toFixed(1)} ${pu}/h`),
+    build("cloud", "Cloud deck", far ? far.cloudCover : near.cloudCover, near.cloudCover, 60, 8, (v) => `${Math.round(v)}%`),
+  ]
+}
 
 export type HazardKey = "wind" | "gust" | "rain" | "precip"
 
@@ -424,9 +565,17 @@ const ALERT_META: Record<AlertLevel, { code: string; emoji: string; title: strin
 }
 
 /**
- * Four-level weather alert model. Combines the strongest derived advisory with raw
- * severity signals (gusts, rain, heat, storms, air quality) into a single level:
- * green = safe, yellow/orange = escalating warnings, red = take shelter.
+ * Four-level weather alert model, following the NCM-style escalation rules:
+ *  • Level 1 GREEN  — a hazard exists but is still far out: intensifying convection
+ *    within 60 km, gusts over 15 m/s (54 km/h), diverging wind within 50 km, or rain
+ *    over 1 mm.
+ *  • Level 2 YELLOW — intensifying convection within 30 km, an on-site alarm, or a
+ *    satellite / NCM warning.
+ *  • Level 3 ORANGE — convection within 20 km plus Level 2, radar precipitation, or an
+ *    NCM alert.
+ *  • Level 4 RED    — convection within 20 km plus Level 3 with radar precipitation or
+ *    an active NCM alert — take shelter.
+ * Raw signals (gusts, rain, heat, storms, air quality) are scored into these tiers.
  */
 export function buildAlert(data: WeatherPayload): WeatherAlert {
   const { current, hourly, air, units } = data
@@ -469,8 +618,11 @@ export function buildAlert(data: WeatherPayload): WeatherAlert {
   // Live background-data hazards (values shown in native units) with their own severity.
   const wind = units === "metric" ? current.windSpeed : current.windSpeed * 1.609
   const precipNow = units === "metric" ? current.precipitation : current.precipitation * 25.4
-  const bandWind = (v: number): AlertLevel => (v >= 65 ? "red" : v >= 45 ? "orange" : v >= 30 ? "yellow" : "green")
-  const bandRain = (v: number): AlertLevel => (v >= 30 ? "red" : v >= 15 ? "orange" : v >= 5 ? "yellow" : "green")
+  // Gust bands follow the NCM rule set: yellow onset at 15 m/s (54 km/h), orange at
+  // 20 m/s (72 km/h), red at 25 m/s (90 km/h). Rain paints yellow above the 1 mm
+  // convective-shower threshold, escalating with accumulation.
+  const bandWind = (v: number): AlertLevel => (v >= 90 ? "red" : v >= 72 ? "orange" : v >= 54 ? "yellow" : "green")
+  const bandRain = (v: number): AlertLevel => (v >= 30 ? "red" : v >= 10 ? "orange" : v >= 1 ? "yellow" : "green")
   const bandPrecip = (v: number): AlertLevel => (v >= 7.6 ? "red" : v >= 2.5 ? "orange" : v >= 0.5 ? "yellow" : "green")
 
   const hazards: Hazard[] = [

@@ -7,17 +7,27 @@ import {
   ArrowUpRight,
   ChevronLeft,
   ChevronRight,
+  Cloud,
   CloudSun,
+  LineChart,
+  MapPin,
   Pause,
   Play,
   Radar,
+  Ruler,
   Satellite,
   ShieldAlert,
+  Trash2,
   Wind,
 } from "lucide-react"
 import { Panel } from "@/components/station/panel"
+import { MeasureMap } from "@/components/weather/measure-map"
 import { fetchWindFrames, type WindFrames } from "@/lib/wind-field"
 import { createWindLayer } from "@/lib/wind-layer"
+
+ import { createCloudLayer } from "@/lib/cloud-layer"
+import { createStationLayer, type StationMode } from "@/lib/station-layer"
+import { stationReadings } from "@/lib/stations"
 import {
   fetchWarningFrames,
   WARN_FILL,
@@ -28,19 +38,59 @@ import {
 } from "@/lib/ncm-warnings"
 import { cn } from "@/lib/utils"
 import { useWeather } from "@/components/weather/weather-provider"
-import { buildSpotPopupHtml, LOADING_HTML, ERROR_HTML } from "@/components/weather/measure-map"
 
 type Frame = { time: number; path: string }
 type Maps = { host: string; radar: Frame[]; satellite: Frame[] }
-type Layer = "wind" | "radar" | "satellite" | "warnings"
+type Layer = "wind" | "radar" | "satellite" | "clouds" | "warnings"
+type LatLng = { lat: number; lng: number }
 
-// Official UAE National Center of Meteorology (Ghaith / Al Bahar) portals. These
-// government viewers block embedding, so they remain reference links below the live map.
+/** Great-circle distance (Haversine) in kilometres between two lat/lng points. */
+function haversineKm(a: LatLng, b: LatLng) {
+  const R = 6371
+  const toRad = (d: number) => (d * Math.PI) / 180
+  const dLat = toRad(b.lat - a.lat)
+  const dLon = toRad(b.lng - a.lng)
+  const lat1 = toRad(a.lat)
+  const lat2 = toRad(b.lat)
+  const h = Math.sin(dLat / 2) ** 2 + Math.sin(dLon / 2) ** 2 * Math.cos(lat1) * Math.cos(lat2)
+  return R * 2 * Math.asin(Math.sqrt(h))
+}
+
+// Warnings layer uses the COLOURED, Google-Maps-style Esri World Street Map
+// (keyless, colored land/water/roads with English/Latin labels baked in) so it reads
+// like the NCM live map instead of a washed-out white canvas. Its own labels are in
+// English, so the separate Esri reference-label layer is hidden on the warnings view
+// to avoid doubled names. Animated radar/cloud/wind layers use the Esri DARK canvas
+// so colours pop, with the dark English reference labels on top.
+const BASE_WARN =
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"
+const REF_LIGHT =
+  "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
+const BASE_DARK =
+  "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+const REF_DARK =
+  "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}"
+
+// Official UAE National Center of Meteorology (Ghaith / Al Bahar) portals plus the
+// meteoblue satellite view and the Open-Meteo trend source used for AI prediction.
+// These government viewers block embedding, so they remain deep-link references below
+// the live map.
 const NCM_LINKS = [
-  { label: "Radar Merge UAE", href: "https://ghaith.ncm.gov.ae/?lang=en#trajectory,radar-Merge-UAE", icon: Radar },
-  { label: "COSMO-UAE Wind", href: "https://ghaith.ncm.gov.ae/?lang=en#cosmo-uae-wind", icon: Wind },
   { label: "Official Warnings", href: "https://www.ncm.gov.ae/maps-warnings?lang=en", icon: AlertTriangle },
-  { label: "Satellite HD Global", href: "https://ghaith.ncm.gov.ae/?lang=en#satellite-hd-global", icon: Satellite },
+  { label: "Diverging Winds · COSMO-UAE", href: "https://ghaith.ncm.gov.ae/?lang=en#cosmo-uae-wind", icon: Wind },
+  {
+    label: "Radar-Merge Sat · Trajectory",
+    href: "https://ghaith.ncm.gov.ae/?lang=en#radar-Merge-Sat,trajectory",
+    icon: Radar,
+  },
+  { label: "Cloud Tops · IR", href: "https://ghaith.ncm.gov.ae/?lang=en#satellite-IR", icon: CloudSun },
+  { label: "Rain / Hail Radar · GCC", href: "https://ghaith.ncm.gov.ae/?lang=en#radar-Merge-GCC,hail", icon: Radar },
+  {
+    label: "meteoblue Satellite",
+    href: "https://www.meteoblue.com/en/weather/maps#map=satellite~radar~none~none~none&coords=4.51/24.4/54.4",
+    icon: Satellite,
+  },
+  { label: "Open-Meteo Trend + AI", href: "https://open-meteo.com/", icon: LineChart },
 ] as const
 
 // NCM Al Bahar-style reflectivity scale (light → extreme): green for moderate rain,
@@ -67,13 +117,26 @@ const CLOUD_SCALE = [
   { c: "#f800fd", label: "Intense" },
 ] as const
 
-// Wind-speed legend (m/s) matching the Windy-style heatmap palette (calm → gale).
+// Total-cloud-cover legend (%) matching the COSMO-UAE total-clouds palette in
+// lib/cloud-layer: clear (dark) → thin blue-grey haze → bright overcast white.
+const CLOUD_COVER_SCALE = [
+  { c: "#1a2436", label: "0" },
+  { c: "#3a4a63", label: "" },
+  { c: "#7c8aa0", label: "50" },
+  { c: "#c3ccd9", label: "" },
+  { c: "#f5f8fc", label: "100" },
+] as const
+
+// Wind-speed legend (m/s) matching the COSMO-UAE heatmap palette in lib/wind-layer.
+// Numeric ticks (m/s) mirror the NCM diverging-winds scale calm → gale.
 const WIND_SCALE = [
-  { c: "#1a3a78", label: "Calm" },
-  { c: "#1a96be", label: "" },
-  { c: "#78c868", label: "Breeze" },
-  { c: "#f0963c", label: "Strong" },
-  { c: "#e4483a", label: "Gale" },
+  { c: "#2642a8", label: "0" },
+  { c: "#1ea5cd", label: "5" },
+  { c: "#2ec39e", label: "10" },
+  { c: "#80d26c", label: "15" },
+  { c: "#e8d658", label: "20" },
+  { c: "#f69c3c", label: "25" },
+  { c: "#e84a3a", label: "30+" },
 ] as const
 
 /** Format a local ISO timestamp like "2026-08-26T12:00" into "Wed 26/08/2026 · 12:00". */
@@ -104,7 +167,9 @@ export function NcmSources() {
   const overlayRef = useRef<any>(null)
   const mergeRef = useRef<any>(null)
   const basemapRef = useRef<any>(null)
+  const referenceRef = useRef<any>(null)
   const windLayerRef = useRef<any>(null)
+  const stationLayerRef = useRef<any>(null)
   const warnLayerRef = useRef<any>(null)
   const geoRef = useRef<any>(null)
   const leafletRef = useRef<any>(null)
@@ -118,13 +183,55 @@ export function NcmSources() {
   const [windData, setWindData] = useState<WindFrames | null>(null)
   const [windIdx, setWindIdx] = useState(0)
   const [windPlaying, setWindPlaying] = useState(true)
-  const [windSpeed, setWindSpeed] = useState<1 | 2>(1)
+  const [windSpeed, setWindSpeed] = useState<0.5 | 1 | 2>(1)
+  // NCM AWS station overlay: wind km/h on the wind tab, live DNI (W/m²) on the clouds tab.
+  const [showStations, setShowStations] = useState(true)
+  // Wind forecast horizon: "live" = next 24 h, "7day" = 7-day outlook (3-hourly steps).
+  const [windRange, setWindRange] = useState<"live" | "7day">("live")
+  const [cloudIdx, setCloudIdx] = useState(0)
+  const [cloudPlaying, setCloudPlaying] = useState(true)
   const [warnFrames, setWarnFrames] = useState<WarningFrames | null>(null)
   const [warnIdx, setWarnIdx] = useState(0)
   const [warnPlaying, setWarnPlaying] = useState(true)
   const [geoReady, setGeoReady] = useState(false)
+  const [showMeasure, setShowMeasure] = useState(false)
+
+  // Trajectory / distance measuring tool (NCM Ghaith-style): click multiple points
+  // on the live map to build a route and read per-segment + total great-circle distance.
+  const cloudLayerRef = useRef<any>(null)
+  const measureGroupRef = useRef<any>(null)
+  const measurePtsRef = useRef<LatLng[]>([])
+  const measuringRef = useRef(false)
+  const [measuring, setMeasuring] = useState(false)
+  const [measurePts, setMeasurePts] = useState<LatLng[]>([])
+  measuringRef.current = measuring
+
+  const measureKm = useMemo(() => {
+    let sum = 0
+    for (let i = 1; i < measurePts.length; i++) sum += haversineKm(measurePts[i - 1], measurePts[i])
+    return sum
+  }, [measurePts])
 
   const frames = layer === "radar" ? (maps?.radar ?? []) : layer === "satellite" ? (maps?.satellite ?? []) : []
+
+  // Index of the forecast frame nearest to the current UAE time (Asia/Dubai = UTC+4,
+  // no DST). Used to pin the DNI station overlay to the live reading, so the numbers
+  // reflect "now" and never animate/blink with the cloud field.
+  const liveWindIdx = useMemo(() => {
+    if (!windData || windData.times.length === 0) return 0
+    const now = Date.now()
+    let best = 0
+    let bestDiff = Number.POSITIVE_INFINITY
+    windData.times.forEach((t, i) => {
+      const ms = new Date(`${t}:00+04:00`).getTime()
+      const diff = Math.abs(ms - now)
+      if (diff < bestDiff) {
+        bestDiff = diff
+        best = i
+      }
+    })
+    return best
+  }, [windData])
 
   // Real forecast warnings for the currently displayed hour (frame). No fabricated data.
   const frameCount = warnFrames?.frames.length ?? 0
@@ -150,12 +257,12 @@ export function NcmSources() {
     return `${host}${f.path}/512/{z}/{x}/{y}/6/1_1.png`
   }
 
-  // Load and refresh RainViewer frame catalogue every 5 minutes.
+  // Load and refresh RainViewer frame catalogue every minute (single unified cycle).
   useEffect(() => {
     let cancelled = false
     async function load() {
       try {
-        const res = await fetch("https://api.rainviewer.com/public/weather-maps.json")
+        const res = await fetch("https://api.rainviewer.com/public/weather-maps.json", { cache: "no-store" })
         if (!res.ok) return
         const json = await res.json()
         const radar: Frame[] = [...(json.radar?.past ?? []), ...(json.radar?.nowcast ?? [])].map((f: any) => ({
@@ -169,22 +276,23 @@ export function NcmSources() {
       }
     }
     load()
-    const id = setInterval(load, 5 * 60 * 1000)
+    const id = setInterval(load, 60 * 1000)
     return () => {
       cancelled = true
       clearInterval(id)
     }
   }, [])
 
-  // Load and refresh the live UAE wind forecast every 10 minutes (Windy-style layer).
+  // Load and refresh the live UAE wind forecast every minute (Windy-style layer).
   useEffect(() => {
     const controller = new AbortController()
     async function load() {
       try {
-        const data = await fetchWindFrames(controller.signal)
+        const data = await fetchWindFrames(windRange, controller.signal)
         if (data) {
           setWindData(data)
           setWindIdx(0)
+          setCloudIdx(0)
         }
       } catch (err) {
         if ((err as any)?.name !== "AbortError")
@@ -192,14 +300,18 @@ export function NcmSources() {
       }
     }
     load()
-    const id = setInterval(load, 10 * 60 * 1000)
+    const id = setInterval(load, 60 * 1000)
     return () => {
       controller.abort()
       clearInterval(id)
     }
-  }, [])
+    // Refetch whenever the horizon changes so "7 days" pulls the full 7-day grid.
+  }, [windRange])
 
-  // Load the real hourly-forecast warning timeline; refresh every 10 minutes.
+  // The total-cloud-cover field is carried on the same wind forecast frames
+  // (fetched in a single Open-Meteo request), so no separate cloud fetch is needed.
+
+  // Load the real hourly-forecast warning timeline; refresh every minute (unified cycle).
   useEffect(() => {
     const controller = new AbortController()
     async function load() {
@@ -214,7 +326,7 @@ export function NcmSources() {
       }
     }
     load()
-    const id = setInterval(load, 10 * 60 * 1000)
+    const id = setInterval(load, 60 * 1000)
     return () => {
       controller.abort()
       clearInterval(id)
@@ -256,18 +368,17 @@ export function NcmSources() {
         center: [24.2, 55.2],
         zoom: 8,
         minZoom: 4,
-        maxZoom: 12,
+        maxZoom: 15,
         zoomControl: true,
         attributionControl: false,
         scrollWheelZoom: true,
       })
       map.zoomControl.setPosition("bottomright")
-      // Esri dark-grey canvas: keyless, English/Latin place names (OSM localises
-      // UAE labels to Arabic) and a muted dark palette that matches the theme.
-      basemapRef.current = L.tileLayer(
-        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
-        { maxZoom: 12, attribution: "&copy; Esri, HERE, Garmin, OpenStreetMap contributors" },
-      ).addTo(map)
+      // Start on the coloured Google-Maps-style canvas (warnings is the default layer).
+      basemapRef.current = L.tileLayer(BASE_WARN, {
+        maxZoom: 19,
+        attribution: "&copy; Esri, HERE, Garmin, OpenStreetMap contributors",
+      }).addTo(map)
       // High-z pane so city labels sit above the shaded warning polygons (NCM look).
       map.createPane("labels")
       const labelsPane = map.getPane("labels")
@@ -275,11 +386,9 @@ export function NcmSources() {
         labelsPane.style.zIndex = "650"
         labelsPane.style.pointerEvents = "none"
       }
-      // English reference labels on a top pane so cities read over overlays.
-      L.tileLayer(
-        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
-        { maxZoom: 12, pane: "labels" },
-      ).addTo(map)
+      // SINGLE English reference-label source on the top pane. All emirate/city
+      // names come from here only, so labels never render twice.
+      referenceRef.current = L.tileLayer(REF_LIGHT, { maxZoom: 16, pane: "labels" }).addTo(map)
       mapRef.current = map
       if (!cancelled) setMapReady(true)
       setTimeout(() => map.invalidateSize(), 250)
@@ -327,8 +436,11 @@ export function NcmSources() {
       overlayRef.current.setUrl(url)
     } else {
       overlayRef.current = L.tileLayer(url, {
-        opacity: layer === "radar" ? 0.92 : 0.82,
-        maxZoom: 12,
+        // Clouds/IR rendered near-opaque and radar bold so the imagery reads big and
+        // vivid (NCM Radar-Merge-Sat look), not a faint wash over the basemap.
+        opacity: layer === "radar" ? 0.95 : 0.92,
+        maxZoom: 15,
+        maxNativeZoom: 12,
         zIndex: 400,
       }).addTo(map)
     }
@@ -341,8 +453,9 @@ export function NcmSources() {
         mergeRef.current.setUrl(rurl)
       } else {
         mergeRef.current = L.tileLayer(rurl, {
-          opacity: 0.9,
-          maxZoom: 12,
+          opacity: 0.95,
+          maxZoom: 15,
+          maxNativeZoom: 12,
           zIndex: 410,
         }).addTo(map)
       }
@@ -371,10 +484,17 @@ export function NcmSources() {
       map.removeLayer(mergeRef.current)
       mergeRef.current = null
     }
-    if (basemapRef.current) {
-      // Fade the dark basemap on radar/clouds/warnings so the NCM blue tint shows
-      // through instead of a bleak-black map. Wind covers the map with its heatmap.
-      basemapRef.current.setOpacity(layer === "wind" ? 1 : layer === "warnings" ? 0.22 : 0.4)
+    if (basemapRef.current && referenceRef.current) {
+      // Warnings → coloured Google-Maps-style canvas (World Street Map ships its own
+      // English labels, so the separate reference layer is hidden to avoid doubling).
+      // Radar/clouds/wind → DARK canvas with the dark English reference labels on top.
+      const light = layer === "warnings"
+      basemapRef.current.setUrl(light ? BASE_WARN : BASE_DARK)
+      referenceRef.current.setUrl(light ? REF_LIGHT : REF_DARK)
+      referenceRef.current.setOpacity(light ? 0 : 1)
+      // Fade the basemap harder under radar/clouds so the coloured imagery dominates
+      // the frame (bigger, bolder cloud field) rather than competing with map detail.
+      basemapRef.current.setOpacity(layer === "radar" || layer === "satellite" ? 0.4 : 1)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layer])
@@ -406,6 +526,136 @@ export function NcmSources() {
     const id = setInterval(() => setWindIdx((i) => (i + 1) % windData.frames.length), 900 / (windSpeed || 1))
     return () => clearInterval(id)
   }, [layer, windPlaying, windData, windSpeed])
+
+  // Manage the NCM-style AWS station overlay: wind km/h + flow arrow on the wind tab,
+  // live direct-normal-irradiance (W/m²) on the Total Clouds tab. Sampled from our grid.
+  useEffect(() => {
+    const L = leafletRef.current
+    const map = mapRef.current
+    if (!L || !map || !mapReady) return
+
+    const stationMode: StationMode = layer === "clouds" ? "solar" : "wind"
+    // DNI stations read the live frame (nearest to now) so their numbers stay put and
+    // never blink as the cloud-cover field animates. Wind stations track the frame.
+    const activeIdx = layer === "clouds" ? liveWindIdx : windIdx
+    const grid = windData?.frames[Math.min(activeIdx, windData.frames.length - 1)]
+    const onStationTab = layer === "wind" || layer === "clouds"
+    if (onStationTab && showStations && grid) {
+      const readings = stationReadings(grid)
+      if (stationLayerRef.current) {
+        stationLayerRef.current.setData(readings, stationMode)
+      } else {
+        stationLayerRef.current = createStationLayer(L, readings, stationMode)
+        stationLayerRef.current.addTo(map)
+      }
+    } else if (stationLayerRef.current) {
+      map.removeLayer(stationLayerRef.current)
+      stationLayerRef.current = null
+    }
+  }, [layer, windData, windIdx, liveWindIdx, mapReady, showStations])
+
+  // Manage the total-cloud-cover field layer, swapping the active forecast frame.
+  useEffect(() => {
+    const L = leafletRef.current
+    const map = mapRef.current
+    if (!L || !map || !mapReady) return
+
+    const wf = windData?.frames[Math.min(cloudIdx, windData.frames.length - 1)]
+    const grid = wf
+      ? {
+          nx: wf.nx,
+          ny: wf.ny,
+          la1: wf.la1,
+          la2: wf.la2,
+          lo1: wf.lo1,
+          lo2: wf.lo2,
+          dx: wf.dx,
+          dy: wf.dy,
+          cover: wf.cover,
+        }
+      : null
+
+    if (layer === "clouds" && grid) {
+      if (cloudLayerRef.current) {
+        cloudLayerRef.current.setGrid(grid)
+      } else {
+        cloudLayerRef.current = createCloudLayer(L, grid)
+        cloudLayerRef.current.addTo(map)
+      }
+    } else if (cloudLayerRef.current) {
+      map.removeLayer(cloudLayerRef.current)
+      cloudLayerRef.current = null
+    }
+  }, [layer, windData, cloudIdx, mapReady])
+
+  // Total-cloud forecast animation timer (shares the wind 1x/2x speed control).
+  useEffect(() => {
+    if (layer !== "clouds" || !cloudPlaying || !windData || windData.frames.length < 2) return
+    const id = setInterval(() => setCloudIdx((i) => (i + 1) % windData.frames.length), 900 / (windSpeed || 1))
+    return () => clearInterval(id)
+  }, [layer, cloudPlaying, windData, windSpeed])
+
+  // Draw the measuring trajectory: a dashed route with a vertex dot per point and a
+  // sticky tooltip on each vertex showing the cumulative distance from the start.
+  const drawMeasure = (pts: LatLng[]) => {
+    const L = leafletRef.current
+    const map = mapRef.current
+    if (!L || !map) return
+    if (measureGroupRef.current) {
+      map.removeLayer(measureGroupRef.current)
+      measureGroupRef.current = null
+    }
+    if (pts.length === 0) return
+    const group = L.layerGroup()
+    if (pts.length >= 2) {
+      L.polyline(
+        pts.map((p) => [p.lat, p.lng]),
+        { color: "#f5b642", weight: 2.5, opacity: 0.95, dashArray: "6 6" },
+      ).addTo(group)
+    }
+    let cum = 0
+    pts.forEach((p, i) => {
+      if (i > 0) cum += haversineKm(pts[i - 1], p)
+      const dot = L.circleMarker([p.lat, p.lng], {
+        radius: 5,
+        color: "#0b0f14",
+        weight: 2,
+        fillColor: "#f5b642",
+        fillOpacity: 1,
+      })
+      const label = i === 0 ? "Start" : `${cum.toFixed(1)} km`
+      dot.bindTooltip(label, { permanent: true, direction: "top", className: "measure-tip", offset: [0, -6] })
+      dot.addTo(group)
+    })
+    group.addTo(map)
+    measureGroupRef.current = group
+  }
+
+  const clearMeasure = () => {
+    measurePtsRef.current = []
+    setMeasurePts([])
+    if (measureGroupRef.current && mapRef.current) {
+      mapRef.current.removeLayer(measureGroupRef.current)
+      measureGroupRef.current = null
+    }
+  }
+
+  // Attach a single map click handler that only accumulates points while the
+  // measuring tool is active, so it never interferes with normal map interaction.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady) return
+    const onClick = (e: any) => {
+      if (!measuringRef.current) return
+      const next = [...measurePtsRef.current, { lat: e.latlng.lat, lng: e.latlng.lng }]
+      measurePtsRef.current = next
+      setMeasurePts(next)
+      drawMeasure(next)
+    }
+    map.on("click", onClick)
+    return () => map.off("click", onClick)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapReady])
 
   // Listen for time sync events from other panels and align index where possible
   useEffect(() => {
@@ -440,27 +690,21 @@ export function NcmSources() {
     display.forEach((w) => levelByName.set(w.name, w.level))
 
     const group = L.layerGroup()
-    // Medium-blue "water" field echoing the NCM Al Bahar basemap.
-    L.rectangle(
-      [
-        [12, 44],
-        [32, 64],
-      ],
-      { stroke: false, fillColor: "#2f5f96", fillOpacity: 0.9, interactive: false },
-    ).addTo(group)
 
-    // All emirates get a darker-blue land fill with crisp borders visible across the
-    // whole country; warned emirates are shaded by severity (yellow / orange / red).
+    // Clean look: no blue water/land wash — the dark cartographic basemap shows through.
+    // Unwarned emirates keep only a subtle outline; warned emirates are shaded by
+    // severity (yellow / orange / red) over the basemap.
     const geoLayer = L.geoJSON(geoRef.current, {
       style: (feature: any) => {
         const lvl = levelByName.get(feature.properties.name) ?? "green"
         const warned = lvl !== "green"
+        // Dark outlines read on the light-grey canvas; warned emirates shaded by severity.
         return {
-          color: warned ? "#ffffff" : "#a9c4e0",
-          weight: warned ? 1.6 : 0.9,
-          opacity: warned ? 0.95 : 0.85,
-          fillColor: warned ? WARN_FILL[lvl] : "#274d78",
-          fillOpacity: warned ? 0.85 : 0.9,
+          color: warned ? "#0f172a" : "#94a3b8",
+          weight: warned ? 2 : 0.9,
+          opacity: warned ? 0.9 : 0.6,
+          fillColor: warned ? WARN_FILL[lvl] : "transparent",
+          fillOpacity: warned ? 0.55 : 0,
         }
       },
       onEachFeature: (feature: any, lyr: any) => {
@@ -470,94 +714,29 @@ export function NcmSources() {
       },
     })
 
-    // Label layer: create small divIcons at each emirate centroid and toggle by zoom
-    const labelLayer = L.layerGroup()
-    try {
-      const features = geoRef.current.features ?? []
-      features.forEach((f: any) => {
-        const name = f.properties?.name ?? ""
-        // compute centroid (simple average of coordinates of first polygon ring)
-        let lat = 0
-        let lon = 0
-        let count = 0
-        const geom = f.geometry
-        if (geom && geom.type === "Polygon") {
-          const ring = geom.coordinates[0] ?? []
-          ring.forEach((c: any) => {
-            lon += c[0]
-            lat += c[1]
-            count++
-          })
-        } else if (geom && geom.type === "MultiPolygon") {
-          const ring = geom.coordinates[0]?.[0] ?? []
-          ring.forEach((c: any) => {
-            lon += c[0]
-            lat += c[1]
-            count++
-          })
-        }
-        if (count === 0) return
-        const cx = lat / count
-        const cy = lon / count
-        const icon = L.divIcon({
-          className: "emirate-label",
-          html: `<div style="padding:4px 8px;background:rgba(0,0,0,0.6);color:#fff;border-radius:6px;font-size:12px;font-weight:600;box-shadow:0 4px 10px rgba(0,0,0,0.6)">${name}</div>`,
-          iconAnchor: [0, 0],
-          interactive: false,
-        })
-        const m = L.marker([cx, cy], { icon })
-        labelLayer.addLayer(m)
-      })
-    } catch (err) {
-      console.log('label layer build failed', err)
-    }
-
-    // Add both geo and label layers to group so they can be toggled together
+    // Only the shaded emirate polygons go in the group. Every emirate/city name
+    // comes solely from the Esri reference-label tiles added at init, so names
+    // never render twice (fixes the doubled-label issue).
     geoLayer.addTo(group)
-    labelLayer.addTo(group)
-
-    // City labels on top (dedicated high-z pane) for the NCM cartographic look.
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/dark_only_labels/{z}/{x}/{y}{r}.png", {
-      maxZoom: 12,
-      pane: "labels",
-    }).addTo(group)
-
     group.addTo(map)
     warnLayerRef.current = group
 
-    // Zoom handler: show labels and emphasise boundaries at higher zoom levels (Al-Bahar style)
+    // Zoom handler: emphasise boundaries at higher zoom for the Al-Bahar look.
     function onZoom() {
       try {
         const z = map.getZoom()
-        // show detailed labels when zoomed in
-        if (z >= 9) {
-          labelLayer.eachLayer((lyr: any) => map.addLayer(lyr))
-          geoLayer.setStyle((feature: any) => {
-            const lvl = levelByName.get(feature.properties.name) ?? "green"
-            const warned = lvl !== "green"
-            return {
-              color: warned ? "#ffffff" : "#9fb3cc",
-              weight: warned ? 1.8 : 1.0,
-              opacity: 0.95,
-              fillColor: WARN_FILL[lvl],
-              fillOpacity: warned ? 0.62 : 0.18,
-            }
-          })
-        } else {
-          // hide labels at low zoom
-          labelLayer.eachLayer((lyr: any) => map.removeLayer(lyr))
-          geoLayer.setStyle((feature: any) => {
-            const lvl = levelByName.get(feature.properties.name) ?? "green"
-            const warned = lvl !== "green"
-            return {
-              color: warned ? "#ffffff" : "#6f8fb0",
-              weight: warned ? 1.4 : 0.7,
-              opacity: warned ? 0.9 : 0.5,
-              fillColor: WARN_FILL[lvl],
-              fillOpacity: warned ? 0.62 : 0.28,
-            }
-          })
-        }
+        const strong = z >= 9
+        geoLayer.setStyle((feature: any) => {
+          const lvl = levelByName.get(feature.properties.name) ?? "green"
+          const warned = lvl !== "green"
+          return {
+            color: warned ? "#0f172a" : "#94a3b8",
+            weight: warned ? (strong ? 2.4 : 2) : strong ? 1.1 : 0.9,
+            opacity: warned ? 0.9 : strong ? 0.65 : 0.55,
+            fillColor: warned ? WARN_FILL[lvl] : "transparent",
+            fillOpacity: warned ? 0.55 : 0,
+          }
+        })
       } catch {}
     }
     map.on('zoomend', onZoom)
@@ -568,51 +747,12 @@ export function NcmSources() {
     const cleanup = () => {
       try {
         map.off('zoomend', onZoom)
-        if (labelLayer) labelLayer.clearLayers()
       } catch {}
     }
 
     // attach cleanup to the return so React will remove handlers and layers on unmount
     return cleanup
   }, [layer, geoReady, display])
-
-  // Add click-to-open-forecast popup like the Measure map so NCM panel shows the same Today breakdown
-  useEffect(() => {
-    const L = leafletRef.current
-    const map = mapRef.current
-    if (!L || !map) return
-    function onClick(e: any) {
-      try {
-        const units = unitsRef.current
-        const lat = e.latlng.lat
-        const lon = e.latlng.lng
-        const point = { lat, lon }
-        const marker = L.marker([lat, lon]).addTo(map)
-        marker.bindPopup(LOADING_HTML, { className: 'spot-popup', minWidth: 940, maxWidth: 980, autoPan: true }).openPopup()
-        ;(async () => {
-          try {
-            const res = await fetch(`/api/weather?lat=${lat}&lon=${lon}&units=${units}&model=best_match`)
-            if (!res.ok) {
-              marker.setPopupContent(ERROR_HTML)
-              return
-            }
-            const data = await res.json()
-            const best = data
-            const results = [
-              { id: 'best_match', label: 'Forecast', color: '#f5b642', hours: data.hourly },
-            ] as any
-            marker.setPopupContent(buildSpotPopupHtml(point, best, results, units, 920, 260))
-          } catch (err) {
-            console.log('ncm spot fetch failed', err)
-            marker.setPopupContent(ERROR_HTML)
-          }
-        })()
-      } catch (err) {}
-    }
-    map.on('click', onClick)
-    return () => map.off('click', onClick)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapRef.current, leafletRef.current, geoReady])
 
   // Animation timer (radar / satellite frame loop).
   useEffect(() => {
@@ -622,17 +762,40 @@ export function NcmSources() {
   }, [playing, frames, layer])
 
   const isWarnings = layer === "warnings"
-  const scale = layer === "radar" ? RADAR_SCALE : layer === "satellite" ? CLOUD_SCALE : WIND_SCALE
-  const legendTitle = layer === "radar" ? "Rain intensity" : layer === "satellite" ? "Cloud top" : "Wind speed"
+  // Forecast-field layers (wind + total clouds) share one hourly playback control set.
+  const isField = layer === "wind" || layer === "clouds"
+  const fieldData = layer === "wind" || layer === "clouds" ? windData : null
+  const fieldIdx = layer === "wind" ? windIdx : cloudIdx
+  const setFieldIdx = layer === "wind" ? setWindIdx : setCloudIdx
+  const fieldPlaying = layer === "wind" ? windPlaying : cloudPlaying
+  const setFieldPlaying = layer === "wind" ? setWindPlaying : setCloudPlaying
+  const fieldLabel = layer === "clouds" ? "cloud" : "wind"
+  const scale =
+    layer === "radar"
+      ? RADAR_SCALE
+      : layer === "satellite"
+        ? CLOUD_SCALE
+        : layer === "clouds"
+          ? CLOUD_COVER_SCALE
+          : WIND_SCALE
+  const legendTitle =
+    layer === "radar"
+      ? "Rain intensity"
+      : layer === "satellite"
+        ? "Cloud top"
+        : layer === "clouds"
+          ? "Cloud cover"
+          : "Wind speed"
 
   const tabs: { id: Layer; label: string; Icon: typeof Radar }[] = [
     { id: "warnings", label: "Warnings", Icon: ShieldAlert },
     { id: "wind", label: "Wind field", Icon: Wind },
     { id: "radar", label: "Rain radar", Icon: Radar },
-    { id: "satellite", label: "Clouds / IR", Icon: CloudSun },
+    { id: "clouds", label: "Total clouds", Icon: Cloud },
   ]
 
   return (
+    <>
     <Panel className="overflow-hidden p-0">
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
         <span className="flex items-center gap-2">
@@ -680,7 +843,7 @@ export function NcmSources() {
         <div
         ref={containerRef}
         className="h-[80vh] min-h-[620px] w-full"
-        style={{ backgroundColor: layer === "warnings" ? "#2f5f96" : "#3a4a63" }}
+        style={{ backgroundColor: layer === "warnings" ? "#0d1626" : "#3a4a63" }}
           role="img"
           aria-label={
             isWarnings
@@ -688,6 +851,57 @@ export function NcmSources() {
               : `Large animated ${layer === "radar" ? "precipitation radar" : layer === "satellite" ? "cloud / infrared satellite" : "surface wind"} map centred on the UAE`
           }
         />
+
+        {/* ---------- TRAJECTORY / DISTANCE MEASURE TOOL (all layers) ---------- */}
+        <div className="absolute left-3 top-1/2 z-[600] flex -translate-y-1/2 flex-col items-start gap-2">
+          <div className="flex flex-col overflow-hidden rounded-full border border-white/20 bg-black/60 shadow-lg backdrop-blur">
+            <button
+              type="button"
+              onClick={() => {
+                setMeasuring((m) => {
+                  const next = !m
+                  if (!next) clearMeasure()
+                  return next
+                })
+              }}
+              className={cn(
+                "grid h-10 w-10 place-items-center transition-colors",
+                measuring ? "bg-signal text-black" : "text-white/85 hover:bg-white/10",
+              )}
+              aria-pressed={measuring}
+              aria-label={measuring ? "Stop measuring distance" : "Measure distance between points"}
+              title={measuring ? "Stop measuring" : "Measure distance"}
+            >
+              <Ruler className="h-4 w-4" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={clearMeasure}
+              disabled={measurePts.length === 0}
+              className="grid h-10 w-10 place-items-center border-t border-white/15 text-white/85 transition-colors hover:bg-white/10 disabled:opacity-40"
+              aria-label="Clear measured trajectory"
+              title="Clear trajectory"
+            >
+              <Trash2 className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+          {measuring && (
+            <div className="max-w-[13rem] rounded-md border border-signal/40 bg-black/70 px-2.5 py-1.5 font-mono text-[0.625rem] leading-relaxed text-white/85 backdrop-blur">
+              {measurePts.length < 2 ? (
+                <span>Click points on the map to trace a route.</span>
+              ) : (
+                <>
+                  <span className="text-signal">
+                    {measureKm.toFixed(1)} km
+                  </span>{" "}
+                  <span className="text-white/60">
+                    · {(measureKm * 0.539957).toFixed(1)} nmi · {measurePts.length} pts
+                  </span>
+                </>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* ---------- WARNINGS OVERLAYS ---------- */}
         {isWarnings && (
@@ -745,7 +959,7 @@ export function NcmSources() {
               ))}
               <p className="rounded-md border border-dashed border-border bg-card/70 px-3 py-2 text-[0.625rem] leading-relaxed text-muted-foreground">
                 Real 24-hour warning timeline derived from live Open-Meteo forecast for the seven emirates, playing one
-                hour every 2 seconds. Refreshes every 10 minutes.
+                hour every 2 seconds. Refreshes every minute — same cycle as wind, radar &amp; clouds.
               </p>
             </div>
 
@@ -808,6 +1022,10 @@ export function NcmSources() {
                 <>
                   <CloudSun className="h-3.5 w-3.5 text-accent" aria-hidden="true" /> Cloud / IR satellite
                 </>
+              ) : layer === "clouds" ? (
+                <>
+                  <Cloud className="h-3.5 w-3.5 text-accent" aria-hidden="true" /> Total cloud cover
+                </>
               ) : (
                 <>
                   <Wind className="h-3.5 w-3.5 text-signal" aria-hidden="true" /> Live wind field
@@ -822,13 +1040,28 @@ export function NcmSources() {
                   <span key={s.c} className="flex-1" style={{ backgroundColor: s.c }} aria-hidden="true" />
                 ))}
               </div>
-              <div className="mt-1 flex justify-between font-mono text-[0.5rem] uppercase tracking-wide text-white/70">
-                {scale
-                  .filter((s) => s.label)
-                  .map((s) => (
-                    <span key={s.label}>{s.label}</span>
-                  ))}
-              </div>
+              {/* Wind field shows a clean colour ramp with only low/high anchors — the
+                  dense numeric ticks are dropped per NCM's diverging-wind look. Radar and
+                  cloud legends keep their intensity labels. */}
+              {layer === "wind" ? (
+                <div className="mt-1 flex justify-between font-mono text-[0.5rem] uppercase tracking-wide text-white/70">
+                  <span>Calm</span>
+                  <span>Strong</span>
+                </div>
+              ) : layer === "clouds" ? (
+                <div className="mt-1 flex justify-between font-mono text-[0.5rem] uppercase tracking-wide text-white/70">
+                  <span>Clear</span>
+                  <span>Overcast</span>
+                </div>
+              ) : (
+                <div className="mt-1 flex justify-between font-mono text-[0.5rem] uppercase tracking-wide text-white/70">
+                  {scale
+                    .filter((s) => s.label)
+                    .map((s) => (
+                      <span key={s.label}>{s.label}</span>
+                    ))}
+                </div>
+              )}
             </div>
 
             {layer === "radar" && (
@@ -838,28 +1071,70 @@ export function NcmSources() {
             )}
             {layer === "wind" && (
               <span className="absolute right-3 top-3 z-[500] inline-flex items-center gap-1.5 rounded-md bg-signal/90 px-2 py-1 font-mono text-[0.5625rem] uppercase tracking-wider text-black backdrop-blur">
-                Forecast · 10 m surface wind
+                {windRange === "7day" ? "7-day forecast · 10 m surface wind" : "Live · 10 m surface wind"}
+              </span>
+            )}
+            {(layer === "wind" || layer === "clouds") && (
+              <div className="absolute right-3 top-12 z-[500] flex flex-col items-end gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setShowStations((s) => !s)}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-[0.5625rem] uppercase tracking-wider backdrop-blur transition-colors",
+                    showStations
+                      ? "border-white/25 bg-black/60 text-white hover:bg-black/70"
+                      : "border-white/15 bg-black/40 text-white/60 hover:bg-black/55",
+                  )}
+                  aria-pressed={showStations}
+                >
+                  <MapPin className="h-3 w-3" aria-hidden="true" />{" "}
+                  {layer === "clouds" ? "DNI stations" : "AWS stations"} {showStations ? "on" : "off"}
+                </button>
+                {layer === "wind" && (
+                  <div className="flex overflow-hidden rounded-md border border-white/20 bg-black/60 backdrop-blur">
+                    {(["live", "7day"] as const).map((r) => (
+                      <button
+                        key={r}
+                        type="button"
+                        onClick={() => setWindRange(r)}
+                        className={cn(
+                          "px-2.5 py-1 font-mono text-[0.5625rem] uppercase tracking-wider transition-colors",
+                          r === "7day" && "border-l border-white/15",
+                          windRange === r ? "bg-signal text-black" : "text-white/70 hover:bg-white/10",
+                        )}
+                        aria-pressed={windRange === r}
+                      >
+                        {r === "live" ? "Live" : "7 days"}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {layer === "clouds" && (
+              <span className="absolute right-3 top-3 z-[500] inline-flex items-center gap-1.5 rounded-md bg-accent/90 px-2 py-1 font-mono text-[0.5625rem] uppercase tracking-wider text-black backdrop-blur">
+                Total cloud cover · live DNI stations
               </span>
             )}
 
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[500] flex items-center gap-3 bg-gradient-to-t from-black/80 to-transparent px-4 py-3">
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[500] flex items-center gap-3 bg-gradient-to-t from-black/80 to-transparent py-3 pl-4 pr-16">
               {layer === "wind" ? (
-                windData && windData.frames.length > 0 ? (
+                fieldData && fieldData.frames.length > 0 ? (
                   <>
                     <button
                       type="button"
-                      onClick={() => setWindPlaying((p) => !p)}
+                      onClick={() => setFieldPlaying((p) => !p)}
                       className="pointer-events-auto grid h-8 w-8 shrink-0 place-items-center rounded-full bg-alert-red text-white shadow transition-transform hover:scale-105"
-                      aria-label={windPlaying ? "Pause forecast" : "Play forecast"}
+                      aria-label={fieldPlaying ? "Pause forecast" : "Play forecast"}
                     >
-                      {windPlaying ? <Pause className="h-4 w-4" aria-hidden="true" /> : <Play className="h-4 w-4" aria-hidden="true" />}
+                      {fieldPlaying ? <Pause className="h-4 w-4" aria-hidden="true" /> : <Play className="h-4 w-4" aria-hidden="true" />}
                     </button>
                     <div className="pointer-events-auto flex shrink-0 items-center gap-0.5 rounded-md border border-white/20 bg-black/55 p-0.5 backdrop-blur">
                       <button
                         type="button"
                         onClick={() => {
-                          setWindPlaying(false)
-                          setWindIdx((i) => (i - 1 + windData.frames.length) % windData.frames.length)
+                          setFieldPlaying(false)
+                          setFieldIdx((i) => (i - 1 + fieldData.frames.length) % fieldData.frames.length)
                         }}
                         className="grid h-6 w-6 place-items-center rounded text-white/80 hover:bg-white/10"
                         aria-label="Previous hour"
@@ -869,8 +1144,8 @@ export function NcmSources() {
                       <button
                         type="button"
                         onClick={() => {
-                          setWindPlaying(false)
-                          setWindIdx((i) => (i + 1) % windData.frames.length)
+                          setFieldPlaying(false)
+                          setFieldIdx((i) => (i + 1) % fieldData.frames.length)
                         }}
                         className="grid h-6 w-6 place-items-center rounded text-white/80 hover:bg-white/10"
                         aria-label="Next hour"
@@ -880,7 +1155,7 @@ export function NcmSources() {
                     </div>
                     <div className="pointer-events-auto flex shrink-0 items-center gap-1 rounded-md border border-white/20 bg-black/55 px-1.5 py-1 font-mono text-[0.625rem] uppercase tracking-wider text-white/70 backdrop-blur">
                       <span>Speed</span>
-                      {([1, 2] as const).map((sp) => (
+                      {([0.5, 1, 2] as const).map((sp) => (
                         <button
                           key={sp}
                           type="button"
@@ -898,23 +1173,23 @@ export function NcmSources() {
                     <input
                       type="range"
                       min={0}
-                      max={windData.frames.length - 1}
-                      value={Math.min(windIdx, windData.frames.length - 1)}
+                      max={fieldData.frames.length - 1}
+                      value={Math.min(fieldIdx, fieldData.frames.length - 1)}
                       onChange={(e) => {
-                        setWindPlaying(false)
-                        setWindIdx(Number(e.target.value))
+                        setFieldPlaying(false)
+                        setFieldIdx(Number(e.target.value))
                       }}
-                      aria-label="Scrub the wind forecast time"
+                      aria-label={`Scrub the ${fieldLabel} forecast time`}
                       className="pointer-events-auto h-1.5 flex-1 cursor-pointer accent-[var(--signal)]"
                     />
                     <span className="shrink-0 rounded-md bg-alert-red px-2.5 py-1 font-mono text-[0.6875rem] tabular-nums text-white shadow">
-                      {formatWindTime(windData.times[Math.min(windIdx, windData.times.length - 1)])}
+                      {formatWindTime(fieldData.times[Math.min(fieldIdx, fieldData.times.length - 1)])}
                     </span>
                   </>
                 ) : (
                   <span className="inline-flex items-center gap-2 font-mono text-[0.6875rem] uppercase tracking-wider text-white/90">
                     <span className="h-2 w-2 animate-pulse rounded-full bg-signal" aria-hidden="true" />
-                    Loading wind forecast…
+                    Loading {fieldLabel} forecast…
                   </span>
                 )
               ) : (
@@ -980,10 +1255,38 @@ export function NcmSources() {
         </ul>
       </div>
 
+      {/* Optional multi-model measure & forecast map — hidden by default */}
+      <div className="flex flex-wrap items-center gap-3 border-t border-border px-4 py-3">
+        <button
+          type="button"
+          onClick={() => setShowMeasure((s) => !s)}
+          aria-expanded={showMeasure}
+          className={cn(
+            "inline-flex items-center gap-2 rounded-md border px-3 py-1.5 font-mono text-[0.625rem] uppercase tracking-wider transition-colors",
+            showMeasure
+              ? "border-signal bg-signal text-black"
+              : "border-border bg-card text-foreground hover:bg-secondary",
+          )}
+        >
+          <Ruler className="h-3.5 w-3.5" aria-hidden="true" />
+          {showMeasure ? "Hide measure & forecast map" : "Measure & forecast map (optional)"}
+        </button>
+        <p className="min-w-0 flex-1 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+          Pick any spot for an all-model 24-hour meteogram, or measure the distance between two points.
+        </p>
+      </div>
+
       <div className="border-t border-border px-4 py-2 font-mono text-[0.5625rem] text-muted-foreground">
         Live wind &amp; warnings via Open-Meteo · radar &amp; cloud loops © RainViewer · basemap © CARTO / OSM · boundaries ©
         geoBoundaries · official imagery &amp; warnings via NCM Al Bahar (opens in a new tab)
       </div>
     </Panel>
+
+    {showMeasure && (
+      <div className="mt-6">
+        <MeasureMap />
+      </div>
+    )}
+    </>
   )
 }

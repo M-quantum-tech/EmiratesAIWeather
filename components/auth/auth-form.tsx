@@ -24,14 +24,22 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
 
   const isSignUp = mode === "sign-up"
 
+  // Accept a plain username (e.g. an admin login like "M-Quantum-Tech") or a full
+  // email. A username with no "@" is mapped to a stable internal email domain.
+  function resolveEmail(input: string): string {
+    const v = input.trim()
+    return v.includes("@") ? v.toLowerCase() : `${v.toLowerCase()}@mquantum.tech`
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
     setLoading(true)
 
     try {
+      const resolvedEmail = resolveEmail(email)
       if (isSignUp) {
-        const res = await signUp.email({ email, password, name })
+        const res = await signUp.email({ email: resolvedEmail, password, name })
         if (res.error) {
           setError(res.error.message ?? "Could not create your account.")
           setLoading(false)
@@ -45,7 +53,7 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
           }
         }
       } else {
-        const res = await signIn.email({ email, password })
+        const res = await signIn.email({ email: resolvedEmail, password })
         if (res.error) {
           setError(res.error.message ?? "Invalid email or password.")
           setLoading(false)
@@ -96,15 +104,15 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
             </Field>
           ) : null}
 
-          <Field label="Email">
+          <Field label={isSignUp ? "Email" : "Email or username"}>
             <input
-              type="email"
+              type={isSignUp ? "email" : "text"}
               required
-              autoComplete="email"
+              autoComplete="username"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className={inputClass}
-              placeholder="you@company.ae"
+              placeholder={isSignUp ? "you@company.ae" : "you@company.ae or username"}
             />
           </Field>
 

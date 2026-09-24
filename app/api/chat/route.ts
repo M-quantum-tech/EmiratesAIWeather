@@ -24,14 +24,16 @@ export async function POST(req: Request) {
   })
 
   return createUIMessageStreamResponse({
-    stream: toUIMessageStream({ stream: result.stream }),
-    onError: (error) => {
-      const message = error instanceof Error ? error.message : String(error)
-      console.log("[v0] chat stream error:", message)
-      if (message.includes("credit card") || message.includes("customer_verification")) {
-        return "The AI assistant isn't activated yet. The workspace owner needs to add a payment card to the Vercel AI Gateway to unlock free credits."
-      }
-      return "Sorry, I couldn't reach the AI service just now. Please try again in a moment."
-    },
+    stream: toUIMessageStream({
+      stream: result.stream,
+      onError: (error) => {
+        const message = error instanceof Error ? error.message : String(error)
+        console.log("[v0] chat stream error:", message)
+        if (message.includes("credit card") || message.includes("customer_verification")) {
+          return "The AI assistant isn't activated yet. The workspace owner needs to add a payment card to the Vercel AI Gateway to unlock free credits."
+        }
+        return "Sorry, I couldn't reach the AI service just now. Please try again in a moment."
+      },
+    }),
   })
 }
