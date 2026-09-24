@@ -966,6 +966,11 @@ const WIND_TIER_STYLES: Record<
   },
 }
 
+/** m/s → km/h. Wind thresholds are stored in m/s; the UI shows both units. */
+const MS_TO_KMH = 3.6
+const fmtMs = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1))
+const fmtKmh = (v: number) => Math.round(v * MS_TO_KMH)
+
 function WindEventMonitor({ windMs, tiers }: { windMs: number; tiers: WindMonitorTier[] }) {
   // Tiers are evaluated high→low; the highest threshold the live wind meets is active.
   const sorted = useMemo(
@@ -983,6 +988,13 @@ function WindEventMonitor({ windMs, tiers }: { windMs: number; tiers: WindMonito
   }, [sorted, windMs])
   const fillPct = Math.min(100, Math.round((windMs / ceiling) * 100))
   const activeStyle = active ? WIND_TIER_STYLES[active.level] : null
+
+  // Each tier owns the band from its own threshold up to the next-higher one, so the
+  // dashboard shows an individual range (min→max) per box in both m/s and km/h.
+  const boxes = sorted.map((t, i) => {
+    const upper = i > 0 ? sorted[i - 1].minSpeed : null
+    return { tier: t, lower: t.minSpeed, upper }
+  })
 
   return (
     <div className="mt-3 overflow-hidden rounded-lg border border-border/70">
@@ -1009,79 +1021,94 @@ function WindEventMonitor({ windMs, tiers }: { windMs: number; tiers: WindMonito
         )}
       </div>
 
-      <div className="p-4">
-        {/* Live reading + gauge */}
-        <div className="flex items-end justify-between gap-3">
-          <div>
-            <span className="block font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-              On-site sustained wind
-            </span>
-            <span className={cn("block text-3xl font-bold tabular-nums leading-none", activeStyle?.text ?? "text-foreground")}>
+      {/* Box-panel dashboard: live reading box + one box per configured tier */}
+      <div className="grid grid-cols-2 gap-px bg-border/60 sm:grid-cols-3 lg:grid-cols-4">
+        {/* Live reading box — dual-unit, spans the first row on wide layouts */}
+        <div
+          className={cn(
+            "col-span-2 flex flex-col justify-between gap-3 bg-card p-4",
+            activeStyle ? activeStyle.chip.replace(/text-\S+/, "") : "",
+          )}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="label-caps text-muted-foreground">On-site sustained wind</span>
+            {active ? (
+              <span className={cn("font-mono text-[0.5625rem] font-bold uppercase tracking-wider", activeStyle!.text)}>
+                {active.label}
+              </span>
+            ) : null}
+          </div>
+          <div className="flex items-end gap-3">
+            <span className={cn("text-4xl font-bold tabular-nums leading-none", activeStyle?.text ?? "text-foreground")}>
               {windMs.toFixed(1)}
-              <span className="ml-1 text-sm font-medium text-muted-foreground">m/s</span>
+              <span className="ml-1 text-base font-medium text-muted-foreground">m/s</span>
+            </span>
+            <span className="pb-0.5 text-xl font-semibold tabular-nums leading-none text-muted-foreground">
+              {Math.round(windMs * MS_TO_KMH)}
+              <span className="ml-1 text-sm font-medium">km/h</span>
             </span>
           </div>
-          {active && (
-            <span className="text-right">
-              <span className="block font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-                Active trigger
-              </span>
-              <span className={cn("block text-sm font-bold", activeStyle!.text)}>{active.label}</span>
-            </span>
-          )}
+          {/* Compact live gauge with tier markers */}
+          <div className="relative h-2 w-full rounded-full bg-muted/60">
+            <div
+              className={cn("absolute inset-y-0 left-0 rounded-full transition-all duration-500", activeStyle?.bar ?? "bg-alert-green")}
+              style={{ width: `${fillPct}%` }}
+            />
+            {sorted.map((t) => {
+              const pos = Math.min(100, (t.minSpeed / ceiling) * 100)
+              return (
+                <span
+                  key={t.id}
+                  className="absolute top-1/2 h-3 w-0.5 -translate-y-1/2 rounded-full bg-foreground/50"
+                  style={{ left: `${pos}%` }}
+                  title={`${t.label} · ${fmtMs(t.minSpeed)} m/s · ${fmtKmh(t.minSpeed)} km/h`}
+                />
+              )
+            })}
+          </div>
         </div>
 
-        {/* Threshold gauge with tier markers */}
-        <div className="relative mt-3 h-2.5 w-full rounded-full bg-muted/60">
-          <div
-            className={cn("absolute inset-y-0 left-0 rounded-full transition-all duration-500", activeStyle?.bar ?? "bg-alert-green")}
-            style={{ width: `${fillPct}%` }}
-          />
-          {sorted.map((t) => {
-            const pos = Math.min(100, (t.minSpeed / ceiling) * 100)
-            return (
-              <span
-                key={t.level}
-                className="absolute top-1/2 h-3.5 w-0.5 -translate-y-1/2 rounded-full bg-foreground/50"
-                style={{ left: `${pos}%` }}
-                title={`${t.label} · ${t.minSpeed} m/s`}
-              />
-            )
-          })}
-        </div>
-
-        {/* Tier ladder */}
-        <div className="mt-3 grid gap-1.5">
-          {sorted.map((t) => {
-            const s = WIND_TIER_STYLES[t.level]
-            const isActive = active?.level === t.level
-            const met = windMs >= t.minSpeed
-            return (
-              <div
-                key={t.level}
-                className={cn(
-                  "flex items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 transition-colors",
-                  isActive ? s.chip : "border-border/50 bg-background/30",
-                )}
-              >
-                <span className="flex items-center gap-2">
-                  <span className={cn("h-2 w-2 rounded-full", met ? s.dot : "bg-muted-foreground/30")} aria-hidden="true" />
-                  <span className={cn("font-mono text-[0.625rem] font-bold uppercase tracking-wide", isActive ? s.text : "text-muted-foreground")}>
+        {/* One box per tier — individual range in both units */}
+        {boxes.map(({ tier: t, lower, upper }) => {
+          const s = WIND_TIER_STYLES[t.level]
+          const isActive = active?.id === t.id
+          const met = windMs >= t.minSpeed
+          const msRange = upper == null ? `≥ ${fmtMs(lower)}` : `${fmtMs(lower)}–${fmtMs(upper)}`
+          const kmhRange = upper == null ? `≥ ${fmtKmh(lower)}` : `${fmtKmh(lower)}–${fmtKmh(upper)}`
+          return (
+            <div
+              key={t.id}
+              className={cn(
+                "flex flex-col justify-between gap-2 p-3 transition-colors",
+                isActive ? s.chip : met ? "bg-card" : "bg-card/60",
+              )}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5">
+                  <span
+                    className={cn("h-2 w-2 rounded-full", met ? s.dot : "bg-muted-foreground/30", isActive && "animate-pulse")}
+                    aria-hidden="true"
+                  />
+                  <span className={cn("font-mono text-[0.625rem] font-bold uppercase tracking-wide", isActive ? s.text : met ? "text-foreground" : "text-muted-foreground")}>
                     {t.label}
                   </span>
                 </span>
-                <span className="flex items-center gap-2 text-right">
-                  <span className={cn("font-mono text-[0.5625rem] uppercase tracking-wider", isActive ? s.text : "text-muted-foreground")}>
-                    {t.note}
-                  </span>
-                  <span className="tabular-nums font-mono text-[0.625rem] font-bold text-foreground">
-                    {"\u2265"} {t.minSpeed} m/s
-                  </span>
+                {isActive ? (
+                  <span className={cn("font-mono text-[0.5rem] font-bold uppercase tracking-wider", s.text)}>Active</span>
+                ) : null}
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <span className={cn("font-mono text-base font-bold tabular-nums leading-none", isActive ? s.text : "text-foreground")}>
+                  {msRange} <span className="text-[0.625rem] font-medium text-muted-foreground">m/s</span>
+                </span>
+                <span className="font-mono text-[0.6875rem] tabular-nums text-muted-foreground">
+                  {kmhRange} km/h
                 </span>
               </div>
-            )
-          })}
-        </div>
+              <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">{t.note}</span>
+            </div>
+          )
+        })}
       </div>
     </div>
   )

@@ -775,7 +775,7 @@ export function LiveTrend() {
               </span>
             </div>
             <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-              {view.projectionNote} · each line normalised to its own range
+              {view.projectionNote} · Y-axis auto-scaled to {view.series[0].label} · each line on its own range
             </span>
           </div>
 
@@ -1099,6 +1099,36 @@ const W = 1000
 const H = 360
 const TOP = 30
 const BOT = 34
+/** Left gutter (in viewBox units) reserved for the auto-scaled Y-axis labels. */
+const AXIS_PAD = 8
+
+/** Round a raw interval up to a friendly 1 / 2 / 5 × 10ⁿ step for axis ticks. */
+function niceStep(raw: number): number {
+  if (!Number.isFinite(raw) || raw <= 0) return 1
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)))
+  const norm = raw / mag
+  const nice = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10
+  return nice * mag
+}
+
+/**
+ * Auto-scale a series to friendly rounded bounds with a little headroom, so each
+ * line sits inside a clean, human-readable range instead of hugging the canvas edges.
+ */
+function niceBounds(values: number[]): { lo: number; hi: number } {
+  const finite = values.filter((v) => Number.isFinite(v))
+  if (finite.length === 0) return { lo: 0, hi: 1 }
+  let min = Math.min(...finite)
+  let max = Math.max(...finite)
+  if (min === max) {
+    const pad = Math.abs(min) > 1 ? Math.abs(min) * 0.1 : 1
+    return { lo: min - pad, hi: max + pad }
+  }
+  const step = niceStep((max - min) / 4)
+  const lo = Math.floor(min / step) * step
+  const hi = Math.ceil(max / step) * step
+  return { lo, hi: hi === lo ? lo + step : hi }
+}
 
 function TrendChart({
   view,
@@ -1110,18 +1140,29 @@ function TrendChart({
   onActive: (i: number | null) => void
 }) {
   const { n, series, xLabels, boundary, nowIndex, bars } = view
-  const px = (i: number) => (n <= 1 ? 0 : (i / (n - 1)) * W)
+  const plotL = AXIS_PAD
+  const plotW = W - AXIS_PAD
+  const px = (i: number) => (n <= 1 ? plotL : plotL + (i / (n - 1)) * plotW)
   // Half the gap between samples, used to size the cloud-cover bars.
-  const barHalf = n <= 1 ? W / 2 : (W / (n - 1)) * 0.34
+  const barHalf = n <= 1 ? plotW / 2 : (plotW / (n - 1)) * 0.34
 
-  // Normalise each series to its own range so multi-unit lines share one canvas.
-  const normed = series.map((serie) => {
-    const finite = serie.values.filter((v) => Number.isFinite(v))
-    const min = Math.min(...finite)
-    const max = Math.max(...finite)
-    const span = max - min || 1
-    return serie.values.map((v) => TOP + (1 - (v - min) / span) * (H - TOP - BOT))
+  // Auto-scale each series to friendly rounded bounds, so every line sits inside a
+  // clean human-readable range instead of hugging the canvas edges.
+  const bounds = series.map((serie) => niceBounds(serie.values))
+  const normed = series.map((serie, si) => {
+    const { lo, hi } = bounds[si]
+    const span = hi - lo || 1
+    return serie.values.map((v) => TOP + (1 - (v - lo) / span) * (H - TOP - BOT))
   })
+
+  // Y-axis ticks derived from the primary series' auto range, labelled in its own unit.
+  const gridFracs = [0, 0.25, 0.5, 0.75, 1]
+  const primaryBounds = bounds[0]
+  const axisTicks = gridFracs.map((f) => ({
+    f,
+    y: TOP + f * (H - TOP - BOT),
+    value: primaryBounds.hi - f * (primaryBounds.hi - primaryBounds.lo),
+  }))
 
   const segment = (ys: number[], from: number, to: number) => {
     if (to <= from) return ""
@@ -1162,18 +1203,33 @@ function TrendChart({
           </filter>
         </defs>
 
-        {/* baseline grid */}
-        {[0.25, 0.5, 0.75].map((f) => (
+        {/* baseline grid — spans the plot area beside the Y-axis gutter */}
+        {[0, 0.25, 0.5, 0.75, 1].map((f) => (
           <line
             key={f}
-            x1={0}
+            x1={plotL}
             y1={TOP + f * (H - TOP - BOT)}
             x2={W}
             y2={TOP + f * (H - TOP - BOT)}
             stroke="var(--border)"
             strokeWidth="1"
+            opacity={f === 0 || f === 1 ? 0.7 : 1}
             vectorEffect="non-scaling-stroke"
           />
+        ))}
+
+        {/* Y-axis tick labels — auto-scaled to the primary series' own range/unit */}
+        {axisTicks.map((tick) => (
+          <text
+            key={tick.f}
+            x={plotL - 3}
+            y={Math.min(H - 2, Math.max(9, tick.y + 3))}
+            textAnchor="end"
+            className="fill-muted-foreground font-mono"
+            style={{ fontSize: "11px" }}
+          >
+            {series[0].format(tick.value)}
+          </text>
         ))}
 
         {/* optional bar layer (e.g. on-site cloud cover %) drawn behind the lines */}
