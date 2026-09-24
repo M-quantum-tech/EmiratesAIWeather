@@ -47,8 +47,10 @@ import {
   BUZZER_TONE,
   DEFAULT_RULES,
   DEFAULT_WIND_MONITOR,
+  DEFAULT_WIND_SOURCE,
   type EscalationRule,
   type WindMonitorTier,
+  type WindSourceConfig,
 } from "@/lib/escalation"
 import { ProximityRings } from "@/components/weather/proximity-rings"
 import { WindDirectionRadar } from "@/components/weather/wind-direction-radar"
@@ -200,6 +202,13 @@ export function AlertBanner() {
     { refreshInterval: 60_000, revalidateOnFocus: false },
   )
   const windTiers = windMonitorData?.tiers ?? DEFAULT_WIND_MONITOR
+  // Wind speed & gust source link — NCM COSMO-UAE by default, editable in the Engineering Console.
+  const { data: windSourceData } = useSWR<{ source: WindSourceConfig }>(
+    "/api/wind-source",
+    farFetcher as never,
+    { refreshInterval: 300_000, revalidateOnFocus: false },
+  )
+  const windSource = windSourceData?.source ?? DEFAULT_WIND_SOURCE
   const alert = useMemo(() => (payload ? buildAlert(payload) : null), [payload])
   const level = alert?.level ?? null
   // Acknowledgment latch: the alarm sounds whenever the detected level differs from the
@@ -663,6 +672,7 @@ export function AlertBanner() {
             <span className="mt-0.5 block font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
               {(gustKmh / MS_TO_KMH).toFixed(1)} m/s · {compass(payload.current.windDirection)} wind
             </span>
+            <WindSourceLink source={windSource} />
           </div>
 
           {/* delta */}
@@ -693,6 +703,7 @@ export function AlertBanner() {
               {farGustMs == null ? "Sampling · " : `${farGustMs.toFixed(1)} m/s · `}
               {compass(payload.current.windDirection)} origin
             </span>
+            <WindSourceLink source={windSource} />
           </div>
         </div>
 
@@ -978,6 +989,22 @@ const STATION_LEVELS: { level: keyof typeof WIND_TIER_STYLES; label: string; sub
   { level: "orange", label: "Orange", sub: "Alert" },
   { level: "red", label: "Red", sub: "Severe" },
 ]
+
+/** Small "connected source" chip that links wind speed & gust readouts to the configured NCM feed. */
+function WindSourceLink({ source }: { source: WindSourceConfig }) {
+  if (!source.url) return null
+  return (
+    <a
+      href={source.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="mt-2 inline-flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-1.5 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider text-accent transition-colors hover:bg-accent/20"
+    >
+      {source.label}
+      <ExternalLink className="h-2.5 w-2.5" aria-hidden="true" />
+    </a>
+  )
+}
 
 function WindEventMonitor({ windMs, tiers }: { windMs: number; tiers: WindMonitorTier[] }) {
   // Tiers are evaluated high→low; the highest threshold the live wind meets is active.

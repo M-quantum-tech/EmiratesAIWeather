@@ -5,10 +5,12 @@ import { BellRing, Check, Link2, Plus, RotateCcw, Save, Square, Trash2, Volume2,
 import {
   DEFAULT_RULES,
   DEFAULT_WIND_MONITOR,
+  DEFAULT_WIND_SOURCE,
   ESCALATION_LEVELS,
   type EscalationRule,
   type SourceLink,
   type WindMonitorTier,
+  type WindSourceConfig,
 } from "@/lib/escalation"
 import { playBuzzerTest, stopBuzzerTest } from "@/lib/escalation-buzzer"
 import type { AlertLevel } from "@/lib/weather"
@@ -27,9 +29,11 @@ const nextId = () => `wm-${Date.now().toString(36)}-${(uid++).toString(36)}`
 export function EngineeringConsole({
   initialRules,
   initialWindMonitor,
+  initialWindSource,
 }: {
   initialRules: EscalationRule[]
   initialWindMonitor: WindMonitorTier[]
+  initialWindSource: WindSourceConfig
 }) {
   const [rules, setRules] = useState<EscalationRule[]>(initialRules)
   const [saving, setSaving] = useState(false)
@@ -158,6 +162,9 @@ export function EngineeringConsole({
 
       {/* Wind Event Monitor thresholds */}
       <WindMonitorEditor initialTiers={initialWindMonitor} />
+
+      {/* Wind speed & gust source link (NCM COSMO-UAE wind) */}
+      <WindSourceEditor initialSource={initialWindSource} />
 
       {/* Editable escalation rules */}
       <section className="rounded-xl border border-border bg-card p-5">
@@ -435,6 +442,108 @@ function WindMonitorEditor({ initialTiers }: { initialTiers: WindMonitorTier[] }
           <Plus className="h-3 w-3" aria-hidden="true" />
           Add threshold
         </button>
+      </div>
+    </section>
+  )
+}
+
+function WindSourceEditor({ initialSource }: { initialSource: WindSourceConfig }) {
+  const [source, setSource] = useState<WindSourceConfig>({ ...initialSource })
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  function update(patch: Partial<WindSourceConfig>) {
+    setSaved(false)
+    setSource((prev) => ({ ...prev, ...patch }))
+  }
+
+  function resetDefaults() {
+    setSaved(false)
+    setError(null)
+    setSource({ ...DEFAULT_WIND_SOURCE })
+  }
+
+  async function save() {
+    setSaving(true)
+    setError(null)
+    try {
+      const res = await fetch("/api/wind-source", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error ?? "Save failed")
+      setSource({ ...(data.source as WindSourceConfig) })
+      setSaved(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-border bg-card p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Link2 className="h-4 w-4 text-accent" aria-hidden="true" />
+          <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-foreground">
+            Wind speed & gust source
+          </h2>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={resetDefaults}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-background/60"
+          >
+            <RotateCcw className="h-3 w-3" aria-hidden="true" />
+            Reset to defaults
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={saving}
+            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
+          >
+            {saved ? <Check className="h-3 w-3" aria-hidden="true" /> : <Save className="h-3 w-3" aria-hidden="true" />}
+            {saving ? "Saving…" : saved ? "Saved" : "Save source"}
+          </button>
+        </div>
+      </div>
+      <p className="mt-2 text-sm text-muted-foreground">
+        Feed that every live Wind Speed & Wind Gust readout links back to. Defaults to the NCM Ghaith COSMO-UAE
+        surface-wind viewer. Paste any official wind link and it becomes the connected source across the dashboard.
+      </p>
+      {error ? <p className="mt-2 text-sm text-alert-red">{error}</p> : null}
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-[2fr_3fr]">
+        <label className="flex flex-col gap-1">
+          <span className="label-caps text-muted-foreground">Source name</span>
+          <input
+            type="text"
+            value={source.label}
+            placeholder={DEFAULT_WIND_SOURCE.label}
+            onChange={(e) => update({ label: e.target.value })}
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="label-caps text-muted-foreground">Source link</span>
+          <span className="relative">
+            <Link2 className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+            <input
+              type="url"
+              inputMode="url"
+              value={source.url}
+              placeholder={DEFAULT_WIND_SOURCE.url}
+              onChange={(e) => update({ url: e.target.value })}
+              className="w-full rounded-md border border-border bg-background py-2 pl-8 pr-3 text-sm text-foreground outline-none focus:border-accent"
+            />
+          </span>
+        </label>
       </div>
     </section>
   )

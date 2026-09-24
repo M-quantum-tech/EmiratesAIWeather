@@ -166,6 +166,35 @@ export function parseWindMonitor(value: unknown): WindMonitorTier[] | null {
   return out.sort((a, b) => b.minSpeed - a.minSpeed)
 }
 
+/**
+ * Configurable upstream feed behind the live Wind Speed & Wind Gust readouts.
+ * Defaults to the NCM Ghaith COSMO-UAE 10 m surface-wind viewer so every wind
+ * value on the dashboard links back to its official source, and the link is
+ * editable in the Engineering Console without a deploy.
+ */
+export type WindSourceConfig = {
+  /** Source name shown on the wind speed & gust readouts. */
+  label: string
+  /** Absolute http(s) link to the live wind viewer. */
+  url: string
+}
+
+/** Default wind feed — NCM Ghaith COSMO-UAE surface wind. */
+export const DEFAULT_WIND_SOURCE: WindSourceConfig = {
+  label: "NCM COSMO-UAE Wind",
+  url: "https://ghaith.ncm.gov.ae/?lang=en#cosmo-uae-wind",
+}
+
+/** Validate an unknown value into a clean WindSourceConfig (or null if invalid). */
+export function parseWindSource(value: unknown): WindSourceConfig | null {
+  if (!value || typeof value !== "object") return null
+  const r = value as Record<string, unknown>
+  const label = String(r.label ?? "").slice(0, 80).trim()
+  const url = sanitizeSourceUrl(r.url)
+  if (!label && !url) return null
+  return { label: label || DEFAULT_WIND_SOURCE.label, url: url ?? DEFAULT_WIND_SOURCE.url }
+}
+
 /** Shape of one buzzer tone profile. */
 export type BuzzerTone = {
   pattern: number[]
