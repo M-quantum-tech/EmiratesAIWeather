@@ -7,6 +7,7 @@ import {
   ArrowUpRight,
   ChevronLeft,
   ChevronRight,
+  Cloud,
   CloudSun,
   LineChart,
   Pause,
@@ -15,12 +16,15 @@ import {
   Ruler,
   Satellite,
   ShieldAlert,
+  Trash2,
   Wind,
 } from "lucide-react"
 import { Panel } from "@/components/station/panel"
 import { MeasureMap } from "@/components/weather/measure-map"
 import { fetchWindFrames, type WindFrames } from "@/lib/wind-field"
 import { createWindLayer } from "@/lib/wind-layer"
+
+import { createCloudLayer } from "@/lib/cloud-layer"
 import {
   fetchWarningFrames,
   WARN_FILL,
@@ -34,7 +38,20 @@ import { useWeather } from "@/components/weather/weather-provider"
 
 type Frame = { time: number; path: string }
 type Maps = { host: string; radar: Frame[]; satellite: Frame[] }
-type Layer = "wind" | "radar" | "satellite" | "warnings"
+type Layer = "wind" | "radar" | "satellite" | "clouds" | "warnings"
+type LatLng = { lat: number; lng: number }
+
+/** Great-circle distance (Haversine) in kilometres between two lat/lng points. */
+function haversineKm(a: LatLng, b: LatLng) {
+  const R = 6371
+  const toRad = (d: number) => (d * Math.PI) / 180
+  const dLat = toRad(b.lat - a.lat)
+  const dLon = toRad(b.lng - a.lng)
+  const lat1 = toRad(a.lat)
+  const lat2 = toRad(b.lat)
+  const h = Math.sin(dLat / 2) ** 2 + Math.sin(dLon / 2) ** 2 * Math.cos(lat1) * Math.cos(lat2)
+  return R * 2 * Math.asin(Math.sqrt(h))
+}
 
 // Warnings layer uses the COLOURED, Google-Maps-style Esri World Street Map
 // (keyless, colored land/water/roads with English/Latin labels baked in) so it reads
@@ -97,6 +114,16 @@ const CLOUD_SCALE = [
   { c: "#f800fd", label: "Intense" },
 ] as const
 
+// Total-cloud-cover legend (%) matching the COSMO-UAE total-clouds palette in
+// lib/cloud-layer: clear (dark) → thin blue-grey haze → bright overcast white.
+const CLOUD_COVER_SCALE = [
+  { c: "#1a2436", label: "0" },
+  { c: "#3a4a63", label: "" },
+  { c: "#7c8aa0", label: "50" },
+  { c: "#c3ccd9", label: "" },
+  { c: "#f5f8fc", label: "100" },
+] as const
+
 // Wind-speed legend (m/s) matching the COSMO-UAE heatmap palette in lib/wind-layer.
 // Numeric ticks (m/s) mirror the NCM diverging-winds scale calm → gale.
 const WIND_SCALE = [
@@ -153,11 +180,29 @@ export function NcmSources() {
   const [windIdx, setWindIdx] = useState(0)
   const [windPlaying, setWindPlaying] = useState(true)
   const [windSpeed, setWindSpeed] = useState<1 | 2>(1)
+  const [cloudIdx, setCloudIdx] = useState(0)
+  const [cloudPlaying, setCloudPlaying] = useState(true)
   const [warnFrames, setWarnFrames] = useState<WarningFrames | null>(null)
   const [warnIdx, setWarnIdx] = useState(0)
   const [warnPlaying, setWarnPlaying] = useState(true)
   const [geoReady, setGeoReady] = useState(false)
   const [showMeasure, setShowMeasure] = useState(false)
+
+  // Trajectory / distance measuring tool (NCM Ghaith-style): click multiple points
+  // on the live map to build a route and read per-segment + total great-circle distance.
+  const cloudLayerRef = useRef<any>(null)
+  const measureGroupRef = useRef<any>(null)
+  const measurePtsRef = useRef<LatLng[]>([])
+  const measuringRef = useRef(false)
+  const [measuring, setMeasuring] = useState(false)
+  const [measurePts, setMeasurePts] = useState<LatLng[]>([])
+  measuringRef.current = measuring
+
+  const measureKm = useMemo(() => {
+    let sum = 0
+    for (let i = 1; i < measurePts.length; i++) sum += haversineKm(measurePts[i - 1], measurePts[i])
+    return sum
+  }, [measurePts])
 
   const frames = layer === "radar" ? (maps?.radar ?? []) : layer === "satellite" ? (maps?.satellite ?? []) : []
 
@@ -233,6 +278,9 @@ export function NcmSources() {
       clearInterval(id)
     }
   }, [])
+
+  // The total-cloud-cover field is carried on the same wind forecast frames
+  // (fetched in a single Open-Meteo request), so no separate cloud fetch is needed.
 
   // Load the real hourly-forecast warning timeline; refresh every minute (unified cycle).
   useEffect(() => {
@@ -450,6 +498,109 @@ export function NcmSources() {
     return () => clearInterval(id)
   }, [layer, windPlaying, windData, windSpeed])
 
+  // Manage the total-cloud-cover field layer, swapping the active forecast frame.
+  useEffect(() => {
+    const L = leafletRef.current
+    const map = mapRef.current
+    if (!L || !map || !mapReady) return
+
+    const wf = windData?.frames[Math.min(cloudIdx, windData.frames.length - 1)]
+    const grid = wf
+      ? {
+          nx: wf.nx,
+          ny: wf.ny,
+          la1: wf.la1,
+          la2: wf.la2,
+          lo1: wf.lo1,
+          lo2: wf.lo2,
+          dx: wf.dx,
+          dy: wf.dy,
+          cover: wf.cover,
+        }
+      : null
+
+    if (layer === "clouds" && grid) {
+      if (cloudLayerRef.current) {
+        cloudLayerRef.current.setGrid(grid)
+      } else {
+        cloudLayerRef.current = createCloudLayer(L, grid)
+        cloudLayerRef.current.addTo(map)
+      }
+    } else if (cloudLayerRef.current) {
+      map.removeLayer(cloudLayerRef.current)
+      cloudLayerRef.current = null
+    }
+  }, [layer, windData, cloudIdx, mapReady])
+
+  // Total-cloud forecast animation timer (shares the wind 1x/2x speed control).
+  useEffect(() => {
+    if (layer !== "clouds" || !cloudPlaying || !windData || windData.frames.length < 2) return
+    const id = setInterval(() => setCloudIdx((i) => (i + 1) % windData.frames.length), 900 / (windSpeed || 1))
+    return () => clearInterval(id)
+  }, [layer, cloudPlaying, windData, windSpeed])
+
+  // Draw the measuring trajectory: a dashed route with a vertex dot per point and a
+  // sticky tooltip on each vertex showing the cumulative distance from the start.
+  const drawMeasure = (pts: LatLng[]) => {
+    const L = leafletRef.current
+    const map = mapRef.current
+    if (!L || !map) return
+    if (measureGroupRef.current) {
+      map.removeLayer(measureGroupRef.current)
+      measureGroupRef.current = null
+    }
+    if (pts.length === 0) return
+    const group = L.layerGroup()
+    if (pts.length >= 2) {
+      L.polyline(
+        pts.map((p) => [p.lat, p.lng]),
+        { color: "#f5b642", weight: 2.5, opacity: 0.95, dashArray: "6 6" },
+      ).addTo(group)
+    }
+    let cum = 0
+    pts.forEach((p, i) => {
+      if (i > 0) cum += haversineKm(pts[i - 1], p)
+      const dot = L.circleMarker([p.lat, p.lng], {
+        radius: 5,
+        color: "#0b0f14",
+        weight: 2,
+        fillColor: "#f5b642",
+        fillOpacity: 1,
+      })
+      const label = i === 0 ? "Start" : `${cum.toFixed(1)} km`
+      dot.bindTooltip(label, { permanent: true, direction: "top", className: "measure-tip", offset: [0, -6] })
+      dot.addTo(group)
+    })
+    group.addTo(map)
+    measureGroupRef.current = group
+  }
+
+  const clearMeasure = () => {
+    measurePtsRef.current = []
+    setMeasurePts([])
+    if (measureGroupRef.current && mapRef.current) {
+      mapRef.current.removeLayer(measureGroupRef.current)
+      measureGroupRef.current = null
+    }
+  }
+
+  // Attach a single map click handler that only accumulates points while the
+  // measuring tool is active, so it never interferes with normal map interaction.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !mapReady) return
+    const onClick = (e: any) => {
+      if (!measuringRef.current) return
+      const next = [...measurePtsRef.current, { lat: e.latlng.lat, lng: e.latlng.lng }]
+      measurePtsRef.current = next
+      setMeasurePts(next)
+      drawMeasure(next)
+    }
+    map.on("click", onClick)
+    return () => map.off("click", onClick)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapReady])
+
   // Listen for time sync events from other panels and align index where possible
   useEffect(() => {
     function onSync(e: any) {
@@ -555,14 +706,37 @@ export function NcmSources() {
   }, [playing, frames, layer])
 
   const isWarnings = layer === "warnings"
-  const scale = layer === "radar" ? RADAR_SCALE : layer === "satellite" ? CLOUD_SCALE : WIND_SCALE
-  const legendTitle = layer === "radar" ? "Rain intensity" : layer === "satellite" ? "Cloud top" : "Wind speed"
+  // Forecast-field layers (wind + total clouds) share one hourly playback control set.
+  const isField = layer === "wind" || layer === "clouds"
+  const fieldData = layer === "wind" || layer === "clouds" ? windData : null
+  const fieldIdx = layer === "wind" ? windIdx : cloudIdx
+  const setFieldIdx = layer === "wind" ? setWindIdx : setCloudIdx
+  const fieldPlaying = layer === "wind" ? windPlaying : cloudPlaying
+  const setFieldPlaying = layer === "wind" ? setWindPlaying : setCloudPlaying
+  const fieldLabel = layer === "clouds" ? "cloud" : "wind"
+  const scale =
+    layer === "radar"
+      ? RADAR_SCALE
+      : layer === "satellite"
+        ? CLOUD_SCALE
+        : layer === "clouds"
+          ? CLOUD_COVER_SCALE
+          : WIND_SCALE
+  const legendTitle =
+    layer === "radar"
+      ? "Rain intensity"
+      : layer === "satellite"
+        ? "Cloud top"
+        : layer === "clouds"
+          ? "Cloud cover"
+          : "Wind speed"
 
   const tabs: { id: Layer; label: string; Icon: typeof Radar }[] = [
     { id: "warnings", label: "Warnings", Icon: ShieldAlert },
     { id: "wind", label: "Wind field", Icon: Wind },
     { id: "radar", label: "Rain radar", Icon: Radar },
     { id: "satellite", label: "Clouds / IR", Icon: CloudSun },
+    { id: "clouds", label: "Total clouds", Icon: Cloud },
   ]
 
   return (
@@ -622,6 +796,57 @@ export function NcmSources() {
               : `Large animated ${layer === "radar" ? "precipitation radar" : layer === "satellite" ? "cloud / infrared satellite" : "surface wind"} map centred on the UAE`
           }
         />
+
+        {/* ---------- TRAJECTORY / DISTANCE MEASURE TOOL (all layers) ---------- */}
+        <div className="absolute left-3 top-1/2 z-[600] flex -translate-y-1/2 flex-col items-start gap-2">
+          <div className="flex flex-col overflow-hidden rounded-full border border-white/20 bg-black/60 shadow-lg backdrop-blur">
+            <button
+              type="button"
+              onClick={() => {
+                setMeasuring((m) => {
+                  const next = !m
+                  if (!next) clearMeasure()
+                  return next
+                })
+              }}
+              className={cn(
+                "grid h-10 w-10 place-items-center transition-colors",
+                measuring ? "bg-signal text-black" : "text-white/85 hover:bg-white/10",
+              )}
+              aria-pressed={measuring}
+              aria-label={measuring ? "Stop measuring distance" : "Measure distance between points"}
+              title={measuring ? "Stop measuring" : "Measure distance"}
+            >
+              <Ruler className="h-4 w-4" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={clearMeasure}
+              disabled={measurePts.length === 0}
+              className="grid h-10 w-10 place-items-center border-t border-white/15 text-white/85 transition-colors hover:bg-white/10 disabled:opacity-40"
+              aria-label="Clear measured trajectory"
+              title="Clear trajectory"
+            >
+              <Trash2 className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+          {measuring && (
+            <div className="max-w-[13rem] rounded-md border border-signal/40 bg-black/70 px-2.5 py-1.5 font-mono text-[0.625rem] leading-relaxed text-white/85 backdrop-blur">
+              {measurePts.length < 2 ? (
+                <span>Click points on the map to trace a route.</span>
+              ) : (
+                <>
+                  <span className="text-signal">
+                    {measureKm.toFixed(1)} km
+                  </span>{" "}
+                  <span className="text-white/60">
+                    · {(measureKm * 0.539957).toFixed(1)} nmi · {measurePts.length} pts
+                  </span>
+                </>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* ---------- WARNINGS OVERLAYS ---------- */}
         {isWarnings && (
@@ -742,6 +967,10 @@ export function NcmSources() {
                 <>
                   <CloudSun className="h-3.5 w-3.5 text-accent" aria-hidden="true" /> Cloud / IR satellite
                 </>
+              ) : layer === "clouds" ? (
+                <>
+                  <Cloud className="h-3.5 w-3.5 text-accent" aria-hidden="true" /> Total cloud cover
+                </>
               ) : (
                 <>
                   <Wind className="h-3.5 w-3.5 text-signal" aria-hidden="true" /> Live wind field
@@ -764,6 +993,11 @@ export function NcmSources() {
                   <span>Calm</span>
                   <span>Strong</span>
                 </div>
+              ) : layer === "clouds" ? (
+                <div className="mt-1 flex justify-between font-mono text-[0.5rem] uppercase tracking-wide text-white/70">
+                  <span>Clear</span>
+                  <span>Overcast</span>
+                </div>
               ) : (
                 <div className="mt-1 flex justify-between font-mono text-[0.5rem] uppercase tracking-wide text-white/70">
                   {scale
@@ -785,25 +1019,30 @@ export function NcmSources() {
                 Forecast · 10 m surface wind
               </span>
             )}
+            {layer === "clouds" && (
+              <span className="absolute right-3 top-3 z-[500] inline-flex items-center gap-1.5 rounded-md bg-accent/90 px-2 py-1 font-mono text-[0.5625rem] uppercase tracking-wider text-black backdrop-blur">
+                Forecast · total cloud cover
+              </span>
+            )}
 
             <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[500] flex items-center gap-3 bg-gradient-to-t from-black/80 to-transparent px-4 py-3">
               {layer === "wind" ? (
-                windData && windData.frames.length > 0 ? (
+                fieldData && fieldData.frames.length > 0 ? (
                   <>
                     <button
                       type="button"
-                      onClick={() => setWindPlaying((p) => !p)}
+                      onClick={() => setFieldPlaying((p) => !p)}
                       className="pointer-events-auto grid h-8 w-8 shrink-0 place-items-center rounded-full bg-alert-red text-white shadow transition-transform hover:scale-105"
-                      aria-label={windPlaying ? "Pause forecast" : "Play forecast"}
+                      aria-label={fieldPlaying ? "Pause forecast" : "Play forecast"}
                     >
-                      {windPlaying ? <Pause className="h-4 w-4" aria-hidden="true" /> : <Play className="h-4 w-4" aria-hidden="true" />}
+                      {fieldPlaying ? <Pause className="h-4 w-4" aria-hidden="true" /> : <Play className="h-4 w-4" aria-hidden="true" />}
                     </button>
                     <div className="pointer-events-auto flex shrink-0 items-center gap-0.5 rounded-md border border-white/20 bg-black/55 p-0.5 backdrop-blur">
                       <button
                         type="button"
                         onClick={() => {
-                          setWindPlaying(false)
-                          setWindIdx((i) => (i - 1 + windData.frames.length) % windData.frames.length)
+                          setFieldPlaying(false)
+                          setFieldIdx((i) => (i - 1 + fieldData.frames.length) % fieldData.frames.length)
                         }}
                         className="grid h-6 w-6 place-items-center rounded text-white/80 hover:bg-white/10"
                         aria-label="Previous hour"
@@ -813,8 +1052,8 @@ export function NcmSources() {
                       <button
                         type="button"
                         onClick={() => {
-                          setWindPlaying(false)
-                          setWindIdx((i) => (i + 1) % windData.frames.length)
+                          setFieldPlaying(false)
+                          setFieldIdx((i) => (i + 1) % fieldData.frames.length)
                         }}
                         className="grid h-6 w-6 place-items-center rounded text-white/80 hover:bg-white/10"
                         aria-label="Next hour"
@@ -842,23 +1081,23 @@ export function NcmSources() {
                     <input
                       type="range"
                       min={0}
-                      max={windData.frames.length - 1}
-                      value={Math.min(windIdx, windData.frames.length - 1)}
+                      max={fieldData.frames.length - 1}
+                      value={Math.min(fieldIdx, fieldData.frames.length - 1)}
                       onChange={(e) => {
-                        setWindPlaying(false)
-                        setWindIdx(Number(e.target.value))
+                        setFieldPlaying(false)
+                        setFieldIdx(Number(e.target.value))
                       }}
-                      aria-label="Scrub the wind forecast time"
+                      aria-label={`Scrub the ${fieldLabel} forecast time`}
                       className="pointer-events-auto h-1.5 flex-1 cursor-pointer accent-[var(--signal)]"
                     />
                     <span className="shrink-0 rounded-md bg-alert-red px-2.5 py-1 font-mono text-[0.6875rem] tabular-nums text-white shadow">
-                      {formatWindTime(windData.times[Math.min(windIdx, windData.times.length - 1)])}
+                      {formatWindTime(fieldData.times[Math.min(fieldIdx, fieldData.times.length - 1)])}
                     </span>
                   </>
                 ) : (
                   <span className="inline-flex items-center gap-2 font-mono text-[0.6875rem] uppercase tracking-wider text-white/90">
                     <span className="h-2 w-2 animate-pulse rounded-full bg-signal" aria-hidden="true" />
-                    Loading wind forecast…
+                    Loading {fieldLabel} forecast…
                   </span>
                 )
               ) : (
