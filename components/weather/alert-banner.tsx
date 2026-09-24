@@ -608,11 +608,6 @@ export function AlertBanner() {
 
       {/* Approach tracker — on-site vs far-site (50 km upwind) gust + distance legend */}
       <div className="border-t border-border/60 p-5 sm:p-7">
-        <span className="flex items-center gap-1.5 label-caps text-muted-foreground">
-          <Navigation className="h-3.5 w-3.5" aria-hidden="true" />
-          Approach tracker · wind gust on site vs 50 km upwind
-        </span>
-
         {/* Live Wind Event Monitor — active tier driven by on-site sustained wind */}
         <WindEventMonitor windMs={windMs} tiers={windTiers} />
 
