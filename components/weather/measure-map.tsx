@@ -5,7 +5,7 @@ import "leaflet/dist/leaflet.css"
 import { ExternalLink, MapPin, MousePointerClick, RotateCcw, Ruler, Search } from "lucide-react"
 import { Panel } from "@/components/station/panel"
 import { useWeather } from "@/components/weather/weather-provider"
-import { compass, describeCode, precipUnit, tempUnit, toMetersPerSecond, weatherEmoji, type Units } from "@/lib/weather"
+import { compass, describeCode, precipUnit, tempUnit, weatherEmoji, type Units } from "@/lib/weather"
 import { cn } from "@/lib/utils"
 
 type Point = { lat: number; lon: number }
@@ -288,7 +288,7 @@ export function buildSpotPopupHtml(
   const tmin = temps.length ? Math.round(Math.min(...temps)) : 0
   const wind =
     units === "metric"
-      ? `${toMetersPerSecond(cur.windSpeed ?? 0).toFixed(1)} m/s`
+      ? `${Math.round(cur.windSpeed ?? 0)} km/h`
       : `${Math.round(cur.windSpeed ?? 0)} mph`
   const emojiRow = [0, 4, 8, 12, 16, 20, 23]
     .map((i) =>

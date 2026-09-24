@@ -127,16 +127,16 @@ const CLOUD_COVER_SCALE = [
   { c: "#f5f8fc", label: "100" },
 ] as const
 
-// Wind-speed legend (m/s) matching the COSMO-UAE heatmap palette in lib/wind-layer.
-// Numeric ticks (m/s) mirror the NCM diverging-winds scale calm → gale.
+// Wind-speed legend (km/h) matching the COSMO-UAE heatmap palette in lib/wind-layer.
+// Numeric ticks (km/h) mirror the NCM diverging-winds scale calm → gale.
 const WIND_SCALE = [
   { c: "#2642a8", label: "0" },
-  { c: "#1ea5cd", label: "5" },
-  { c: "#2ec39e", label: "10" },
-  { c: "#80d26c", label: "15" },
-  { c: "#e8d658", label: "20" },
-  { c: "#f69c3c", label: "25" },
-  { c: "#e84a3a", label: "30+" },
+  { c: "#1ea5cd", label: "18" },
+  { c: "#2ec39e", label: "36" },
+  { c: "#80d26c", label: "54" },
+  { c: "#e8d658", label: "72" },
+  { c: "#f69c3c", label: "90" },
+  { c: "#e84a3a", label: "108+" },
 ] as const
 
 /** Format a local ISO timestamp like "2026-08-26T12:00" into "Wed 26/08/2026 · 12:00". */

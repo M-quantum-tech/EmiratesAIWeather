@@ -163,7 +163,7 @@ export function WindDirectionRadar({ windMs = null, gustMs = null, windDirection
             <span className="ml-1 text-xs font-medium text-muted-foreground">{Math.round(fromDeg)}&deg;</span>
           </p>
           <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-            Gust {gustMs != null ? `${gustMs.toFixed(1)} m/s` : "—"}
+            Gust {gustMs != null ? `${Math.round(gustMs * 3.6)} km/h` : "—"}
           </span>
         </div>
         <div className={cn("rounded-lg border px-3 py-2", band.text.replace("text-", "border-") + "/40")}>
@@ -172,8 +172,8 @@ export function WindDirectionRadar({ windMs = null, gustMs = null, windDirection
             {band.label}
           </span>
           <p className="mt-0.5 font-mono text-lg font-bold tabular-nums text-foreground">
-            {speed.toFixed(1)}
-            <span className="ml-1 text-xs font-medium text-muted-foreground">m/s</span>
+            {Math.round(speed * 3.6)}
+            <span className="ml-1 text-xs font-medium text-muted-foreground">km/h</span>
           </p>
           <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
             Sustained wind

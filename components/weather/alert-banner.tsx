@@ -415,9 +415,9 @@ export function AlertBanner() {
       met: approaching || isStorm,
     },
     {
-      signal: "Wind gust over 15 m/s",
+      signal: "Wind gust over 54 km/h",
       source: "Open-Meteo",
-      value: `${gustMs.toFixed(1)} m/s · ${Math.round(gustKmh)} km/h`,
+      value: `${Math.round(gustKmh)} km/h`,
       met: gustMs >= 15,
     },
     {
@@ -657,11 +657,11 @@ export function AlertBanner() {
               <MapPin className="h-3 w-3" aria-hidden="true" /> On site · near
             </span>
             <div className="mt-1.5 flex items-baseline gap-1.5">
-              <span className="text-4xl font-black tabular-nums text-foreground">{gustMs.toFixed(1)}</span>
-              <span className="text-sm text-muted-foreground">m/s gust</span>
+              <span className="text-4xl font-black tabular-nums text-foreground">{Math.round(gustKmh)}</span>
+              <span className="text-sm text-muted-foreground">km/h gust</span>
             </div>
             <span className="mt-0.5 block font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
-              {Math.round(onGust)} {speedUnit(payload.units)} · {compass(payload.current.windDirection)} wind
+              {compass(payload.current.windDirection)} wind
             </span>
           </div>
 
@@ -685,12 +685,12 @@ export function AlertBanner() {
             </span>
             <div className="mt-1.5 flex items-baseline gap-1.5">
               <span className="text-4xl font-black tabular-nums text-foreground">
-                {farGustMs == null ? "—" : farGustMs.toFixed(1)}
+                {farGustMs == null ? "—" : Math.round(farGustMs * 3.6)}
               </span>
-              <span className="text-sm text-muted-foreground">m/s gust</span>
+              <span className="text-sm text-muted-foreground">km/h gust</span>
             </div>
             <span className="mt-0.5 block font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
-              {farGust == null ? "Sampling" : `${Math.round(farGust)} ${speedUnit(payload.units)}`} ·{" "}
+              {farGust == null ? "Sampling · " : ""}
               {compass(payload.current.windDirection)} origin
             </span>
           </div>
@@ -1040,12 +1040,8 @@ function WindEventMonitor({ windMs, tiers }: { windMs: number; tiers: WindMonito
           </div>
           <div className="flex items-end gap-3">
             <span className={cn("text-4xl font-bold tabular-nums leading-none", activeStyle?.text ?? "text-foreground")}>
-              {windMs.toFixed(1)}
-              <span className="ml-1 text-base font-medium text-muted-foreground">m/s</span>
-            </span>
-            <span className="pb-0.5 text-xl font-semibold tabular-nums leading-none text-muted-foreground">
               {Math.round(windMs * MS_TO_KMH)}
-              <span className="ml-1 text-sm font-medium">km/h</span>
+              <span className="ml-1 text-base font-medium text-muted-foreground">km/h</span>
             </span>
           </div>
           {/* Compact live gauge with tier markers */}
@@ -1061,7 +1057,7 @@ function WindEventMonitor({ windMs, tiers }: { windMs: number; tiers: WindMonito
                   key={t.id}
                   className="absolute top-1/2 h-3 w-0.5 -translate-y-1/2 rounded-full bg-foreground/50"
                   style={{ left: `${pos}%` }}
-                  title={`${t.label} · ${fmtMs(t.minSpeed)} m/s · ${fmtKmh(t.minSpeed)} km/h`}
+                  title={`${t.label} · ${fmtKmh(t.minSpeed)} km/h`}
                 />
               )
             })}
@@ -1073,7 +1069,6 @@ function WindEventMonitor({ windMs, tiers }: { windMs: number; tiers: WindMonito
           const s = WIND_TIER_STYLES[t.level]
           const isActive = active?.id === t.id
           const met = windMs >= t.minSpeed
-          const msRange = upper == null ? `≥ ${fmtMs(lower)}` : `${fmtMs(lower)}–${fmtMs(upper)}`
           const kmhRange = upper == null ? `≥ ${fmtKmh(lower)}` : `${fmtKmh(lower)}–${fmtKmh(upper)}`
           return (
             <div
@@ -1099,10 +1094,7 @@ function WindEventMonitor({ windMs, tiers }: { windMs: number; tiers: WindMonito
               </div>
               <div className="flex flex-col gap-0.5">
                 <span className={cn("font-mono text-base font-bold tabular-nums leading-none", isActive ? s.text : "text-foreground")}>
-                  {msRange} <span className="text-[0.625rem] font-medium text-muted-foreground">m/s</span>
-                </span>
-                <span className="font-mono text-[0.6875rem] tabular-nums text-muted-foreground">
-                  {kmhRange} km/h
+                  {kmhRange} <span className="text-[0.625rem] font-medium text-muted-foreground">km/h</span>
                 </span>
               </div>
               <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">{t.note}</span>

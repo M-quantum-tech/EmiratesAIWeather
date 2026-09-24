@@ -125,7 +125,7 @@ export function ProximityRings({
               <span className="relative inline-flex h-3.5 w-3.5 rounded-full bg-alert-yellow" />
             </span>
             <span className="mt-1 rounded bg-background px-1.5 py-0.5 font-mono text-[0.625rem] font-bold uppercase tracking-wide text-alert-yellow">
-              {farGustMs != null ? `${farGustMs.toFixed(1)} m/s` : "Far 50km"}
+              {farGustMs != null ? `${Math.round(farGustMs * 3.6)} km/h` : "Far 50km"}
             </span>
           </span>
         ) : null}
@@ -156,11 +156,11 @@ export function ProximityRings({
             <Wind className="h-3 w-3" aria-hidden="true" /> Wind now
           </span>
           <p className="mt-0.5 font-mono text-lg font-bold tabular-nums text-foreground">
-            {windMs != null ? windMs.toFixed(1) : "—"}
-            <span className="ml-1 text-xs font-medium text-muted-foreground">m/s</span>
+            {windMs != null ? Math.round(windMs * 3.6) : "—"}
+            <span className="ml-1 text-xs font-medium text-muted-foreground">km/h</span>
           </p>
           <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-            Gust {gustMs != null ? `${gustMs.toFixed(1)} m/s` : "—"}
+            Gust {gustMs != null ? `${Math.round(gustMs * 3.6)} km/h` : "—"}
           </span>
         </div>
         <div
