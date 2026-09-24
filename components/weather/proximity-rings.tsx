@@ -151,11 +151,11 @@ export function ProximityRings({
 
       {/* Live readout — wind in m/s */}
       <div className="grid w-full grid-cols-1 gap-2">
-        <div className="rounded-lg border border-border/70 bg-background/40 px-3 py-2">
+        <div className="flex min-h-[4.75rem] flex-col justify-between rounded-lg border border-border/70 bg-background/40 px-3 py-2">
           <span className="flex items-center gap-1 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
             <Wind className="h-3 w-3" aria-hidden="true" /> Wind now
           </span>
-          <p className="mt-0.5 font-mono text-lg font-bold tabular-nums text-foreground">
+          <p className="font-mono text-lg font-bold tabular-nums text-foreground">
             {windMs != null ? Math.round(windMs * 3.6) : "—"}
             <span className="ml-1 text-xs font-medium text-muted-foreground">
               km/h{windMs != null ? ` · ${windMs.toFixed(1)} m/s` : ""}

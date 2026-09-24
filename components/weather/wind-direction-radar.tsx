@@ -254,11 +254,11 @@ export function WindDirectionRadar({
 
       {/* Live readout — origin + speed band */}
       <div className="grid w-full grid-cols-2 gap-2">
-        <div className="rounded-lg border border-border/70 bg-background/40 px-3 py-2">
+        <div className="flex min-h-[4.75rem] flex-col justify-between rounded-lg border border-border/70 bg-background/40 px-3 py-2">
           <span className="flex items-center gap-1 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
             <Navigation2 className="h-3 w-3" aria-hidden="true" /> From
           </span>
-          <p className="mt-0.5 font-mono text-lg font-bold tabular-nums text-foreground">
+          <p className="font-mono text-lg font-bold tabular-nums text-foreground">
             {compass16(fromDeg)}
             <span className="ml-1 text-xs font-medium text-muted-foreground">{Math.round(fromDeg)}&deg;</span>
           </p>
@@ -266,12 +266,12 @@ export function WindDirectionRadar({
             Gust {gustMs != null ? `${Math.round(gustMs * 3.6)} km/h · ${gustMs.toFixed(1)} m/s` : "—"}
           </span>
         </div>
-        <div className={cn("rounded-lg border px-3 py-2", band.text.replace("text-", "border-") + "/40")}>
+        <div className={cn("flex min-h-[4.75rem] flex-col justify-between rounded-lg border px-3 py-2", band.text.replace("text-", "border-") + "/40")}>
           <span className={cn("flex items-center gap-1 font-mono text-[0.5625rem] uppercase tracking-wider", band.text)}>
             <span className={cn("h-1.5 w-1.5 rounded-full", band.dot, "animate-pulse")} aria-hidden="true" />
             {band.label}
           </span>
-          <p className="mt-0.5 font-mono text-lg font-bold tabular-nums text-foreground">
+          <p className="font-mono text-lg font-bold tabular-nums text-foreground">
             {Math.round(speed * 3.6)}
             <span className="ml-1 text-xs font-medium text-muted-foreground">km/h</span>
           </p>
