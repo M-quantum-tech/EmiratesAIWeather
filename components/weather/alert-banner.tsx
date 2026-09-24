@@ -10,6 +10,7 @@ import {
   Cloud,
   CloudRain,
   Droplets,
+  ExternalLink,
   Gauge,
   MapPin,
   Navigation,
@@ -38,7 +39,13 @@ import {
   type WeatherPayload,
 } from "@/lib/weather"
 import { fetchWarningFrames, type EmirateWarning } from "@/lib/ncm-warnings"
-import { BUZZER_TONE, DEFAULT_RULES, type EscalationRule } from "@/lib/escalation"
+import {
+  BUZZER_TONE,
+  DEFAULT_RULES,
+  DEFAULT_WIND_MONITOR,
+  type EscalationRule,
+  type WindMonitorTier,
+} from "@/lib/escalation"
 import { ProximityRings } from "@/components/weather/proximity-rings"
 import { useWeather } from "@/components/weather/weather-provider"
 import { cn } from "@/lib/utils"
@@ -164,6 +171,13 @@ export function AlertBanner() {
     revalidateOnFocus: false,
   })
   const rules = rulesData?.rules ?? DEFAULT_RULES
+  // Wind Event Monitor thresholds — persisted overrides from the Engineering Console.
+  const { data: windMonitorData } = useSWR<{ tiers: WindMonitorTier[] }>(
+    "/api/wind-monitor",
+    farFetcher as never,
+    { refreshInterval: 60_000, revalidateOnFocus: false },
+  )
+  const windTiers = windMonitorData?.tiers ?? DEFAULT_WIND_MONITOR
   const alert = useMemo(() => (payload ? buildAlert(payload) : null), [payload])
   const level = alert?.level ?? null
   // Acknowledgment latch: the alarm sounds whenever the detected level differs from the
@@ -764,14 +778,41 @@ export function AlertBanner() {
                     </span>
                   </td>
                   <td className="px-3 py-2 text-xs leading-snug text-muted-foreground">{rule.triggers}</td>
-                  <td className="hidden whitespace-nowrap px-3 py-2 text-right align-top font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground sm:table-cell">
-                    {rule.sources}
+                  <td className="hidden px-3 py-2 text-right align-top sm:table-cell">
+                    <span className="flex flex-wrap justify-end gap-1">
+                      {rule.sourceLinks.length > 0
+                        ? rule.sourceLinks.map((src, i) =>
+                            src.url ? (
+                              <a
+                                key={i}
+                                href={src.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-1.5 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider text-accent transition-colors hover:bg-accent/20"
+                              >
+                                {src.label}
+                                <ExternalLink className="h-2.5 w-2.5" aria-hidden="true" />
+                              </a>
+                            ) : (
+                              <span
+                                key={i}
+                                className="inline-flex items-center rounded border border-border/60 bg-background/40 px-1.5 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground"
+                              >
+                                {src.label}
+                              </span>
+                            ),
+                          )
+                        : <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">{rule.sources}</span>}
+                    </span>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+
+        {/* Live Wind Event Monitor — active tier driven by on-site sustained wind */}
+        <WindEventMonitor windMs={windMs} tiers={windTiers} />
 
         {/* Live prediction table — each rule signal evaluated against real data now */}
         <div className="mt-3 overflow-hidden rounded-lg border border-border/70">
@@ -838,5 +879,160 @@ export function AlertBanner() {
         </div>
       </div>
     </section>
+  )
+}
+
+const WIND_TIER_STYLES: Record<
+  WindMonitorTier["level"],
+  { chip: string; dot: string; text: string; bar: string; track: string }
+> = {
+  green: {
+    chip: "border-alert-green/40 bg-alert-green/10 text-alert-green",
+    dot: "bg-alert-green",
+    text: "text-alert-green",
+    bar: "bg-alert-green",
+    track: "bg-alert-green/20",
+  },
+  yellow: {
+    chip: "border-alert-yellow/40 bg-alert-yellow/10 text-alert-yellow",
+    dot: "bg-alert-yellow",
+    text: "text-alert-yellow",
+    bar: "bg-alert-yellow",
+    track: "bg-alert-yellow/20",
+  },
+  orange: {
+    chip: "border-alert-orange/40 bg-alert-orange/10 text-alert-orange",
+    dot: "bg-alert-orange",
+    text: "text-alert-orange",
+    bar: "bg-alert-orange",
+    track: "bg-alert-orange/20",
+  },
+  red: {
+    chip: "border-alert-red/40 bg-alert-red/10 text-alert-red",
+    dot: "bg-alert-red",
+    text: "text-alert-red",
+    bar: "bg-alert-red",
+    track: "bg-alert-red/20",
+  },
+}
+
+function WindEventMonitor({ windMs, tiers }: { windMs: number; tiers: WindMonitorTier[] }) {
+  // Tiers are evaluated high→low; the highest threshold the live wind meets is active.
+  const sorted = useMemo(
+    () => [...tiers].sort((a, b) => b.minSpeed - a.minSpeed),
+    [tiers],
+  )
+  const active = useMemo(
+    () => sorted.find((t) => windMs >= t.minSpeed) ?? null,
+    [sorted, windMs],
+  )
+  // Scale gauge to the highest configured threshold, with headroom.
+  const ceiling = useMemo(() => {
+    const max = sorted.length > 0 ? sorted[0].minSpeed : 16
+    return Math.max(max * 1.15, windMs * 1.05, 1)
+  }, [sorted, windMs])
+  const fillPct = Math.min(100, Math.round((windMs / ceiling) * 100))
+  const activeStyle = active ? WIND_TIER_STYLES[active.level] : null
+
+  return (
+    <div className="mt-3 overflow-hidden rounded-lg border border-border/70">
+      <div className="flex items-center justify-between gap-2 border-b border-border/60 bg-background/40 px-3 py-1.5">
+        <span className="flex items-center gap-1.5 label-caps text-muted-foreground">
+          <Wind className="h-3 w-3" aria-hidden="true" />
+          Wind Event Monitor · live sustained wind
+        </span>
+        {active ? (
+          <span
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[0.5625rem] font-bold uppercase tracking-wider",
+              activeStyle!.chip,
+            )}
+          >
+            <span className={cn("h-1.5 w-1.5 animate-pulse rounded-full", activeStyle!.dot)} aria-hidden="true" />
+            {active.note}
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-alert-green/40 bg-alert-green/10 px-2 py-0.5 font-mono text-[0.5625rem] font-bold uppercase tracking-wider text-alert-green">
+            <span className="h-1.5 w-1.5 rounded-full bg-alert-green" aria-hidden="true" />
+            Below thresholds
+          </span>
+        )}
+      </div>
+
+      <div className="p-4">
+        {/* Live reading + gauge */}
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <span className="block font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+              On-site sustained wind
+            </span>
+            <span className={cn("block text-3xl font-bold tabular-nums leading-none", activeStyle?.text ?? "text-foreground")}>
+              {windMs.toFixed(1)}
+              <span className="ml-1 text-sm font-medium text-muted-foreground">m/s</span>
+            </span>
+          </div>
+          {active && (
+            <span className="text-right">
+              <span className="block font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+                Active trigger
+              </span>
+              <span className={cn("block text-sm font-bold", activeStyle!.text)}>{active.label}</span>
+            </span>
+          )}
+        </div>
+
+        {/* Threshold gauge with tier markers */}
+        <div className="relative mt-3 h-2.5 w-full rounded-full bg-muted/60">
+          <div
+            className={cn("absolute inset-y-0 left-0 rounded-full transition-all duration-500", activeStyle?.bar ?? "bg-alert-green")}
+            style={{ width: `${fillPct}%` }}
+          />
+          {sorted.map((t) => {
+            const pos = Math.min(100, (t.minSpeed / ceiling) * 100)
+            return (
+              <span
+                key={t.level}
+                className="absolute top-1/2 h-3.5 w-0.5 -translate-y-1/2 rounded-full bg-foreground/50"
+                style={{ left: `${pos}%` }}
+                title={`${t.label} · ${t.minSpeed} m/s`}
+              />
+            )
+          })}
+        </div>
+
+        {/* Tier ladder */}
+        <div className="mt-3 grid gap-1.5">
+          {sorted.map((t) => {
+            const s = WIND_TIER_STYLES[t.level]
+            const isActive = active?.level === t.level
+            const met = windMs >= t.minSpeed
+            return (
+              <div
+                key={t.level}
+                className={cn(
+                  "flex items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 transition-colors",
+                  isActive ? s.chip : "border-border/50 bg-background/30",
+                )}
+              >
+                <span className="flex items-center gap-2">
+                  <span className={cn("h-2 w-2 rounded-full", met ? s.dot : "bg-muted-foreground/30")} aria-hidden="true" />
+                  <span className={cn("font-mono text-[0.625rem] font-bold uppercase tracking-wide", isActive ? s.text : "text-muted-foreground")}>
+                    {t.label}
+                  </span>
+                </span>
+                <span className="flex items-center gap-2 text-right">
+                  <span className={cn("font-mono text-[0.5625rem] uppercase tracking-wider", isActive ? s.text : "text-muted-foreground")}>
+                    {t.note}
+                  </span>
+                  <span className="tabular-nums font-mono text-[0.625rem] font-bold text-foreground">
+                    {"\u2265"} {t.minSpeed} m/s
+                  </span>
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
   )
 }
