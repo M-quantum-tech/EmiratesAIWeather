@@ -792,6 +792,8 @@ const WIND_TIER_STYLES: Record<
 const MS_TO_KMH = 3.6
 const fmtMs = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1))
 const fmtKmh = (v: number) => Math.round(v * MS_TO_KMH)
+/** Capitalise an alert level key for display, e.g. "red" → "Red". */
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 
 /** Fixed 4-level station status lamps — always shown, highest active level blinks. */
 const STATION_LEVELS: { level: keyof typeof WIND_TIER_STYLES; label: string; sub: string }[] = [
@@ -845,10 +847,15 @@ function WindEventMonitor({ windMs, tiers }: { windMs: number; tiers: WindMonito
 
   return (
     <div className="mt-3 overflow-hidden rounded-lg border border-border/70">
-      <div className="flex items-center justify-between gap-2 border-b border-border/60 bg-background/40 px-3 py-1.5">
-        <span className="flex items-center gap-1.5 label-caps text-muted-foreground">
-          <Wind className="h-3 w-3" aria-hidden="true" />
-          Wind Event Monitor · live sustained wind
+      <div className="flex items-center justify-between gap-2 border-b border-border/60 bg-gradient-to-r from-background/60 to-card px-3 py-2.5">
+        <span className="flex items-center gap-2.5">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-accent/40 bg-accent/10 text-accent">
+            <Wind className="h-4 w-4" aria-hidden="true" />
+          </span>
+          <span className="flex flex-col leading-tight">
+            <span className="text-sm font-bold tracking-tight text-foreground">Wind Event Monitor</span>
+            <span className="label-caps text-muted-foreground">Live sustained wind · escalation ladder</span>
+          </span>
         </span>
         {active ? (
           <span
@@ -911,95 +918,134 @@ function WindEventMonitor({ windMs, tiers }: { windMs: number; tiers: WindMonito
         </div>
       </div>
 
-      {/* Box-panel dashboard: live reading box + one box per configured tier */}
-      <div className="grid grid-cols-2 gap-px bg-border/60 sm:grid-cols-3 lg:grid-cols-4">
-        {/* Live reading box — dual-unit, spans the first row on wide layouts */}
-        <div
-          className={cn(
-            "col-span-2 flex flex-col justify-between gap-3 bg-card p-4",
-            activeStyle ? activeStyle.chip.replace(/text-\S+/, "") : "",
-          )}
-        >
-          <div className="flex items-center justify-between gap-2">
-            <span className="label-caps text-muted-foreground">On-site sustained wind</span>
-            {active ? (
-              <span className={cn("font-mono text-[0.5625rem] font-bold uppercase tracking-wider", activeStyle!.text)}>
-                {active.label}
-              </span>
-            ) : null}
-          </div>
-          <div className="flex items-end gap-3">
-            <span className={cn("text-4xl font-bold tabular-nums leading-none", activeStyle?.text ?? "text-foreground")}>
-              {Math.round(windMs * MS_TO_KMH)}
-              <span className="ml-1 text-base font-medium text-muted-foreground">km/h · {fmtMs(windMs)} m/s</span>
+      {/* Live on-site reading strip — dual-unit with tier-marker gauge */}
+      <div
+        className={cn(
+          "flex flex-col gap-3 border-b border-border/60 bg-card p-4",
+          activeStyle ? activeStyle.chip.replace(/text-\S+/, "") : "",
+        )}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <span className="label-caps text-muted-foreground">On-site sustained wind</span>
+          {active ? (
+            <span className={cn("font-mono text-[0.5625rem] font-bold uppercase tracking-wider", activeStyle!.text)}>
+              {active.label}
             </span>
-          </div>
-          {/* Compact live gauge with tier markers */}
-          <div className="relative h-2 w-full rounded-full bg-muted/60">
-            <div
-              className={cn("absolute inset-y-0 left-0 rounded-full transition-all duration-500", activeStyle?.bar ?? "bg-alert-green")}
-              style={{ width: `${fillPct}%` }}
-            />
-            {sorted.map((t) => {
-              const pos = Math.min(100, (t.minSpeed / ceiling) * 100)
-              return (
-                <span
-                  key={t.id}
-                  className="absolute top-1/2 h-3 w-0.5 -translate-y-1/2 rounded-full bg-foreground/50"
-                  style={{ left: `${pos}%` }}
-                  title={`${t.label} · ${fmtKmh(t.minSpeed)} km/h`}
-                />
-              )
-            })}
-          </div>
+          ) : null}
         </div>
+        <div className="flex items-end gap-3">
+          <span className={cn("text-4xl font-bold tabular-nums leading-none", activeStyle?.text ?? "text-foreground")}>
+            {Math.round(windMs * MS_TO_KMH)}
+            <span className="ml-1 text-base font-medium text-muted-foreground">km/h · {fmtMs(windMs)} m/s</span>
+          </span>
+        </div>
+        <div className="relative h-2 w-full rounded-full bg-muted/60">
+          <div
+            className={cn("absolute inset-y-0 left-0 rounded-full transition-all duration-500", activeStyle?.bar ?? "bg-alert-green")}
+            style={{ width: `${fillPct}%` }}
+          />
+          {sorted.map((t) => {
+            const pos = Math.min(100, (t.minSpeed / ceiling) * 100)
+            return (
+              <span
+                key={t.id}
+                className="absolute top-1/2 h-3 w-0.5 -translate-y-1/2 rounded-full bg-foreground/50"
+                style={{ left: `${pos}%` }}
+                title={`${t.label} · ${fmtKmh(t.minSpeed)} km/h`}
+              />
+            )
+          })}
+        </div>
+      </div>
 
-        {/* One box per tier — individual range in both units */}
-        {boxes.map(({ tier: t, lower, upper }) => {
-          const s = WIND_TIER_STYLES[t.level]
-          const isActive = active?.id === t.id
-          const met = windMs >= t.minSpeed
-          const kmhRange = upper == null ? `≥ ${fmtKmh(lower)}` : `${fmtKmh(lower)}–${fmtKmh(upper)}`
-          const msRange = upper == null ? `≥ ${fmtMs(lower)}` : `${fmtMs(lower)}–${fmtMs(upper)}`
-          return (
-            <div
-              key={t.id}
-              className={cn(
-                "flex flex-col justify-between gap-2 p-3 transition-colors",
-                isActive ? s.chip : met ? "bg-card" : "bg-card/60",
-              )}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="flex items-center gap-1.5">
+      {/* Escalation ladder — one row per configured tier, mirrors the engineering console table.
+          Columns: Wind ≥ · Alert level · Severity label · Note. The live-active tier blinks. */}
+      <div role="table" aria-label="Wind event escalation ladder">
+        <div
+          role="row"
+          className="grid grid-cols-[1.1fr_1fr_1.2fr_1.1fr] gap-2 border-b border-border/60 bg-background/40 px-3 py-2"
+        >
+          <span role="columnheader" className="label-caps text-muted-foreground">Wind ≥</span>
+          <span role="columnheader" className="label-caps text-muted-foreground">Alert level</span>
+          <span role="columnheader" className="label-caps text-muted-foreground">Severity label</span>
+          <span role="columnheader" className="label-caps text-muted-foreground">Note</span>
+        </div>
+        <div className="flex flex-col gap-px bg-border/60">
+          {boxes.map(({ tier: t, lower, upper }) => {
+            const s = WIND_TIER_STYLES[t.level]
+            const isActive = active?.id === t.id
+            const met = windMs >= t.minSpeed
+            const kmhRange = upper == null ? `≥ ${fmtKmh(lower)}` : `${fmtKmh(lower)}–${fmtKmh(upper)}`
+            const msRange = upper == null ? `≥ ${fmtMs(lower)}` : `${fmtMs(lower)}–${fmtMs(upper)}`
+            return (
+              <div
+                role="row"
+                key={t.id}
+                aria-current={isActive ? "true" : undefined}
+                className={cn(
+                  "grid grid-cols-[1.1fr_1fr_1.2fr_1.1fr] items-center gap-2 px-3 py-2.5 transition-colors",
+                  isActive ? s.chip : met ? "bg-card" : "bg-card/60",
+                )}
+              >
+                {/* Wind range — dual unit */}
+                <span role="cell" className="flex flex-col leading-tight">
                   <span
                     className={cn(
-                      "h-2.5 w-2.5 rounded-full",
+                      "font-mono text-sm font-bold tabular-nums",
+                      isActive ? s.text : met ? "text-foreground" : "text-muted-foreground",
+                    )}
+                  >
+                    {kmhRange} <span className="text-[0.5625rem] font-medium text-muted-foreground">km/h</span>
+                  </span>
+                  <span className="font-mono text-[0.5625rem] font-medium tabular-nums text-muted-foreground">
+                    {msRange} m/s
+                  </span>
+                </span>
+                {/* Alert level — coloured lamp + name */}
+                <span role="cell" className="flex items-center gap-1.5">
+                  <span
+                    className={cn(
+                      "h-2.5 w-2.5 shrink-0 rounded-full",
                       met ? s.dot : "bg-muted-foreground/30",
                       met && s.text,
                       isActive && "tier-blink",
                     )}
                     aria-hidden="true"
                   />
-                  <span className={cn("font-mono text-[0.625rem] font-bold uppercase tracking-wide", isActive ? s.text : met ? "text-foreground" : "text-muted-foreground")}>
-                    {t.label}
+                  <span
+                    className={cn(
+                      "font-mono text-[0.6875rem] font-bold uppercase tracking-wide",
+                      isActive ? s.text : met ? "text-foreground" : "text-muted-foreground",
+                    )}
+                  >
+                    {cap(t.level)}
                   </span>
                 </span>
-                {isActive ? (
-                  <span className={cn("font-mono text-[0.5rem] font-bold uppercase tracking-wider", s.text)}>Active</span>
-                ) : null}
-              </div>
-              <div className="flex flex-col gap-0.5">
-                <span className={cn("font-mono text-base font-bold tabular-nums leading-none", isActive ? s.text : "text-foreground")}>
-                  {kmhRange} <span className="text-[0.625rem] font-medium text-muted-foreground">km/h</span>
+                {/* Severity label */}
+                <span
+                  role="cell"
+                  className={cn(
+                    "font-mono text-[0.6875rem] uppercase tracking-wide",
+                    isActive ? s.text : "text-muted-foreground",
+                  )}
+                >
+                  {t.label}
                 </span>
-                <span className="font-mono text-[0.625rem] font-medium tabular-nums text-muted-foreground">
-                  {msRange} m/s
+                {/* Note (escalation level) + live tag */}
+                <span role="cell" className="flex items-center justify-between gap-2">
+                  <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+                    {t.note}
+                  </span>
+                  {isActive ? (
+                    <span className={cn("shrink-0 font-mono text-[0.5rem] font-bold uppercase tracking-wider tier-blink", s.text)}>
+                      Live
+                    </span>
+                  ) : null}
                 </span>
               </div>
-              <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">{t.note}</span>
-            </div>
-          )
-        })}
+            )
+          })}
+        </div>
       </div>
     </div>
   )
