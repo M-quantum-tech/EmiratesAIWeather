@@ -613,48 +613,8 @@ export function AlertBanner() {
           Approach tracker · wind gust on site vs 50 km upwind
         </span>
 
-        {/* Weather-station status lamps — same design as the Wind Event Monitor; the live alert level blinks */}
-        <div className="mt-3 overflow-hidden rounded-lg border border-border/70">
-          <div className="grid grid-cols-2 gap-px bg-border/60 sm:grid-cols-4">
-            {STATION_LEVELS.map(({ level, label, sub }) => {
-              const s = WIND_TIER_STYLES[level]
-              const on = alert.level === level
-              return (
-                <div
-                  key={level}
-                  className={cn("flex items-center gap-2.5 bg-card px-3 py-2.5 transition-colors", on ? s.chip : "")}
-                  aria-current={on ? "true" : undefined}
-                >
-                  <span
-                    className={cn(
-                      "h-4 w-4 shrink-0 rounded-full border",
-                      s.dot,
-                      s.text,
-                      on ? "tier-blink border-transparent" : "border-border/50 opacity-25",
-                    )}
-                    aria-hidden="true"
-                  />
-                  <div className="flex min-w-0 flex-col leading-tight">
-                    <span
-                      className={cn(
-                        "font-mono text-[0.6875rem] font-bold uppercase tracking-wider",
-                        on ? s.text : "text-muted-foreground",
-                      )}
-                    >
-                      {label}
-                    </span>
-                    <span className="font-mono text-[0.5625rem] uppercase tracking-wide text-muted-foreground">{sub}</span>
-                  </div>
-                  {on && (
-                    <span className={cn("ml-auto font-mono text-[0.5625rem] font-bold uppercase tracking-wider tier-blink", s.text)}>
-                      Live
-                    </span>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        </div>
+        {/* Live Wind Event Monitor — active tier driven by on-site sustained wind */}
+        <WindEventMonitor windMs={windMs} tiers={windTiers} />
 
         <div className="mt-3 grid items-stretch gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
           {/* ON SITE (near) */}
@@ -764,9 +724,6 @@ export function AlertBanner() {
             </tbody>
           </table>
         </div>
-
-        {/* Live Wind Event Monitor — active tier driven by on-site sustained wind */}
-        <WindEventMonitor windMs={windMs} tiers={windTiers} />
       </div>
 
       {/* Live parameter grid feeding the model — atmospheric + radar/optical channels */}
