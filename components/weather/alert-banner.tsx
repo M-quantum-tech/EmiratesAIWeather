@@ -18,7 +18,6 @@ import {
   Radio,
   ShieldCheck,
   Siren,
-  Sparkles,
   SunDim,
   Timer,
   Wind,
@@ -129,12 +128,6 @@ type ParamCell = {
   unit?: string
   icon: typeof Wind
   tone: ParamTone
-}
-
-const ARRIVAL_ICON: Record<ArrivalKey, typeof Wind> = {
-  wind: Wind,
-  rain: CloudRain,
-  cloud: Cloud,
 }
 
 /** Looping level-tuned alarm via the Web Audio API (no asset needed). */
@@ -352,7 +345,6 @@ export function AlertBanner() {
   // predict when the wind, rain and cloud fields reach the site — replacing the old
   // distance ÷ speed ETA with a gust-weighted, confidence-scored model.
   const originCompass = compass(payload.current.windDirection)
-  const advectionSpeed = payload.current.windSpeed // km/h mean transport of the front
   const arrivals = predictArrivals({
     distanceKm: ALERT_RADII_KM.yellow,
     units: payload.units,
@@ -372,13 +364,7 @@ export function AlertBanner() {
       : null,
   })
   const windArrival = arrivals.find((a) => a.key === "wind") ?? null
-  const soonest = arrivals
-    .filter((a) => a.etaMinutes != null)
-    .sort((a, b) => (a.etaMinutes ?? 0) - (b.etaMinutes ?? 0))[0]
   const etaMinutes = windArrival?.etaMinutes ?? null
-  const arrivalClock = etaMinutes != null ? safeTime(new Date(now.getTime() + etaMinutes * 60_000)) : null
-  // Front position along the 60 km watch ring (0% = watch edge, 100% = on you).
-  const frontProgress = Math.max(0, Math.min(100, (1 - ALERT_RADII_KM.yellow / ALERT_RADII_KM.green) * 100))
   // Live parameter grid — atmospheric channels plus derived radar/optical values.
   const paramCells: ParamCell[] = (() => {
     const cur = payload.current
@@ -413,42 +399,6 @@ export function AlertBanner() {
   const toMs = (v: number) => (payload.units === "metric" ? v : v * 1.609) / 3.6
   const windMs = toMs(payload.current.windSpeed)
   const farGustMs = farGust != null ? toMs(farGust) : null
-  const precipNow = payload.units === "metric" ? payload.current.precipitation : payload.current.precipitation * 25.4
-  const isStorm = describeCode(payload.current.weatherCode).group === "storm"
-  const ncmActive = !!ncm && ncm.level !== "green"
-  const predictionRows: { signal: string; source: string; value: string; met: boolean }[] = [
-    {
-      signal: "Intensifying convection",
-      source: "Satellite · radar",
-      value: approaching || isStorm ? `Closing · ~${ALERT_RADII_KM[alert.level]} km` : "Steady · 60 km +",
-      met: approaching || isStorm,
-    },
-    {
-      signal: "Wind gust over 54 km/h",
-      source: "Open-Meteo",
-      value: `${Math.round(gustKmh)} km/h · ${(gustKmh / MS_TO_KMH).toFixed(1)} m/s`,
-      met: gustMs >= 15,
-    },
-    {
-      signal: "Diverging wind under 50 km",
-      source: "Upwind sample",
-      value: gustDelta == null ? "Sampling" : `${gustDelta > 0 ? "+" : ""}${Math.round(gustDelta)} ${speedUnit(payload.units)}`,
-      met: approaching,
-    },
-    {
-      signal: "Rain precipitation over 1 mm",
-      source: "Open-Meteo",
-      value: `${precipNow.toFixed(1)} ${precipUnit(payload.units)}/h`,
-      met: precipNow >= 1,
-    },
-    {
-      signal: "NCM / satellite warning",
-      source: "NCM Al Bahar",
-      value: ncm ? `${ncm.name} · ${ncm.headline}` : "No active warning",
-      met: ncmActive,
-    },
-  ]
-
   return (
     <section aria-label="Advance AI safety model" className={cn("station-rise rounded-xl border", styles.bar)}>
       {/* Header ribbon */}
@@ -754,108 +704,6 @@ export function AlertBanner() {
           </div>
         </div>
 
-        {/* AI advection nowcast — predicts when wind, rain and cloud fields reach the site */}
-        <div className={cn("mt-3 rounded-xl border p-4", approaching ? deltaBorder : "border-border bg-background/40")}>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span className={cn("flex items-center gap-1.5 label-caps", approaching ? deltaTone : "text-signal")}>
-              <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-              AI arrival nowcast · wind · rain · cloud
-            </span>
-            <span
-              className={cn(
-                "rounded-full border px-2 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider",
-                soonest ? deltaTone : "border-border text-muted-foreground",
-              )}
-            >
-              {soonest && soonest.etaMinutes != null ? `Soonest · ${soonest.label} ~${formatEta(soonest.etaMinutes)}` : "Nothing inbound"}
-            </span>
-          </div>
-
-          <p className="mt-2 text-pretty text-sm text-muted-foreground">
-            Blending the on-site reading with the {ALERT_RADII_KM.yellow} km upwind sample, the model predicts field
-            arrival from the <span className="font-semibold text-foreground">{originCompass}</span> at a{" "}
-            <span className="font-semibold tabular-nums text-foreground">
-              {Math.round(advectionSpeed)} {speedUnit(payload.units)}
-            </span>{" "}
-            closing speed.
-          </p>
-
-          <div className="mt-3 grid gap-2 sm:grid-cols-3">
-            {arrivals.map((a) => {
-              const Icon = ARRIVAL_ICON[a.key]
-              const tone =
-                a.status === "Approaching"
-                  ? "text-alert-orange"
-                  : a.status === "Easing"
-                    ? "text-alert-green"
-                    : "text-muted-foreground"
-              const border =
-                a.status === "Approaching"
-                  ? "border-alert-orange/40 bg-alert-orange/10"
-                  : a.status === "Easing"
-                    ? "border-alert-green/40 bg-alert-green/10"
-                    : "border-border bg-background/50"
-              const barColor =
-                a.status === "Approaching" ? "bg-alert-orange" : a.status === "Easing" ? "bg-alert-green" : "bg-muted-foreground/50"
-              return (
-                <div key={a.key} className={cn("rounded-lg border p-3", border)}>
-                  <span className="flex items-center justify-between">
-                    <span className={cn("flex items-center gap-1.5 font-mono text-[0.625rem] uppercase tracking-wider", tone)}>
-                      <Icon className="h-3.5 w-3.5" aria-hidden="true" /> {a.label}
-                    </span>
-                    <span className={cn("font-mono text-[0.5625rem] uppercase tracking-wider", tone)}>{a.status}</span>
-                  </span>
-                  <div className="mt-1.5 flex items-baseline gap-1.5">
-                    <span className={cn("text-2xl font-black tabular-nums", tone)}>
-                      {a.etaMinutes == null ? "—" : `~${formatEta(a.etaMinutes)}`}
-                    </span>
-                    {a.etaMinutes != null ? (
-                      <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">ETA on site</span>
-                    ) : null}
-                  </div>
-                  <span className="mt-0.5 block font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground tabular-nums">
-                    {a.detail}
-                  </span>
-                  <div className="mt-2 flex items-center gap-1.5">
-                    <span className="font-mono text-[0.5rem] uppercase tracking-wider text-muted-foreground">Conf</span>
-                    <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-secondary">
-                      <div className={cn("absolute inset-y-0 left-0 rounded-full transition-all", barColor)} style={{ width: `${a.confidence}%` }} />
-                    </div>
-                    <span className="font-mono text-[0.5625rem] tabular-nums text-muted-foreground">{a.confidence}%</span>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-
-          {/* Closing track — shown when a wind front is genuinely inbound */}
-          {approaching ? (
-            <div className="mt-3">
-              <div className="relative h-2.5 rounded-full bg-secondary">
-                <div
-                  className={cn("absolute inset-y-0 right-0 rounded-full opacity-30", styles.solid)}
-                  style={{ width: `${100 - frontProgress}%` }}
-                />
-                <span
-                  className={cn(
-                    "absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-background",
-                    styles.solid,
-                  )}
-                  style={{ left: `${frontProgress}%` }}
-                  aria-hidden="true"
-                />
-                <span className="absolute -right-0.5 top-1/2 grid h-4 w-4 -translate-y-1/2 place-items-center rounded-full border-2 border-background bg-signal text-signal">
-                  <MapPin className="h-2.5 w-2.5 text-background" aria-hidden="true" />
-                </span>
-              </div>
-              <div className="mt-1 flex justify-between font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-                <span>{ALERT_RADII_KM.green} km · watch edge</span>
-                <span>You{arrivalClock ? ` · arrives ${arrivalClock}` : ""}</span>
-              </div>
-            </div>
-          ) : null}
-        </div>
-
         {/* Escalation rules table — the fixed NCM-style ladder, active tier highlighted */}
         <div className="mt-4 overflow-hidden rounded-lg border border-border/70">
           <div className="flex items-center gap-1.5 border-b border-border/60 bg-background/40 px-3 py-1.5 label-caps text-muted-foreground">
@@ -919,42 +767,6 @@ export function AlertBanner() {
 
         {/* Live Wind Event Monitor — active tier driven by on-site sustained wind */}
         <WindEventMonitor windMs={windMs} tiers={windTiers} />
-
-        {/* Live prediction table — each rule signal evaluated against real data now */}
-        <div className="mt-3 overflow-hidden rounded-lg border border-border/70">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-background/40 px-3 py-1.5">
-            <span className="flex items-center gap-1.5 label-caps text-muted-foreground">
-              <Activity className="h-3 w-3" aria-hidden="true" />
-              Live prediction
-            </span>
-            <span className={cn("flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider", styles.chip)}>
-              <span className={cn("h-2 w-2 rounded-full", styles.solid)} aria-hidden="true" />
-              Predicted {alert.title}
-              {approaching && etaMinutes != null ? ` · ETA ${formatEta(etaMinutes)}` : ""}
-            </span>
-          </div>
-          <table className="w-full border-collapse text-left">
-            <tbody>
-              {predictionRows.map((row) => (
-                <tr key={row.signal} className="border-t border-border/40 first:border-t-0">
-                  <td className="px-3 py-1.5">
-                    <span className="block text-xs font-medium text-foreground">{row.signal}</span>
-                    <span className="block font-mono text-[0.5rem] uppercase tracking-wider text-muted-foreground">
-                      {row.source}
-                    </span>
-                  </td>
-                  <td className="px-3 py-1.5 text-right text-xs tabular-nums text-muted-foreground">{row.value}</td>
-                  <td className="w-8 px-3 py-1.5 text-right">
-                    <span
-                      className={cn("inline-flex h-2.5 w-2.5 rounded-full", row.met ? "bg-alert-orange" : "bg-alert-green/40")}
-                      aria-label={row.met ? "Triggered" : "Clear"}
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
       </div>
 
       {/* Live parameter grid feeding the model — atmospheric + radar/optical channels */}
