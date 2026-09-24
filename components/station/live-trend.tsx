@@ -298,7 +298,7 @@ function buildView(
         series: [
           { label: "Temp", color: "var(--signal)", values: temps, format: t },
           { label: "Feels", color: "var(--accent)", values: feels, format: t },
-          { label: "Humidity", color: "oklch(0.72 0.19 300)", values: hum, format: pct },
+          { label: "Humidity", color: "oklch(0.78 0.13 185)", values: hum, format: pct },
         ],
         stats: [
           { label: "Temperature", value: t(cur.temperature), sub: `peak ${t(Math.max(...temps))}` },
@@ -641,7 +641,7 @@ export function LiveTrend() {
   const unit = horizon === "14d" ? "d" : "h"
 
   if (!payload) {
-    return <Panel className="h-[42rem] animate-pulse p-0" />
+    return <Panel className="h-[38rem] animate-pulse p-0" />
   }
 
   const aheadCount = view
@@ -1183,7 +1183,7 @@ function TrendChart({
     <div className="relative px-2 pt-3">
       <svg
         viewBox={`0 0 ${W} ${H}`}
-        className="h-[26rem] w-full overflow-visible"
+        className="h-[22rem] w-full overflow-visible"
         preserveAspectRatio="none"
         role="img"
         aria-label={`${series.map((s) => s.label).join(", ")} trend`}
