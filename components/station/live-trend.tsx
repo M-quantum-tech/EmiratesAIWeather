@@ -810,7 +810,11 @@ export function LiveTrend() {
           <div
             className={cn(
               "grid gap-px bg-border",
-              view.series.length >= 3 ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2",
+              view.series.length === 4
+                ? "grid-cols-2 sm:grid-cols-4"
+                : view.series.length === 3
+                  ? "grid-cols-3"
+                  : "grid-cols-2",
             )}
           >
             {view.series.map((serie) => (
@@ -1250,7 +1254,7 @@ function TrendChart({
     <div className="relative px-2 pt-3">
       <svg
         viewBox={`0 0 ${W} ${H}`}
-        className="h-[22rem] w-full overflow-visible"
+        className="h-[30rem] w-full overflow-visible"
         preserveAspectRatio="none"
         role="img"
         aria-label={`${series.map((s) => s.label).join(", ")} trend`}
@@ -1330,7 +1334,9 @@ function TrendChart({
         {/* each series: solid NCM-mirror line, or a fully dotted Open-Meteo AI-prediction line */}
         {normed.map((ys, si) => {
           const serie = series[si]
-          const width = si === 0 ? 2 : 1.75
+          // Live (solid) reading renders bold; the AI-projected segment stays a thin dotted overlay.
+          const solidWidth = si === 0 ? 3.5 : 2.5
+          const projWidth = si === 0 ? 2 : 1.75
           if (serie.dashed) {
             return (
               <g key={serie.label} filter="url(#live-trend-glow)">
@@ -1338,7 +1344,7 @@ function TrendChart({
                   d={segment(ys, 0, n - 1)}
                   fill="none"
                   stroke={serie.color}
-                  strokeWidth={width}
+                  strokeWidth={projWidth}
                   strokeDasharray="1.5 4"
                   strokeLinejoin="round"
                   strokeLinecap="round"
@@ -1354,7 +1360,7 @@ function TrendChart({
                 d={segment(ys, 0, solidTo)}
                 fill="none"
                 stroke={serie.color}
-                strokeWidth={width}
+                strokeWidth={solidWidth}
                 strokeLinejoin="round"
                 strokeLinecap="round"
                 opacity={1}
@@ -1365,7 +1371,7 @@ function TrendChart({
                   d={segment(ys, solidTo, n - 1)}
                   fill="none"
                   stroke={serie.color}
-                  strokeWidth={width}
+                  strokeWidth={projWidth}
                   strokeDasharray="2 5"
                   strokeLinejoin="round"
                   strokeLinecap="round"
