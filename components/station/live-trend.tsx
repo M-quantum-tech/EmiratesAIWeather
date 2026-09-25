@@ -1254,7 +1254,7 @@ function TrendChart({
     <div className="relative px-2 pt-3">
       <svg
         viewBox={`0 0 ${W} ${H}`}
-        className="h-[30rem] w-full overflow-visible"
+        className="h-[20rem] w-full overflow-visible"
         preserveAspectRatio="none"
         role="img"
         aria-label={`${series.map((s) => s.label).join(", ")} trend`}
