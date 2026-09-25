@@ -1,16 +1,25 @@
 "use client"
 
 import { useState } from "react"
-import { BellRing, Check, Cloud, LineChart, Link2, Plus, RotateCcw, Save, Square, Trash2, Volume2, Wind } from "lucide-react"
+import { BellRing, Check, Cloud, Compass, LineChart, Link2, MapPin, Plus, RotateCcw, Save, Square, Trash2, Volume2, Wind } from "lucide-react"
 import {
   DEFAULT_CLOUD_SOURCE,
   DEFAULT_RULES,
   DEFAULT_TREND_SOURCES,
+  DEFAULT_WIND_DIRECTION_SOURCE,
   DEFAULT_WIND_MONITOR,
   DEFAULT_WIND_SOURCE,
   ESCALATION_LEVELS,
+  SITE_FACTOR_KEYS,
+  SITE_FACTOR_META,
+  SITE_SCOPE_LABELS,
+  defaultSites,
   type CloudSourceConfig,
   type EscalationRule,
+  type SeverityRange,
+  type SiteConfig,
+  type SiteFactorKey,
+  type SiteScope,
   type SourceLink,
   type TierDeadbands,
   type TrendSourceGroup,
@@ -35,12 +44,14 @@ export function EngineeringConsole({
   initialRules,
   initialWindMonitor,
   initialWindSource,
+  initialWindDirectionSource,
   initialCloudSource,
   initialTrendSources,
 }: {
   initialRules: EscalationRule[]
   initialWindMonitor: WindMonitorTier[]
   initialWindSource: WindSourceConfig
+  initialWindDirectionSource: WindSourceConfig
   initialCloudSource: CloudSourceConfig
   initialTrendSources: TrendSourceGroup[]
 }) {
@@ -62,6 +73,71 @@ export function EngineeringConsole({
     setRules((prev) =>
       prev.map((r) => (r.level === level ? { ...r, deadbands: { ...r.deadbands, [field]: n } } : r)),
     )
+  }
+
+  function mapSite(
+    level: AlertLevel,
+    scope: SiteScope,
+    fn: (site: SiteConfig) => SiteConfig,
+  ) {
+    setSaved(false)
+    setRules((prev) =>
+      prev.map((r) =>
+        r.level === level
+          ? { ...r, sites: r.sites.map((s) => (s.scope === scope ? fn(s) : s)) }
+          : r,
+      ),
+    )
+  }
+
+  function updateSiteKm(level: AlertLevel, scope: SiteScope, km: string) {
+    mapSite(level, scope, (s) => ({ ...s, km }))
+  }
+
+  function updateRange(
+    level: AlertLevel,
+    scope: SiteScope,
+    factor: SiteFactorKey,
+    id: string,
+    patch: Partial<SeverityRange>,
+  ) {
+    mapSite(level, scope, (s) => ({
+      ...s,
+      [factor]: s[factor].map((rng) => (rng.id === id ? { ...rng, ...patch } : rng)),
+    }))
+  }
+
+  function addRange(level: AlertLevel, scope: SiteScope, factor: SiteFactorKey) {
+    mapSite(level, scope, (s) => {
+      const last = s[factor][s[factor].length - 1]
+      const min = last ? (last.max ?? last.min) : 0
+      const next: SeverityRange = { id: `${level}-${scope}-${factor}-${Date.now()}`, min, max: null, severity: "" }
+      return { ...s, [factor]: [...s[factor], next] }
+    })
+  }
+
+  function removeRange(level: AlertLevel, scope: SiteScope, factor: SiteFactorKey, id: string) {
+    mapSite(level, scope, (s) => ({ ...s, [factor]: s[factor].filter((rng) => rng.id !== id) }))
+  }
+
+  function updateSiteSource(level: AlertLevel, scope: SiteScope, index: number, patch: Partial<SourceLink>) {
+    mapSite(level, scope, (s) => ({
+      ...s,
+      sources: s.sources.map((src, i) => (i === index ? { ...src, ...patch } : src)),
+    }))
+  }
+
+  function addSiteSource(level: AlertLevel, scope: SiteScope) {
+    mapSite(level, scope, (s) => ({ ...s, sources: [...s.sources, { label: "", url: "" }] }))
+  }
+
+  function removeSiteSource(level: AlertLevel, scope: SiteScope, index: number) {
+    mapSite(level, scope, (s) => ({ ...s, sources: s.sources.filter((_, i) => i !== index) }))
+  }
+
+  function resetSites(level: AlertLevel) {
+    setSaved(false)
+    setRules((prev) => prev.map((r) => (r.level === level ? { ...r, sites: defaultSites(level) } : r)))
   }
 
   function updateSource(level: AlertLevel, index: number, patch: Partial<SourceLink>) {
@@ -97,6 +173,7 @@ export function EngineeringConsole({
         ...r,
         sourceLinks: r.sourceLinks.map((s) => ({ ...s })),
         deadbands: { ...r.deadbands },
+        sites: defaultSites(r.level),
       })),
     )
   }
@@ -187,8 +264,11 @@ export function EngineeringConsole({
       {/* Wind Event Monitor thresholds */}
       <WindMonitorEditor initialTiers={initialWindMonitor} />
 
-      {/* Wind speed & gust source link (NCM COSMO-UAE wind) */}
+      {/* Wind speed & gust source link (NCM AWS wind) */}
       <WindSourceEditor initialSource={initialWindSource} />
+
+      {/* Wind direction source link (NCM COSMO-UAE wind) — feeds the 0–360° scanner */}
+      <WindDirectionSourceEditor initialSource={initialWindDirectionSource} />
 
       {/* NCM cloud / satellite source link (intensifying clouds) */}
       <CloudSourceEditor initialSource={initialCloudSource} />
@@ -275,6 +355,39 @@ export function EngineeringConsole({
                     />
                   </div>
                 </div>
+                {/* At-site / Far-site detection combinations */}
+                <div className="mt-4 flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <span className="label-caps text-muted-foreground">
+                      Site detection · At site + Far site combination
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => resetSites(rule.level)}
+                      className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[0.6875rem] font-medium text-muted-foreground transition-colors hover:bg-background/60"
+                    >
+                      <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                      Reset sites
+                    </button>
+                  </div>
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    {rule.sites.map((site) => (
+                      <SiteEditor
+                        key={site.scope}
+                        level={rule.level}
+                        site={site}
+                        onKm={(v) => updateSiteKm(rule.level, site.scope, v)}
+                        onRange={(factor, id, patch) => updateRange(rule.level, site.scope, factor, id, patch)}
+                        onAddRange={(factor) => addRange(rule.level, site.scope, factor)}
+                        onRemoveRange={(factor, id) => removeRange(rule.level, site.scope, factor, id)}
+                        onSource={(i, patch) => updateSiteSource(rule.level, site.scope, i, patch)}
+                        onAddSource={() => addSiteSource(rule.level, site.scope)}
+                        onRemoveSource={(i) => removeSiteSource(rule.level, site.scope, i)}
+                      />
+                    ))}
+                  </div>
+                </div>
+
                 <div className="mt-3 flex flex-col gap-1">
                   <span className="label-caps text-muted-foreground">Trigger criteria</span>
                   <textarea
@@ -737,6 +850,292 @@ function WindSourceEditor({ initialSource }: { initialSource: WindSourceConfig }
               inputMode="url"
               value={source.url}
               placeholder={DEFAULT_WIND_SOURCE.url}
+              onChange={(e) => update({ url: e.target.value })}
+              className="w-full rounded-md border border-border bg-background py-2 pl-8 pr-3 text-sm text-foreground outline-none focus:border-accent"
+            />
+          </span>
+        </label>
+      </div>
+    </section>
+  )
+}
+
+function SiteEditor({
+  level,
+  site,
+  onKm,
+  onRange,
+  onAddRange,
+  onRemoveRange,
+  onSource,
+  onAddSource,
+  onRemoveSource,
+}: {
+  level: AlertLevel
+  site: SiteConfig
+  onKm: (value: string) => void
+  onRange: (factor: SiteFactorKey, id: string, patch: Partial<SeverityRange>) => void
+  onAddRange: (factor: SiteFactorKey) => void
+  onRemoveRange: (factor: SiteFactorKey, id: string) => void
+  onSource: (index: number, patch: Partial<SourceLink>) => void
+  onAddSource: () => void
+  onRemoveSource: (index: number) => void
+}) {
+  const meta = LEVEL_META[level]
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border border-border/70 bg-background/40 p-3">
+      <div className="flex items-center gap-2">
+        <MapPin className={cn("h-3.5 w-3.5", meta.text)} aria-hidden="true" />
+        <span className="font-mono text-xs font-bold uppercase tracking-wide text-foreground">
+          {SITE_SCOPE_LABELS[site.scope]}
+        </span>
+      </div>
+
+      <label className="flex flex-col gap-1">
+        <span className="label-caps text-muted-foreground">KM detection band</span>
+        <input
+          type="text"
+          value={site.km}
+          placeholder="e.g. 0–20 km"
+          onChange={(e) => onKm(e.target.value)}
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent"
+        />
+      </label>
+
+      {SITE_FACTOR_KEYS.map((factor) => (
+        <RangeEditor
+          key={factor}
+          factor={factor}
+          ranges={site[factor]}
+          onChange={(id, patch) => onRange(factor, id, patch)}
+          onAdd={() => onAddRange(factor)}
+          onRemove={(id) => onRemoveRange(factor, id)}
+        />
+      ))}
+
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <span className="label-caps text-muted-foreground">Data source link</span>
+          <button
+            type="button"
+            onClick={onAddSource}
+            className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[0.6875rem] font-medium text-muted-foreground transition-colors hover:bg-background/60"
+          >
+            <Plus className="h-3 w-3" aria-hidden="true" />
+            Add link
+          </button>
+        </div>
+        {site.sources.length === 0 ? (
+          <p className="text-xs text-muted-foreground/70">No link yet — paste a source to fetch data from.</p>
+        ) : (
+          site.sources.map((src, i) => (
+            <div key={i} className="flex flex-col gap-1.5">
+              <input
+                type="text"
+                value={src.label}
+                placeholder="Source name (e.g. NCM AWS Wind)"
+                onChange={(e) => onSource(i, { label: e.target.value })}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent"
+              />
+              <div className="flex items-center gap-2">
+                <span className="relative flex-1">
+                  <Link2 className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                  <input
+                    type="url"
+                    inputMode="url"
+                    value={src.url ?? ""}
+                    placeholder="https://link-to-feed"
+                    onChange={(e) => onSource(i, { url: e.target.value })}
+                    className="w-full rounded-md border border-border bg-background py-2 pl-8 pr-3 text-sm text-foreground outline-none focus:border-accent"
+                  />
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onRemoveSource(i)}
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-border text-muted-foreground transition-colors hover:border-alert-red/50 hover:text-alert-red"
+                  aria-label="Remove data source"
+                >
+                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
+function RangeEditor({
+  factor,
+  ranges,
+  onChange,
+  onAdd,
+  onRemove,
+}: {
+  factor: SiteFactorKey
+  ranges: SeverityRange[]
+  onChange: (id: string, patch: Partial<SeverityRange>) => void
+  onAdd: () => void
+  onRemove: (id: string) => void
+}) {
+  const { label, unit } = SITE_FACTOR_META[factor]
+  return (
+    <div className="flex flex-col gap-1.5 rounded-md border border-border/50 bg-background/30 p-2.5">
+      <div className="flex items-center justify-between">
+        <span className="label-caps text-muted-foreground">
+          {label} <span className="font-normal normal-case text-muted-foreground/70">({unit})</span> severity ranges
+        </span>
+        <button
+          type="button"
+          onClick={onAdd}
+          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[0.6875rem] font-medium text-muted-foreground transition-colors hover:bg-background/60"
+        >
+          <Plus className="h-3 w-3" aria-hidden="true" />
+          Range
+        </button>
+      </div>
+      {ranges.length === 0 ? (
+        <p className="text-xs text-muted-foreground/70">No ranges — add one.</p>
+      ) : (
+        ranges.map((rng) => (
+          <div key={rng.id} className="grid grid-cols-[1fr_1fr_1.4fr_2rem] items-center gap-1.5">
+            <input
+              type="number"
+              min={0}
+              step={0.5}
+              value={rng.min}
+              onChange={(e) => onChange(rng.id, { min: Number(e.target.value) })}
+              className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs tabular-nums text-foreground outline-none focus:border-accent"
+              aria-label={`${label} minimum ${unit}`}
+              placeholder="min"
+            />
+            <input
+              type="number"
+              min={0}
+              step={0.5}
+              value={rng.max ?? ""}
+              onChange={(e) => onChange(rng.id, { max: e.target.value === "" ? null : Number(e.target.value) })}
+              className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs tabular-nums text-foreground outline-none focus:border-accent"
+              aria-label={`${label} maximum ${unit} (blank = and above)`}
+              placeholder="max / ∞"
+            />
+            <input
+              type="text"
+              value={rng.severity}
+              onChange={(e) => onChange(rng.id, { severity: e.target.value })}
+              className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:border-accent"
+              aria-label={`${label} severity label`}
+              placeholder="severity"
+            />
+            <button
+              type="button"
+              onClick={() => onRemove(rng.id)}
+              className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-border text-muted-foreground transition-colors hover:border-alert-red/50 hover:text-alert-red"
+              aria-label={`Remove ${label} range`}
+            >
+              <Trash2 className="h-3 w-3" aria-hidden="true" />
+            </button>
+          </div>
+        ))
+      )}
+    </div>
+  )
+}
+
+function WindDirectionSourceEditor({ initialSource }: { initialSource: WindSourceConfig }) {
+  const [source, setSource] = useState<WindSourceConfig>({ ...initialSource })
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  function update(patch: Partial<WindSourceConfig>) {
+    setSaved(false)
+    setSource((prev) => ({ ...prev, ...patch }))
+  }
+
+  function resetDefaults() {
+    setSaved(false)
+    setError(null)
+    setSource({ ...DEFAULT_WIND_DIRECTION_SOURCE })
+  }
+
+  async function save() {
+    setSaving(true)
+    setError(null)
+    try {
+      const res = await fetch("/api/wind-direction-source", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error ?? "Save failed")
+      setSource({ ...(data.source as WindSourceConfig) })
+      setSaved(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-border bg-card p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Compass className="h-4 w-4 text-accent" aria-hidden="true" />
+          <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-foreground">
+            Wind direction source
+          </h2>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={resetDefaults}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-background/60"
+          >
+            <RotateCcw className="h-3 w-3" aria-hidden="true" />
+            Reset to defaults
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={saving}
+            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
+          >
+            {saved ? <Check className="h-3 w-3" aria-hidden="true" /> : <Save className="h-3 w-3" aria-hidden="true" />}
+            {saving ? "Saving…" : saved ? "Saved" : "Save source"}
+          </button>
+        </div>
+      </div>
+      <p className="mt-2 text-sm text-muted-foreground">
+        Feed for the 0–360° wind-direction scanner. The scanner always cross-checks wind speed and direction together.
+        Defaults to the NCM Ghaith COSMO-UAE wind viewer — paste any official wind-direction link and it becomes the
+        connected source across the dashboard.
+      </p>
+      {error ? <p className="mt-2 text-sm text-alert-red">{error}</p> : null}
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-[2fr_3fr]">
+        <label className="flex flex-col gap-1">
+          <span className="label-caps text-muted-foreground">Source name</span>
+          <input
+            type="text"
+            value={source.label}
+            placeholder={DEFAULT_WIND_DIRECTION_SOURCE.label}
+            onChange={(e) => update({ label: e.target.value })}
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="label-caps text-muted-foreground">Source link (paste NCM wind-direction link)</span>
+          <span className="relative">
+            <Link2 className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+            <input
+              type="url"
+              inputMode="url"
+              value={source.url}
+              placeholder={DEFAULT_WIND_DIRECTION_SOURCE.url}
               onChange={(e) => update({ url: e.target.value })}
               className="w-full rounded-md border border-border bg-background py-2 pl-8 pr-3 text-sm text-foreground outline-none focus:border-accent"
             />

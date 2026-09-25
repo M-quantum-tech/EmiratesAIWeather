@@ -42,6 +42,12 @@ export type EscalationRule = {
   sourceLinks: SourceLink[]
   /** Hysteresis dead bands that gate this tier, paired with its KM range. */
   deadbands: TierDeadbands
+  /**
+   * At-site + far-site detection combinations for this level. Each carries its
+   * own KM detection band, editable wind-speed / wind-gust / rain / cloud
+   * severity ranges, and pasteable data-source links.
+   */
+  sites: SiteConfig[]
 }
 
 /** Built-in dead bands per tier — widen as severity climbs to avoid flapping. */
@@ -158,6 +164,166 @@ export function sourcesSummary(links: SourceLink[]): string {
 }
 
 /**
+ * The scanner always evaluates two combinations per level: readings AT the site
+ * and readings at surrounding FAR stations. Each combination has its own KM
+ * detection band so wind speed / gust are read within that radius.
+ */
+export type SiteScope = "at" | "far"
+export const SITE_SCOPES: SiteScope[] = ["at", "far"]
+export const SITE_SCOPE_LABELS: Record<SiteScope, string> = { at: "At site", far: "Far site" }
+
+/**
+ * A single severity band: readings in [min, max) map to `severity`. A null `max`
+ * is open-ended ("and above"). Ranges are fully editable so severity thresholds
+ * can change in future without a deploy.
+ */
+export type SeverityRange = {
+  id: string
+  min: number
+  /** Exclusive upper bound; null = open-ended. */
+  max: number | null
+  severity: string
+}
+
+/** The four range-gated factors configured per site combination. */
+export const SITE_FACTOR_KEYS = ["windSpeed", "windGust", "rain", "cloud"] as const
+export type SiteFactorKey = (typeof SITE_FACTOR_KEYS)[number]
+export const SITE_FACTOR_META: Record<SiteFactorKey, { label: string; unit: string }> = {
+  windSpeed: { label: "Wind speed", unit: "m/s" },
+  windGust: { label: "Wind gust", unit: "m/s" },
+  rain: { label: "Rainfall", unit: "mm" },
+  cloud: { label: "Cloud cover", unit: "%" },
+}
+
+/** One At-site / Far-site detection combination under an escalation level. */
+export type SiteConfig = {
+  scope: SiteScope
+  /** Distance band this combination detects within, e.g. "0–20 km". */
+  km: string
+  /** Wind-speed severity ranges (m/s). */
+  windSpeed: SeverityRange[]
+  /** Wind-gust severity ranges (m/s). */
+  windGust: SeverityRange[]
+  /** Rainfall severity ranges (mm). */
+  rain: SeverityRange[]
+  /** Cloud-cover severity ranges (%). */
+  cloud: SeverityRange[]
+  /** Pasteable data-source links this combination fetches from. */
+  sources: SourceLink[]
+}
+
+/** Default KM detection band per level / scope — closer bands as severity climbs. */
+const DEFAULT_SITE_KM: Record<AlertLevel, Record<SiteScope, string>> = {
+  green: { at: "0–20 km", far: "20–80 km" },
+  yellow: { at: "0–20 km", far: "20–50 km" },
+  orange: { at: "0–15 km", far: "15–30 km" },
+  red: { at: "0–10 km", far: "10–20 km" },
+}
+
+function mkRanges(prefix: string, defs: [number, number | null, string][]): SeverityRange[] {
+  return defs.map(([min, max, severity], i) => ({ id: `${prefix}-${i}`, min, max, severity }))
+}
+
+/** Build the default combination for one level / scope. */
+export function defaultSite(level: AlertLevel, scope: SiteScope): SiteConfig {
+  const p = `${level}-${scope}`
+  return {
+    scope,
+    km: DEFAULT_SITE_KM[level][scope],
+    windSpeed: mkRanges(`${p}-ws`, [
+      [0, 8, "Low"],
+      [8, 14, "Moderate"],
+      [14, 20, "High"],
+      [20, null, "Severe"],
+    ]),
+    windGust: mkRanges(`${p}-wg`, [
+      [0, 12, "Low"],
+      [12, 18, "Moderate"],
+      [18, 25, "High"],
+      [25, null, "Severe"],
+    ]),
+    rain: mkRanges(`${p}-rn`, [
+      [0, 1, "None"],
+      [1, 10, "Light"],
+      [10, 30, "Moderate"],
+      [30, null, "Heavy"],
+    ]),
+    cloud: mkRanges(`${p}-cl`, [
+      [0, 30, "Clear"],
+      [30, 70, "Partly"],
+      [70, 100, "Overcast"],
+    ]),
+    sources:
+      scope === "at"
+        ? [{ label: "NCM AWS Wind", url: "https://ghaith.ncm.gov.ae/?lang=en#aws-wind" }]
+        : [{ label: "NCM COSMO-UAE Wind", url: "https://ghaith.ncm.gov.ae/?lang=en#cosmo-uae-wind" }],
+  }
+}
+
+/** Both combinations (at + far) for one level, in a stable order. */
+export function defaultSites(level: AlertLevel): SiteConfig[] {
+  return SITE_SCOPES.map((scope) => defaultSite(level, scope))
+}
+
+/** Parse an unknown value into a clean SeverityRange[]. */
+export function parseSeverityRanges(value: unknown, prefix: string): SeverityRange[] {
+  if (!Array.isArray(value)) return []
+  const out: SeverityRange[] = []
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue
+    const r = raw as Record<string, unknown>
+    const min = Number(r.min)
+    if (!Number.isFinite(min) || min < 0) continue
+    const maxRaw = r.max
+    const max =
+      maxRaw === null || maxRaw === "" || maxRaw === undefined ? null : Number(maxRaw)
+    if (max !== null && (!Number.isFinite(max) || max < 0)) continue
+    out.push({
+      id: String(r.id ?? `${prefix}-${out.length}`).slice(0, 40) || `${prefix}-${out.length}`,
+      min: Math.round(min * 10) / 10,
+      max: max === null ? null : Math.round(max * 10) / 10,
+      severity: String(r.severity ?? "").slice(0, 40),
+    })
+    if (out.length >= 12) break
+  }
+  return out
+}
+
+/** Parse one site combination, falling back to the level/scope default. */
+function parseSite(value: unknown, level: AlertLevel, scope: SiteScope): SiteConfig {
+  const d = defaultSite(level, scope)
+  if (!value || typeof value !== "object") return d
+  const r = value as Record<string, unknown>
+  const factor = (key: SiteFactorKey) => {
+    const parsed = parseSeverityRanges(r[key], `${level}-${scope}-${key}`)
+    return parsed.length ? parsed : d[key]
+  }
+  return {
+    scope,
+    km: String(r.km ?? d.km).slice(0, 60),
+    windSpeed: factor("windSpeed"),
+    windGust: factor("windGust"),
+    rain: factor("rain"),
+    cloud: factor("cloud"),
+    sources: parseSourceLinks(r.sources),
+  }
+}
+
+/** Parse the at + far combinations for one level, always returning both. */
+export function parseSites(value: unknown, level: AlertLevel): SiteConfig[] {
+  const byScope = new Map<SiteScope, unknown>()
+  if (Array.isArray(value)) {
+    for (const raw of value) {
+      if (raw && typeof raw === "object") {
+        const sc = (raw as Record<string, unknown>).scope as SiteScope
+        if (SITE_SCOPES.includes(sc)) byScope.set(sc, raw)
+      }
+    }
+  }
+  return SITE_SCOPES.map((scope) => parseSite(byScope.get(scope), level, scope))
+}
+
+/**
  * Built-in escalation ladder. The Engineering Console can override these and
  * persist them; the live alert banner reads the effective set from /api/escalation.
  */
@@ -175,6 +341,7 @@ export const DEFAULT_RULES: EscalationRule[] = [
       { label: "NCM", url: "https://www.ncm.gov.ae/?lang=en" },
     ],
     deadbands: { ...DEFAULT_DEADBANDS.green },
+    sites: defaultSites("green"),
   },
   {
     level: "yellow",
@@ -187,6 +354,7 @@ export const DEFAULT_RULES: EscalationRule[] = [
       { label: "NCM Al Bahar", url: "https://www.ncm.gov.ae/albahar?lang=en" },
     ],
     deadbands: { ...DEFAULT_DEADBANDS.yellow },
+    sites: defaultSites("yellow"),
   },
   {
     level: "orange",
@@ -201,6 +369,7 @@ export const DEFAULT_RULES: EscalationRule[] = [
       { label: "NCM Al Bahar", url: "https://www.ncm.gov.ae/albahar?lang=en" },
     ],
     deadbands: { ...DEFAULT_DEADBANDS.orange },
+    sites: defaultSites("orange"),
   },
   {
     level: "red",
@@ -213,6 +382,7 @@ export const DEFAULT_RULES: EscalationRule[] = [
       { label: "NCM Al Bahar", url: "https://www.ncm.gov.ae/albahar?lang=en" },
     ],
     deadbands: { ...DEFAULT_DEADBANDS.red },
+    sites: defaultSites("red"),
   },
 ]
 
@@ -278,10 +448,10 @@ export type WindSourceConfig = {
   url: string
 }
 
-/** Default wind feed — NCM Ghaith COSMO-UAE surface wind. */
+/** Default wind speed & gust feed — NCM Ghaith AWS surface-wind observations. */
 export const DEFAULT_WIND_SOURCE: WindSourceConfig = {
-  label: "NCM COSMO-UAE Wind",
-  url: "https://ghaith.ncm.gov.ae/?lang=en#cosmo-uae-wind",
+  label: "NCM AWS Wind",
+  url: "https://ghaith.ncm.gov.ae/?lang=en#aws-wind",
 }
 
 /** Validate an unknown value into a clean WindSourceConfig (or null if invalid). */
@@ -292,6 +462,30 @@ export function parseWindSource(value: unknown): WindSourceConfig | null {
   const url = sanitizeSourceUrl(r.url)
   if (!label && !url) return null
   return { label: label || DEFAULT_WIND_SOURCE.label, url: url ?? DEFAULT_WIND_SOURCE.url }
+}
+
+/**
+ * Configurable wind-direction feed behind the 0–360° wind scanner. The scanner
+ * always reads wind speed (from the wind source above) together with wind
+ * direction from this feed. Defaults to the NCM Ghaith COSMO-UAE 10 m wind
+ * viewer, and is editable in the Engineering Console without a deploy.
+ */
+export const DEFAULT_WIND_DIRECTION_SOURCE: WindSourceConfig = {
+  label: "NCM COSMO-UAE Wind",
+  url: "https://ghaith.ncm.gov.ae/?lang=en#cosmo-uae-wind",
+}
+
+/** Validate an unknown value into a clean wind-direction WindSourceConfig (or null). */
+export function parseWindDirectionSource(value: unknown): WindSourceConfig | null {
+  if (!value || typeof value !== "object") return null
+  const r = value as Record<string, unknown>
+  const label = String(r.label ?? "").slice(0, 80).trim()
+  const url = sanitizeSourceUrl(r.url)
+  if (!label && !url) return null
+  return {
+    label: label || DEFAULT_WIND_DIRECTION_SOURCE.label,
+    url: url ?? DEFAULT_WIND_DIRECTION_SOURCE.url,
+  }
 }
 
 /**
@@ -417,6 +611,7 @@ export function parseRules(value: unknown): EscalationRule[] | null {
       sources,
       sourceLinks,
       deadbands: parseDeadbands(r.deadbands, level),
+      sites: parseSites(r.sites, level),
     })
   }
   // Always return in ladder order, filling any missing tier from defaults.
