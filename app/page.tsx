@@ -3,6 +3,7 @@ import { SiteNav } from "@/components/site-nav"
 import { LeftNav } from "@/components/left-nav"
 import { WeatherProvider } from "@/components/weather/weather-provider"
 import { AlertBanner } from "@/components/weather/alert-banner"
+import { LiveTrend } from "@/components/station/live-trend"
 import { HourlyBreakdown } from "@/components/forecast/hourly-breakdown"
 import { NcmSources } from "@/components/weather/ncm-sources"
 import { Webcams } from "@/components/weather/webcams"
@@ -45,10 +46,16 @@ export default function Page() {
               <AlertBanner />
             </div>
 
-            {/* 1 · 24-hour forecast breakdown — hour-by-hour temperature & feels-like,
-                    precipitation, humidity & sky, full-day DNI and a wind & gusts grid,
-                    all driven by the selected day's live NCM-mirrored data. */}
+            {/* 1 · Live Trend + AI Projection — solid live NCM-mirrored series with a dashed
+                    AI projection to midnight, a 14-day day selector, and multi-metric tabs. */}
             <section id="forecast" className="mt-6 scroll-mt-6">
+              <LiveTrend />
+            </section>
+
+            {/* 2 · 24-hour detailed weather trend — sunrise/sunset banner, a combined DNI +
+                    cloud chart with an AI-projection overlay, and a wind & precipitation table,
+                    all driven by the day selected above. */}
+            <section id="hourly" className="mt-6 scroll-mt-6">
               <HourlyBreakdown />
             </section>
 
