@@ -410,6 +410,23 @@ export function EngineeringConsole({
             <div className="flex items-center gap-2">
               <FlaskConical className="h-4 w-4 text-accent" aria-hidden="true" />
               <span className="label-caps text-foreground">Simulator</span>
+              <span
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[0.6875rem] font-semibold uppercase tracking-wide",
+                  simLevel
+                    ? "border-accent/60 bg-accent/15 text-accent"
+                    : "border-border bg-background/60 text-muted-foreground",
+                )}
+              >
+                <span
+                  className={cn(
+                    "h-1.5 w-1.5 rounded-full",
+                    simLevel ? "bg-accent tier-blink" : "bg-muted-foreground/50",
+                  )}
+                  aria-hidden="true"
+                />
+                {simLevel ? "ON" : "OFF"}
+              </span>
             </div>
             <button
               type="button"
@@ -418,7 +435,7 @@ export function EngineeringConsole({
               className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-background/60 disabled:opacity-50"
             >
               <RotateCcw className="h-3 w-3" aria-hidden="true" />
-              Back to live
+              Turn off · back to live
             </button>
           </div>
           <p className="mt-1.5 text-xs text-muted-foreground/80">
@@ -460,7 +477,7 @@ export function EngineeringConsole({
               <NumberField label="Wind speed" unit="m/s" value={simValues.windMs} onChange={(v) => updateSimValue("windMs", v)} />
               <NumberField label="Wind gust" unit="m/s" value={simValues.gustMs} onChange={(v) => updateSimValue("gustMs", v)} />
               <NumberField label="Rainfall" unit="mm" value={simValues.rainMm} onChange={(v) => updateSimValue("rainMm", v)} />
-              <NumberField label="Cloud cover" unit="%" value={simValues.cloudPct} onChange={(v) => updateSimValue("cloudPct", v)} />
+              <NumberField label="Intensive cloud coverage" unit="%" value={simValues.cloudPct} onChange={(v) => updateSimValue("cloudPct", v)} />
             </div>
           </div>
           {simLevel ? (
