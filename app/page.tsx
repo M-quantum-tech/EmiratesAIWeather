@@ -6,6 +6,7 @@ import { AlertBanner } from "@/components/weather/alert-banner"
 import { HourlyBreakdown } from "@/components/forecast/hourly-breakdown"
 import { NcmSources } from "@/components/weather/ncm-sources"
 import { Webcams } from "@/components/weather/webcams"
+import { WebcamsCallout } from "@/components/weather/webcams-callout"
 import { StationDashboard } from "@/components/station/station-dashboard"
 import { LiveTrend } from "@/components/station/live-trend"
 import { RegisterPanel } from "@/components/players/register-panel"
@@ -40,6 +41,11 @@ export default function Page() {
             <section id="hero" className="scroll-mt-6">
               <Hero />
             </section>
+
+            {/* Cloud & sky cams — live UAE webcams callout, above the AI safety model */}
+            <div className="mt-6">
+              <WebcamsCallout />
+            </div>
 
             {/* Live alert / AI safety model */}
             <div className="mt-6">
