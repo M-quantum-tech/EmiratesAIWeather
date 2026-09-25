@@ -44,9 +44,11 @@ import {
 import { fetchWarningFrames, type EmirateWarning } from "@/lib/ncm-warnings"
 import {
   BUZZER_TONE,
+  DEFAULT_CLOUD_SOURCE,
   DEFAULT_RULES,
   DEFAULT_WIND_MONITOR,
   DEFAULT_WIND_SOURCE,
+  type CloudSourceConfig,
   type EscalationRule,
   type WindMonitorTier,
   type WindSourceConfig,
@@ -149,20 +151,34 @@ function useBuzzer(active: boolean, level: AlertLevel) {
 
     const tone = BUZZER_TONE[level]
     const beep = (freq: number, at: number, dur: number) => {
-      const osc = ctx.createOscillator()
-      const gain = ctx.createGain()
-      osc.type = tone.type
-      osc.frequency.value = freq
-      gain.gain.setValueAtTime(0.0001, at)
-      gain.gain.exponentialRampToValueAtTime(tone.gain, at + 0.02)
-      gain.gain.exponentialRampToValueAtTime(0.0001, at + dur)
-      osc.connect(gain).connect(ctx.destination)
-      osc.start(at)
-      osc.stop(at + dur)
+      // A shared master gain lets a tier layer several oscillators (fundamental,
+      // detuned twin, sub-octave) into one bigger, klaxon-like note.
+      const master = ctx.createGain()
+      master.gain.setValueAtTime(0.0001, at)
+      master.gain.exponentialRampToValueAtTime(tone.gain, at + 0.02)
+      master.gain.setValueAtTime(tone.gain, at + dur * 0.7)
+      master.gain.exponentialRampToValueAtTime(0.0001, at + dur)
+      master.connect(ctx.destination)
+
+      const voice = (f: number, detune: number, level: number) => {
+        const osc = ctx.createOscillator()
+        const g = ctx.createGain()
+        osc.type = tone.type
+        osc.frequency.value = f
+        if (detune) osc.detune.value = detune
+        g.gain.value = level
+        osc.connect(g).connect(master)
+        osc.start(at)
+        osc.stop(at + dur)
+      }
+      voice(freq, 0, 1)
+      if (tone.detune) voice(freq, tone.detune, 0.9)
+      if (tone.sub) voice(freq / 2, 0, 0.7)
     }
     const cycle = () => {
       const t = ctx.currentTime
-      tone.pattern.forEach((freq, i) => beep(freq, t + i * tone.step, 0.2))
+      const hold = tone.hold ?? 0.2
+      tone.pattern.forEach((freq, i) => beep(freq, t + i * tone.step, hold))
     }
     cycle()
     timerRef.current = setInterval(cycle, tone.interval)
@@ -202,6 +218,13 @@ export function AlertBanner() {
     { refreshInterval: 300_000, revalidateOnFocus: false },
   )
   const windSource = windSourceData?.source ?? DEFAULT_WIND_SOURCE
+  // NCM cloud / satellite source — tracks intensifying convection, editable in the Engineering Console.
+  const { data: cloudSourceData } = useSWR<{ source: CloudSourceConfig }>(
+    "/api/cloud-source",
+    farFetcher as never,
+    { refreshInterval: 300_000, revalidateOnFocus: false },
+  )
+  const cloudSource = cloudSourceData?.source ?? DEFAULT_CLOUD_SOURCE
   const alert = useMemo(() => (payload ? buildAlert(payload) : null), [payload])
   const level = alert?.level ?? null
   // Acknowledgment latch: the alarm sounds whenever the detected level differs from the
@@ -661,9 +684,23 @@ export function AlertBanner() {
 
         {/* Escalation rules table — the fixed NCM-style ladder, active tier highlighted */}
         <div className="mt-4 overflow-hidden rounded-lg border border-border/70">
-          <div className="flex items-center gap-1.5 border-b border-border/60 bg-background/40 px-3 py-1.5 label-caps text-muted-foreground">
-            <ShieldCheck className="h-3 w-3" aria-hidden="true" />
-            Escalation rules · NCM + wind forecast + Open-Meteo
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-background/40 px-3 py-1.5 label-caps text-muted-foreground">
+            <span className="flex items-center gap-1.5">
+              <ShieldCheck className="h-3 w-3" aria-hidden="true" />
+              Escalation rules · NCM + wind forecast + Open-Meteo
+            </span>
+            {cloudSource.url ? (
+              <a
+                href={cloudSource.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-1.5 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider text-accent transition-colors hover:bg-accent/20"
+              >
+                <Cloud className="h-2.5 w-2.5" aria-hidden="true" />
+                {cloudSource.label}
+                <ExternalLink className="h-2.5 w-2.5" aria-hidden="true" />
+              </a>
+            ) : null}
           </div>
           <table className="w-full border-collapse text-left">
             <tbody>
@@ -686,7 +723,27 @@ export function AlertBanner() {
                       {rule.km}
                     </span>
                   </td>
-                  <td className="px-3 py-2 text-xs leading-snug text-muted-foreground">{rule.triggers}</td>
+                  <td className="px-3 py-2 text-xs leading-snug text-muted-foreground">
+                    {rule.triggers}
+                    <span className="mt-1 flex flex-wrap gap-1">
+                      <span className="inline-flex items-center gap-1 rounded border border-border/60 bg-background/40 px-1.5 py-0.5 font-mono text-[0.5rem] uppercase tracking-wider text-muted-foreground">
+                        <Wind className="h-2.5 w-2.5" aria-hidden="true" />
+                        ±{rule.deadbands.windMs} m/s
+                      </span>
+                      <span className="inline-flex items-center gap-1 rounded border border-border/60 bg-background/40 px-1.5 py-0.5 font-mono text-[0.5rem] uppercase tracking-wider text-muted-foreground">
+                        <Gauge className="h-2.5 w-2.5" aria-hidden="true" />
+                        gust ±{rule.deadbands.gustMs} m/s
+                      </span>
+                      <span className="inline-flex items-center gap-1 rounded border border-border/60 bg-background/40 px-1.5 py-0.5 font-mono text-[0.5rem] uppercase tracking-wider text-muted-foreground">
+                        <Navigation className="h-2.5 w-2.5" aria-hidden="true" />
+                        dir ±{rule.deadbands.directionDeg}°
+                      </span>
+                      <span className="inline-flex items-center gap-1 rounded border border-border/60 bg-background/40 px-1.5 py-0.5 font-mono text-[0.5rem] uppercase tracking-wider text-muted-foreground">
+                        <CloudRain className="h-2.5 w-2.5" aria-hidden="true" />
+                        rain ±{rule.deadbands.rainMm} mm
+                      </span>
+                    </span>
+                  </td>
                   <td className="hidden px-3 py-2 text-right align-top sm:table-cell">
                     <span className="flex flex-wrap justify-end gap-1">
                       {rule.sourceLinks.length > 0

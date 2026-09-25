@@ -1,14 +1,17 @@
 import { db } from "@/lib/db"
 import { sql } from "drizzle-orm"
 import {
+  DEFAULT_CLOUD_SOURCE,
   DEFAULT_RULES,
   DEFAULT_TREND_SOURCES,
   DEFAULT_WIND_MONITOR,
   DEFAULT_WIND_SOURCE,
+  parseCloudSource,
   parseRules,
   parseTrendSources,
   parseWindMonitor,
   parseWindSource,
+  type CloudSourceConfig,
   type EscalationRule,
   type TrendSourceGroup,
   type WindMonitorTier,
@@ -19,6 +22,7 @@ import { isAdmin } from "@/lib/admin"
 const ESCALATION_KEY = "escalation_rules"
 const WIND_MONITOR_KEY = "wind_monitor_tiers"
 const WIND_SOURCE_KEY = "wind_source_config"
+const CLOUD_SOURCE_KEY = "cloud_source_config"
 const TREND_SOURCES_KEY = "live_trend_sources"
 
 /**
@@ -127,6 +131,35 @@ export async function saveWindSource(value: unknown): Promise<WindSourceConfig> 
   await db.execute(sql`
     INSERT INTO "app_setting" ("key", "value", "updatedAt")
     VALUES (${WIND_SOURCE_KEY}, ${json}::jsonb, now())
+    ON CONFLICT ("key") DO UPDATE SET "value" = ${json}::jsonb, "updatedAt" = now()
+  `)
+  return clean
+}
+
+/** Effective NCM cloud / satellite source link — persisted override, or the NCM default. */
+export async function getCloudSource(): Promise<CloudSourceConfig> {
+  try {
+    await ensureSettingsTable()
+    const res = await db.execute(sql`SELECT value FROM "app_setting" WHERE key = ${CLOUD_SOURCE_KEY}`)
+    const row = (res.rows as { value: unknown }[])[0]
+    if (!row) return DEFAULT_CLOUD_SOURCE
+    const parsed = parseCloudSource(row.value)
+    return parsed ?? DEFAULT_CLOUD_SOURCE
+  } catch {
+    return DEFAULT_CLOUD_SOURCE
+  }
+}
+
+/** Persist the NCM cloud / satellite source link — admin only. */
+export async function saveCloudSource(value: unknown): Promise<CloudSourceConfig> {
+  if (!(await isAdmin())) throw new Error("Forbidden")
+  const clean = parseCloudSource(value)
+  if (!clean) throw new Error("Invalid cloud source")
+  await ensureSettingsTable()
+  const json = JSON.stringify(clean)
+  await db.execute(sql`
+    INSERT INTO "app_setting" ("key", "value", "updatedAt")
+    VALUES (${CLOUD_SOURCE_KEY}, ${json}::jsonb, now())
     ON CONFLICT ("key") DO UPDATE SET "value" = ${json}::jsonb, "updatedAt" = now()
   `)
   return clean

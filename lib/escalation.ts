@@ -10,6 +10,23 @@ export type SourceLink = {
   url?: string
 }
 
+/**
+ * Per-tier dead bands (hysteresis). A tier only engages once the live reading
+ * exceeds its threshold by the dead band, and only releases once it drops back
+ * below by the same margin — this stops the alarm flapping on noisy readings.
+ * Each band pairs with the tier's KM proximity range for intensifying clouds.
+ */
+export type TierDeadbands = {
+  /** Wind speed dead band (m/s). */
+  windMs: number
+  /** Wind gust dead band (m/s). */
+  gustMs: number
+  /** Wind direction dead band (°). */
+  directionDeg: number
+  /** Rainfall dead band (mm). */
+  rainMm: number
+}
+
 /** One tier of the NCM-style escalation ladder. */
 export type EscalationRule = {
   level: AlertLevel
@@ -23,6 +40,32 @@ export type EscalationRule = {
   sources: string
   /** Structured data sources — each optionally carries a link to render live. */
   sourceLinks: SourceLink[]
+  /** Hysteresis dead bands that gate this tier, paired with its KM range. */
+  deadbands: TierDeadbands
+}
+
+/** Built-in dead bands per tier — widen as severity climbs to avoid flapping. */
+export const DEFAULT_DEADBANDS: Record<AlertLevel, TierDeadbands> = {
+  green: { windMs: 1, gustMs: 2, directionDeg: 20, rainMm: 0.5 },
+  yellow: { windMs: 1.5, gustMs: 2.5, directionDeg: 15, rainMm: 1 },
+  orange: { windMs: 2, gustMs: 3, directionDeg: 10, rainMm: 2 },
+  red: { windMs: 2.5, gustMs: 4, directionDeg: 8, rainMm: 3 },
+}
+
+/** Parse an unknown value into a clean TierDeadbands, falling back per level. */
+export function parseDeadbands(value: unknown, level: AlertLevel): TierDeadbands {
+  const d = DEFAULT_DEADBANDS[level]
+  const r = value && typeof value === "object" ? (value as Record<string, unknown>) : {}
+  const num = (v: unknown, fallback: number, max: number) => {
+    const n = Number(v)
+    return Number.isFinite(n) && n >= 0 && n <= max ? Math.round(n * 10) / 10 : fallback
+  }
+  return {
+    windMs: num(r.windMs, d.windMs, 60),
+    gustMs: num(r.gustMs, d.gustMs, 80),
+    directionDeg: num(r.directionDeg, d.directionDeg, 180),
+    rainMm: num(r.rainMm, d.rainMm, 200),
+  }
 }
 
 export const ESCALATION_LEVELS: AlertLevel[] = ["green", "yellow", "orange", "red"]
@@ -79,6 +122,7 @@ export const DEFAULT_RULES: EscalationRule[] = [
       { label: "Satellite" },
       { label: "NCM", url: "https://www.ncm.gov.ae/?lang=en" },
     ],
+    deadbands: { ...DEFAULT_DEADBANDS.green },
   },
   {
     level: "yellow",
@@ -90,6 +134,7 @@ export const DEFAULT_RULES: EscalationRule[] = [
       { label: "Satellite" },
       { label: "NCM Al Bahar", url: "https://www.ncm.gov.ae/albahar?lang=en" },
     ],
+    deadbands: { ...DEFAULT_DEADBANDS.yellow },
   },
   {
     level: "orange",
@@ -103,6 +148,7 @@ export const DEFAULT_RULES: EscalationRule[] = [
       { label: "Radar" },
       { label: "NCM Al Bahar", url: "https://www.ncm.gov.ae/albahar?lang=en" },
     ],
+    deadbands: { ...DEFAULT_DEADBANDS.orange },
   },
   {
     level: "red",
@@ -114,6 +160,7 @@ export const DEFAULT_RULES: EscalationRule[] = [
       { label: "Radar" },
       { label: "NCM Al Bahar", url: "https://www.ncm.gov.ae/albahar?lang=en" },
     ],
+    deadbands: { ...DEFAULT_DEADBANDS.red },
   },
 ]
 
@@ -196,6 +243,34 @@ export function parseWindSource(value: unknown): WindSourceConfig | null {
 }
 
 /**
+ * Configurable NCM cloud / satellite feed. Paste the NCM cloud viewer link that
+ * tracks intensifying convection; every tier's KM proximity band is read against
+ * this imagery. Editable in the Engineering Console without a deploy.
+ */
+export type CloudSourceConfig = {
+  /** Source name shown on the cloud / satellite readout. */
+  label: string
+  /** Absolute http(s) link to the live NCM cloud / satellite viewer. */
+  url: string
+}
+
+/** Default cloud feed — NCM Ghaith viewer showing live cloud / satellite layers. */
+export const DEFAULT_CLOUD_SOURCE: CloudSourceConfig = {
+  label: "NCM Cloud / Satellite",
+  url: "https://ghaith.ncm.gov.ae/?lang=en",
+}
+
+/** Validate an unknown value into a clean CloudSourceConfig (or null if invalid). */
+export function parseCloudSource(value: unknown): CloudSourceConfig | null {
+  if (!value || typeof value !== "object") return null
+  const r = value as Record<string, unknown>
+  const label = String(r.label ?? "").slice(0, 80).trim()
+  const url = sanitizeSourceUrl(r.url)
+  if (!label && !url) return null
+  return { label: label || DEFAULT_CLOUD_SOURCE.label, url: url ?? DEFAULT_CLOUD_SOURCE.url }
+}
+
+/**
  * The four Live Trend + AI Projection panels. Each can carry any number of
  * reference-source links that the Engineering Console assigns now or leaves
  * ready to fill in future — mirroring the escalation data-source pattern.
@@ -250,18 +325,25 @@ export type BuzzerTone = {
   interval: number
   gain: number
   type: OscillatorType
+  /** Seconds each note is held (default 0.2). Longer = more of a sustained horn. */
+  hold?: number
+  /** Cents of detune on a layered second oscillator — adds a klaxon-like beat/grit. */
+  detune?: number
+  /** Add an octave-below layer for extra body and perceived loudness. */
+  sub?: boolean
 }
 
 /**
  * Per-level buzzer character — each tier has its own pitch set, cadence and
  * loudness so the alarm is audibly identifiable, escalating from a soft green
- * chime to an urgent red three-tone.
+ * chime to a loud red danger horn. Higher tiers use richer waveforms, detuned
+ * layering and a sub-octave so they read as a big, urgent klaxon.
  */
 export const BUZZER_TONE: Record<AlertLevel, BuzzerTone> = {
-  green: { pattern: [523], step: 0, interval: 2600, gain: 0.05, type: "sine" },
-  yellow: { pattern: [659, 784], step: 0.26, interval: 1800, gain: 0.09, type: "triangle" },
-  orange: { pattern: [784, 988], step: 0.24, interval: 1200, gain: 0.13, type: "square" },
-  red: { pattern: [988, 740, 988], step: 0.22, interval: 820, gain: 0.18, type: "square" },
+  green: { pattern: [523], step: 0, interval: 2600, gain: 0.08, type: "sine", hold: 0.22 },
+  yellow: { pattern: [659, 784], step: 0.24, interval: 1500, gain: 0.16, type: "triangle", hold: 0.24 },
+  orange: { pattern: [740, 932], step: 0.22, interval: 1000, gain: 0.24, type: "sawtooth", hold: 0.3, detune: 14, sub: true },
+  red: { pattern: [466, 370, 466], step: 0.34, interval: 640, gain: 0.4, type: "sawtooth", hold: 0.42, detune: 22, sub: true },
 }
 
 /** Validate an unknown value into a clean EscalationRule[] (or null if invalid). */
@@ -282,6 +364,7 @@ export function parseRules(value: unknown): EscalationRule[] | null {
       triggers: String(r.triggers ?? "").slice(0, 600),
       sources,
       sourceLinks,
+      deadbands: parseDeadbands(r.deadbands, level),
     })
   }
   // Always return in ladder order, filling any missing tier from defaults.

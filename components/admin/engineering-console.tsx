@@ -1,15 +1,18 @@
 "use client"
 
 import { useState } from "react"
-import { BellRing, Check, LineChart, Link2, Plus, RotateCcw, Save, Square, Trash2, Volume2, Wind } from "lucide-react"
+import { BellRing, Check, Cloud, LineChart, Link2, Plus, RotateCcw, Save, Square, Trash2, Volume2, Wind } from "lucide-react"
 import {
+  DEFAULT_CLOUD_SOURCE,
   DEFAULT_RULES,
   DEFAULT_TREND_SOURCES,
   DEFAULT_WIND_MONITOR,
   DEFAULT_WIND_SOURCE,
   ESCALATION_LEVELS,
+  type CloudSourceConfig,
   type EscalationRule,
   type SourceLink,
+  type TierDeadbands,
   type TrendSourceGroup,
   type WindMonitorTier,
   type WindSourceConfig,
@@ -32,11 +35,13 @@ export function EngineeringConsole({
   initialRules,
   initialWindMonitor,
   initialWindSource,
+  initialCloudSource,
   initialTrendSources,
 }: {
   initialRules: EscalationRule[]
   initialWindMonitor: WindMonitorTier[]
   initialWindSource: WindSourceConfig
+  initialCloudSource: CloudSourceConfig
   initialTrendSources: TrendSourceGroup[]
 }) {
   const [rules, setRules] = useState<EscalationRule[]>(initialRules)
@@ -48,6 +53,15 @@ export function EngineeringConsole({
   function update(level: AlertLevel, field: "label" | "km" | "triggers", value: string) {
     setSaved(false)
     setRules((prev) => prev.map((r) => (r.level === level ? { ...r, [field]: value } : r)))
+  }
+
+  function updateDeadband(level: AlertLevel, field: keyof TierDeadbands, value: string) {
+    setSaved(false)
+    const n = value === "" ? 0 : Number(value)
+    if (!Number.isFinite(n) || n < 0) return
+    setRules((prev) =>
+      prev.map((r) => (r.level === level ? { ...r, deadbands: { ...r.deadbands, [field]: n } } : r)),
+    )
   }
 
   function updateSource(level: AlertLevel, index: number, patch: Partial<SourceLink>) {
@@ -78,7 +92,13 @@ export function EngineeringConsole({
   function resetDefaults() {
     setSaved(false)
     setError(null)
-    setRules(DEFAULT_RULES.map((r) => ({ ...r, sourceLinks: r.sourceLinks.map((s) => ({ ...s })) })))
+    setRules(
+      DEFAULT_RULES.map((r) => ({
+        ...r,
+        sourceLinks: r.sourceLinks.map((s) => ({ ...s })),
+        deadbands: { ...r.deadbands },
+      })),
+    )
   }
 
   async function save() {
@@ -170,6 +190,9 @@ export function EngineeringConsole({
       {/* Wind speed & gust source link (NCM COSMO-UAE wind) */}
       <WindSourceEditor initialSource={initialWindSource} />
 
+      {/* NCM cloud / satellite source link (intensifying clouds) */}
+      <CloudSourceEditor initialSource={initialCloudSource} />
+
       {/* Live Trend + AI Projection reference sources (per panel) */}
       <TrendSourceEditor initialGroups={initialTrendSources} />
 
@@ -217,7 +240,40 @@ export function EngineeringConsole({
                 </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   <Field label="Tier label" value={rule.label} onChange={(v) => update(rule.level, "label", v)} />
-                  <Field label="Proximity band" value={rule.km} onChange={(v) => update(rule.level, "km", v)} />
+                  <Field label="Proximity band (KM range)" value={rule.km} onChange={(v) => update(rule.level, "km", v)} />
+                </div>
+
+                {/* Dead bands — hysteresis gates paired with the KM range above */}
+                <div className="mt-3 flex flex-col gap-2">
+                  <span className="label-caps text-muted-foreground">
+                    Dead bands · gate this tier against the KM range (intensifying clouds)
+                  </span>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <NumberField
+                      label="Wind speed"
+                      unit="m/s"
+                      value={rule.deadbands.windMs}
+                      onChange={(v) => updateDeadband(rule.level, "windMs", v)}
+                    />
+                    <NumberField
+                      label="Wind gust"
+                      unit="m/s"
+                      value={rule.deadbands.gustMs}
+                      onChange={(v) => updateDeadband(rule.level, "gustMs", v)}
+                    />
+                    <NumberField
+                      label="Wind direction"
+                      unit="°"
+                      value={rule.deadbands.directionDeg}
+                      onChange={(v) => updateDeadband(rule.level, "directionDeg", v)}
+                    />
+                    <NumberField
+                      label="Rainfall"
+                      unit="mm"
+                      value={rule.deadbands.rainMm}
+                      onChange={(v) => updateDeadband(rule.level, "rainMm", v)}
+                    />
+                  </div>
                 </div>
                 <div className="mt-3 flex flex-col gap-1">
                   <span className="label-caps text-muted-foreground">Trigger criteria</span>
@@ -449,6 +505,141 @@ function WindMonitorEditor({ initialTiers }: { initialTiers: WindMonitorTier[] }
           <Plus className="h-3 w-3" aria-hidden="true" />
           Add threshold
         </button>
+      </div>
+    </section>
+  )
+}
+
+function NumberField({
+  label,
+  unit,
+  value,
+  onChange,
+}: {
+  label: string
+  unit: string
+  value: number
+  onChange: (value: string) => void
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="label-caps text-muted-foreground">{label}</span>
+      <span className="relative">
+        <input
+          type="number"
+          min={0}
+          step={0.1}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full rounded-md border border-border bg-background py-2 pl-3 pr-12 text-sm tabular-nums text-foreground outline-none focus:border-accent"
+          aria-label={`${label} dead band in ${unit}`}
+        />
+        <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-medium text-muted-foreground">
+          {unit}
+        </span>
+      </span>
+    </label>
+  )
+}
+
+function CloudSourceEditor({ initialSource }: { initialSource: CloudSourceConfig }) {
+  const [source, setSource] = useState<CloudSourceConfig>({ ...initialSource })
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  function update(patch: Partial<CloudSourceConfig>) {
+    setSaved(false)
+    setSource((prev) => ({ ...prev, ...patch }))
+  }
+
+  function resetDefaults() {
+    setSaved(false)
+    setError(null)
+    setSource({ ...DEFAULT_CLOUD_SOURCE })
+  }
+
+  async function save() {
+    setSaving(true)
+    setError(null)
+    try {
+      const res = await fetch("/api/cloud-source", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error ?? "Save failed")
+      setSource({ ...(data.source as CloudSourceConfig) })
+      setSaved(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-border bg-card p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Cloud className="h-4 w-4 text-accent" aria-hidden="true" />
+          <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-foreground">
+            NCM cloud / satellite source
+          </h2>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={resetDefaults}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-background/60"
+          >
+            <RotateCcw className="h-3 w-3" aria-hidden="true" />
+            Reset to defaults
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={saving}
+            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
+          >
+            {saved ? <Check className="h-3 w-3" aria-hidden="true" /> : <Save className="h-3 w-3" aria-hidden="true" />}
+            {saving ? "Saving…" : saved ? "Saved" : "Save source"}
+          </button>
+        </div>
+      </div>
+      <p className="mt-2 text-sm text-muted-foreground">
+        Cloud / satellite feed that tracks intensifying convection. Each tier&apos;s KM proximity band is read against
+        this imagery. Defaults to the NCM Ghaith viewer — paste any official NCM cloud link and it becomes the
+        connected source on the live banner.
+      </p>
+      {error ? <p className="mt-2 text-sm text-alert-red">{error}</p> : null}
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-[2fr_3fr]">
+        <label className="flex flex-col gap-1">
+          <span className="label-caps text-muted-foreground">Source name</span>
+          <input
+            type="text"
+            value={source.label}
+            placeholder={DEFAULT_CLOUD_SOURCE.label}
+            onChange={(e) => update({ label: e.target.value })}
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="label-caps text-muted-foreground">Source link (paste NCM cloud link)</span>
+          <span className="relative">
+            <Link2 className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+            <input
+              type="url"
+              inputMode="url"
+              value={source.url}
+              placeholder={DEFAULT_CLOUD_SOURCE.url}
+              onChange={(e) => update({ url: e.target.value })}
+              className="w-full rounded-md border border-border bg-background py-2 pl-8 pr-3 text-sm text-foreground outline-none focus:border-accent"
+            />
+          </span>
+        </label>
       </div>
     </section>
   )
