@@ -1,7 +1,9 @@
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
-import { subscription, user } from "@/lib/db/schema"
-import { desc, eq, sql } from "drizzle-orm"
+import { account, subscription, user } from "@/lib/db/schema"
+import { hashPassword } from "better-auth/crypto"
+import { and, desc, eq, sql } from "drizzle-orm"
+import { randomUUID } from "node:crypto"
 import { headers } from "next/headers"
 import { redirect } from "next/navigation"
 
@@ -15,7 +17,7 @@ export type AccessStatus = "pending" | "allowed" | "denied"
  */
 export const ADMIN_ACCOUNTS = [
   { email: "m-quantum-tech@mquantum.tech", password: "Imax@1993", name: "M-Quantum-Tech" },
-  { email: "m-quantum-tech1@mquantum.tech", password: "Imax@2026", name: "M-Quantum-Tech1" },
+  { email: "m-quantum-tech007@mquantum.tech", password: "Imax@2026", name: "M-Quantum-Tech007" },
 ] as const
 
 const ADMIN_EMAILS = new Set(ADMIN_ACCOUNTS.map((a) => a.email.toLowerCase()))
@@ -25,34 +27,86 @@ export function isDesignatedAdmin(email: string | null | undefined): boolean {
   return Boolean(email) && ADMIN_EMAILS.has((email as string).toLowerCase())
 }
 
+/** The credential issuer Better Auth uses for email/password accounts. */
+const CREDENTIAL_ISSUER = "local:credential"
+
 /**
- * Idempotently ensure the designated admin accounts exist and are promoted to
- * admin/allowed. Cached per server instance (cheap on repeat calls) but retries
- * after a failure. This is what makes the admin console work on a brand-new
- * deployment without any manual step: the sign-in page calls it on load, so the
- * accounts always exist with a known password and the correct role.
+ * Deterministically upsert one designated admin so that, after this runs, the
+ * account is GUARANTEED to exist with the admin role, allowed access, and the
+ * exact known password — no matter what state the database was in. This is the
+ * core of "the admin console must always work after every deployment":
+ *
+ *  - Creates the `user` row if missing, or promotes it to admin/allowed.
+ *  - Creates the `credential` account row if missing, or resets its password
+ *    hash — so even a half-seeded or drifted credential is repaired.
+ *
+ * Rows are written directly (not via Better Auth's sign-up flow) because
+ * sign-up only works when the account is absent and can't repair an existing
+ * broken credential, which is what made the console intermittently fail.
+ */
+async function upsertAdminAccount(admin: (typeof ADMIN_ACCOUNTS)[number]): Promise<void> {
+  const existing = await db.select().from(user).where(eq(user.email, admin.email)).limit(1)
+  let userId: string
+  if (existing.length === 0) {
+    userId = randomUUID()
+    await db.insert(user).values({
+      id: userId,
+      name: admin.name,
+      email: admin.email,
+      emailVerified: true,
+      role: "admin",
+      accessStatus: "allowed",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+  } else {
+    userId = existing[0].id
+    await db
+      .update(user)
+      .set({ role: "admin", accessStatus: "allowed", emailVerified: true, updatedAt: new Date() })
+      .where(eq(user.id, userId))
+  }
+
+  const hashed = await hashPassword(admin.password)
+  const cred = await db
+    .select()
+    .from(account)
+    .where(and(eq(account.userId, userId), eq(account.providerId, "credential")))
+    .limit(1)
+  if (cred.length === 0) {
+    await db.insert(account).values({
+      id: randomUUID(),
+      accountId: userId,
+      providerId: "credential",
+      issuer: CREDENTIAL_ISSUER,
+      userId,
+      password: hashed,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+  } else {
+    await db
+      .update(account)
+      .set({ password: hashed, issuer: CREDENTIAL_ISSUER, accountId: userId, updatedAt: new Date() })
+      .where(eq(account.id, cred[0].id))
+  }
+}
+
+/**
+ * Idempotently ensure the designated admin accounts exist with the admin role,
+ * allowed access, and their known passwords. Cached per server instance (cheap
+ * on repeat calls) but retries after a failure. This is what makes the admin
+ * console work on a brand-new deployment without any manual step: the sign-in
+ * pages call it on load, so the accounts are always present and usable.
  */
 let adminsSeeded: Promise<void> | null = null
 export function ensureAdminsSeeded(): Promise<void> {
   if (!adminsSeeded) {
     adminsSeeded = (async () => {
       await ensureUserAccessColumns()
+      await ensureAccountIssuerColumn()
       for (const admin of ADMIN_ACCOUNTS) {
-        const existing = await db.select().from(user).where(eq(user.email, admin.email)).limit(1)
-        if (existing.length === 0) {
-          try {
-            await auth.api.signUpEmail({
-              body: { email: admin.email, password: admin.password, name: admin.name },
-            })
-          } catch {
-            // A concurrent request may have created it; the promotion below is
-            // still safe and idempotent, so swallow and continue.
-          }
-        }
-        await db
-          .update(user)
-          .set({ role: "admin", accessStatus: "allowed", updatedAt: new Date() })
-          .where(eq(user.email, admin.email))
+        await upsertAdminAccount(admin)
       }
     })().catch((err) => {
       adminsSeeded = null
@@ -60,6 +114,24 @@ export function ensureAdminsSeeded(): Promise<void> {
     })
   }
   return adminsSeeded
+}
+
+/**
+ * Ensure the `account.issuer` column exists. Better Auth's credential sign-in
+ * matches on it, so a fresh database created before this column was added must
+ * gain it before we write credential rows.
+ */
+let issuerColumnReady: Promise<void> | null = null
+export function ensureAccountIssuerColumn(): Promise<void> {
+  if (!issuerColumnReady) {
+    issuerColumnReady = (async () => {
+      await db.execute(sql`ALTER TABLE "account" ADD COLUMN IF NOT EXISTS "issuer" text`)
+    })().catch((err) => {
+      issuerColumnReady = null
+      throw err
+    })
+  }
+  return issuerColumnReady
 }
 
 /**
