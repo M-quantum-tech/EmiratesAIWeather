@@ -9,12 +9,23 @@ import { choosePlan } from "@/app/actions/subscription"
 import { PLANS, type PlanId } from "@/lib/plans"
 import { Button } from "@/components/ui/button"
 
-export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
+export function AuthForm({
+  mode,
+  redirectTo: redirectOverride,
+  variant = "member",
+}: {
+  mode: "sign-in" | "sign-up"
+  /** When set, always redirect here after auth instead of reading ?redirect=. */
+  redirectTo?: string
+  /** "admin" tweaks the copy and hides member-only affordances. */
+  variant?: "member" | "admin"
+}) {
   const router = useRouter()
   const params = useSearchParams()
   const planParam = params.get("plan")
   const plan = planParam && planParam in PLANS ? (planParam as PlanId) : null
-  const redirectTo = params.get("redirect") ?? "/account"
+  const redirectTo = redirectOverride ?? params.get("redirect") ?? "/account"
+  const isAdmin = variant === "admin"
 
   const [name, setName] = useState("")
   const [email, setEmail] = useState("")
@@ -76,10 +87,17 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
     <div className="w-full max-w-md">
       <div className="rounded-xl border border-border bg-card p-6 shadow-2xl sm:p-8">
         <div className="mb-6 flex flex-col gap-1">
-          <span className="label-caps">{isSignUp ? "Create account" : "Member sign in"}</span>
+          <span className="label-caps">
+            {isAdmin ? "Administrator sign in" : isSignUp ? "Create account" : "Member sign in"}
+          </span>
           <h1 className="text-balance text-2xl font-semibold tracking-tight text-foreground">
-            {isSignUp ? "Start your Pro subscription" : "Welcome back"}
+            {isAdmin ? "Admin console access" : isSignUp ? "Start your Pro subscription" : "Welcome back"}
           </h1>
+          {isAdmin ? (
+            <p className="mt-1 text-sm text-muted-foreground">
+              Restricted area. Sign in with an authorized administrator account to manage members and pricing.
+            </p>
+          ) : null}
           {plan ? (
             <p className="mt-1 text-sm text-muted-foreground">
               Selected plan:{" "}
@@ -144,12 +162,21 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
           </Button>
         </form>
 
-        <p className="mt-5 text-center text-sm text-muted-foreground">
-          {isSignUp ? "Already have an account? " : "New to EmiratesAIWeather? "}
-          <Link href={otherHref} className="font-medium text-accent hover:underline">
-            {isSignUp ? "Sign in" : "Create one"}
-          </Link>
-        </p>
+        {isAdmin ? (
+          <p className="mt-5 text-center text-sm text-muted-foreground">
+            Not an administrator?{" "}
+            <Link href="/sign-in" className="font-medium text-accent hover:underline">
+              Member sign in
+            </Link>
+          </p>
+        ) : (
+          <p className="mt-5 text-center text-sm text-muted-foreground">
+            {isSignUp ? "Already have an account? " : "New to EmiratesAIWeather? "}
+            <Link href={otherHref} className="font-medium text-accent hover:underline">
+              {isSignUp ? "Sign in" : "Create one"}
+            </Link>
+          </p>
+        )}
       </div>
     </div>
   )
