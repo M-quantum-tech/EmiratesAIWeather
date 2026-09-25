@@ -51,6 +51,7 @@ import {
   DEFAULT_WIND_MONITOR,
   DEFAULT_WIND_SOURCE,
   evaluateSite,
+  evaluateWindMonitor,
   type CloudSourceConfig,
   type EscalationRule,
   type SiteKey,
@@ -339,16 +340,23 @@ export function AlertBanner() {
     () => computeSiteReadings(payload?.units ?? "metric", payload?.current, farData?.current),
     [payload?.units, payload?.current, farData?.current],
   )
-  // Evaluate the active tier's ranges. The alarm/blink is driven ONLY by these two
-  // sites — nothing sounds because a tier is merely "active"; it sounds when an
-  // at-site or far-site reading actually meets the tier's configured range (turns red).
+  // Evaluate the active tier's ranges. The alarm/blink is driven by three
+  // independent conditions — nothing sounds because a tier is merely "active"; it
+  // sounds when (1) an at-site reading meets the tier's range, (2) a far-site
+  // reading meets it, or (3) the live on-site wind meets a Wind Event Monitor
+  // threshold. Below every alerting threshold the wind event stays green.
+  const windEval = useMemo(
+    () => evaluateWindMonitor(siteReadings.atSite.windMs, windTiers),
+    [siteReadings.atSite.windMs, windTiers],
+  )
   const siteEval = useMemo(() => {
     const rule = rules.find((r) => r.level === level) ?? null
     const at = rule ? evaluateSite(rule.atSite, siteReadings.atSite) : { met: false, reason: null }
     const far = rule ? evaluateSite(rule.farSite, siteReadings.farSite) : { met: false, reason: null }
     return { at, far, anyMet: at.met || far.met }
   }, [rules, level, siteReadings])
-  const siteAlarm = siteEval.anyMet
+  // Any of the three wired conditions arms the alarm and blink.
+  const siteAlarm = siteEval.anyMet || windEval.met
   // Acknowledgment latch: the buzzer sounds while a site condition is met and un-acked.
   // Clearing the condition (all sites back to green) re-arms it for the next trip.
   const [acked, setAcked] = useState(false)
@@ -547,7 +555,9 @@ export function AlertBanner() {
                 ? `At site in range · ${siteEval.at.reason}`
                 : siteEval.far.met
                   ? `Far site in range · ${siteEval.far.reason}`
-                  : `Armed at ${alert.title}`}
+                  : windEval.met
+                    ? `Wind event met · ${windEval.reason}`
+                    : `Armed at ${alert.title}`}
             {danger ? ` · severe conditions within ${DANGER_RADIUS_KM} km` : ""} — sounding for 15 s or until reset.
           </span>
           <button

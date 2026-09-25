@@ -443,6 +443,33 @@ export const DEFAULT_WIND_MONITOR: WindMonitorTier[] = [
   { id: "hh-12", minSpeed: 12, level: "yellow", label: "High · High", note: "Level 2 warning alert" },
 ]
 
+/**
+ * Evaluate the live on-site sustained wind (m/s) against the Wind Event Monitor
+ * ladder. Tiers are scanned strongest-first, so the active event is the highest
+ * threshold the wind currently meets. A green (or absent) active tier means the
+ * wind is below every alerting threshold — i.e. "if speed is less than the
+ * escalation logic, it stays green" — so `met` is only true once the active
+ * event is yellow or above. The live Alert Banner and the Engineering Console
+ * both call this, so the wind trigger fires identically in both places.
+ */
+export function evaluateWindMonitor(
+  windMs: number,
+  tiers: WindMonitorTier[],
+): { level: AlertLevel; met: boolean; tier: WindMonitorTier | null; reason: string | null } {
+  const sorted = [...tiers].sort((a, b) => b.minSpeed - a.minSpeed)
+  const active = Number.isFinite(windMs) ? sorted.find((t) => windMs >= t.minSpeed) ?? null : null
+  const level: AlertLevel = active?.level ?? "green"
+  const met = level !== "green"
+  const shown = Number.isInteger(windMs) ? String(windMs) : windMs.toFixed(1)
+  const reason = met && active ? `Wind ${shown} m/s ≥ ${active.minSpeed} m/s · ${active.note || cap(level)}` : null
+  return { level, met, tier: active, reason }
+}
+
+/** Capitalise an alert level key for display, e.g. "red" → "Red". */
+function cap(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
 /** Validate an unknown value into a clean WindMonitorTier[] (or null if invalid). */
 export function parseWindMonitor(value: unknown): WindMonitorTier[] | null {
   if (!Array.isArray(value)) return null

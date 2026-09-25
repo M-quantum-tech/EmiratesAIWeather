@@ -16,6 +16,7 @@ import {
   SITE_METRIC_KEYS,
   SITE_METRIC_META,
   evaluateSite,
+  evaluateWindMonitor,
   type CloudSourceConfig,
   type EscalationRule,
   type MetricRange,
@@ -104,6 +105,13 @@ export function EngineeringConsole({
     [payload?.units, payload?.current, farData?.current],
   )
   const live = payload != null
+  // Wind Event Monitor trigger — evaluated against the live on-site wind through the
+  // same shared helper the banner uses. Below every alerting threshold it stays green;
+  // once the wind reaches a tier it lights the At-site button red alongside the range check.
+  const windEval = useMemo(
+    () => evaluateWindMonitor(siteReadings.atSite.windMs, initialWindMonitor),
+    [siteReadings.atSite.windMs, initialWindMonitor],
+  )
 
   function update(level: AlertLevel, field: "label" | "km" | "triggers", value: string) {
     setSaved(false)
@@ -421,6 +429,8 @@ export function EngineeringConsole({
                         accent={meta.text}
                         readings={siteReadings[siteKey]}
                         live={live}
+                        windMet={siteKey === "atSite" && windEval.met}
+                        windReason={siteKey === "atSite" ? windEval.reason : null}
                         onKm={(v) => updateSiteKm(rule.level, siteKey, v)}
                         onSource={(patch) => updateSiteSource(rule.level, siteKey, patch)}
                         onRangeChange={(metric, i, patch) => updateRange(rule.level, siteKey, metric, i, patch)}
@@ -1057,6 +1067,8 @@ function SitePanel({
   accent,
   readings,
   live,
+  windMet,
+  windReason,
   onKm,
   onSource,
   onRangeChange,
@@ -1068,6 +1080,8 @@ function SitePanel({
   accent: string
   readings: SiteReadings
   live: boolean
+  windMet: boolean
+  windReason: string | null
   onKm: (v: string) => void
   onSource: (patch: Partial<SourceLink>) => void
   onRangeChange: (metric: SiteMetricKey, index: number, patch: Partial<MetricRange>) => void
@@ -1078,11 +1092,14 @@ function SitePanel({
   // Live status — same wiring as the public banner: green until a configured range is met,
   // then red. Only reflects a real condition when live station data is present.
   const ev = live ? evaluateSite(site, readings) : { met: false, reason: null }
-  const met = live && ev.met
+  // On-site button also trips on a met Wind Event Monitor threshold, so the console
+  // reflects the same three-condition wiring (at-site range · far-site range · wind event).
+  const rangeReason = ev.met ? ev.reason : windMet ? windReason : null
+  const met = live && (ev.met || windMet)
   const statusTitle = !live
     ? `${info.name}: waiting for live station data`
     : met
-      ? `${info.name}: IN RANGE — ${ev.reason}`
+      ? `${info.name}: IN RANGE — ${rangeReason}`
       : `${info.name}: within limits`
   const statusButton = (
     <>
