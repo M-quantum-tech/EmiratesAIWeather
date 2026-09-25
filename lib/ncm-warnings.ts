@@ -46,8 +46,11 @@ function classify(gust: number, precip: number, code: number): { level: WarnLeve
   else if (precip > 0) score += 6
   if (THUNDER.has(code)) score += 30
   else if (CONVECTIVE.has(code)) score += 16
-  if (FOG.has(code)) score += 12
+  if (FOG.has(code)) score += 20
   score = Math.min(100, Math.round(score))
+  // Fog / low visibility is a standalone NCM "Be Aware" (yellow) category and
+  // must surface even when wind and rain are calm — matching the NCM fog alert.
+  if (FOG.has(code)) score = Math.max(score, 18)
   let level: WarnLevel = "green"
   if (score >= 62) level = "red"
   else if (score >= 40) level = "orange"
