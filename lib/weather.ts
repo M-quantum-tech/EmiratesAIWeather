@@ -92,7 +92,11 @@ export type WeatherPayload = {
   daily: DailyReading[]
   air: AirQuality | null
   fetchedAt: string
-}
+  /** True when served from the stale cache because upstream was unavailable. */
+  stale?: boolean
+  /** Age (ms) of the stale payload, when `stale` is true. */
+  staleAgeMs?: number
+  }
 
 type Condition = { label: string; short: string; group: ConditionGroup }
 export type ConditionGroup =

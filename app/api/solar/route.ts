@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server"
 import type { SolarDay, SolarPayload } from "@/lib/weather"
+import { fetchWithRetry, readStale, writeStale } from "@/lib/upstream-cache"
 
 // Open-Meteo hourly irradiance fields. DNI is the beam component on a sun-tracking
 // surface; GHI (shortwave) is total on horizontal; diffuse is the scattered share;
@@ -42,10 +43,16 @@ export async function GET(request: NextRequest) {
   url.searchParams.set("timezone", "auto")
   url.searchParams.set("forecast_days", String(forecastDays))
 
+  const cacheKey = `solar:${latitude.toFixed(3)}:${longitude.toFixed(3)}:${forecastDays}`
+
   try {
-    const response = await fetch(url, { next: { revalidate: 180 } })
+    const response = await fetchWithRetry(url, { next: { revalidate: 180 } })
     if (!response.ok) {
       console.log("[v0] solar upstream failure:", response.status)
+      const stale = readStale<SolarPayload>(cacheKey)
+      if (stale) {
+        return Response.json({ ...stale.payload, stale: true, staleAgeMs: stale.ageMs })
+      }
       return Response.json({ error: "Solar service is unavailable right now." }, { status: 502 })
     }
 

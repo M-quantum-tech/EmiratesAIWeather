@@ -14,8 +14,17 @@ const FALLBACK: StationLocation = {
   longitude: 55.2708,
 }
 
-/** Live auto-refresh cadence — pulls a fresh reading every minute. */
-const REFRESH_MS = 60 * 1000
+/**
+ * Live auto-refresh cadence. Aligned to the 180s server-side cache window so each
+ * poll is served from cache instead of hitting Open-Meteo — this keeps the app
+ * within the free daily request quota that aggressive per-minute polling exhausts.
+ */
+const REFRESH_MS = 3 * 60 * 1000
+
+/** Round coordinates to ~1.1km so near-identical locations share one cache key. */
+function quantize(value: number) {
+  return Math.round(value * 100) / 100
+}
 
 async function fetcher(url: string) {
   const response = await fetch(url)
@@ -100,7 +109,9 @@ export function WeatherProvider({ children }: { children: ReactNode }) {
     locate()
   }, [locate])
 
-  const key = location ? `/api/weather?lat=${location.latitude}&lon=${location.longitude}&units=${units}` : null
+  const key = location
+    ? `/api/weather?lat=${quantize(location.latitude)}&lon=${quantize(location.longitude)}&units=${units}`
+    : null
   const { data, error, isLoading, isValidating, mutate } = useSWR<Omit<WeatherPayload, "location">>(key, fetcher, {
     refreshInterval: REFRESH_MS,
     keepPreviousData: true,

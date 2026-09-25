@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server"
 import type { AirQuality, Units, WeatherPayload } from "@/lib/weather"
+import { fetchWithRetry, readStale, writeStale } from "@/lib/upstream-cache"
 
 const CURRENT = [
   "temperature_2m",
@@ -102,14 +103,20 @@ export async function GET(request: NextRequest) {
   airUrl.searchParams.set("current", AIR)
   airUrl.searchParams.set("timezone", "auto")
 
+  const cacheKey = `weather:${latitude.toFixed(3)}:${longitude.toFixed(3)}:${units}:${model}`
+
   try {
     const [forecastResponse, airResponse] = await Promise.all([
-      fetch(forecastUrl, { next: { revalidate: 180 } }),
-      fetch(airUrl, { next: { revalidate: 600 } }),
+      fetchWithRetry(forecastUrl, { next: { revalidate: 180 } }),
+      fetchWithRetry(airUrl, { next: { revalidate: 600 } }),
     ])
 
     if (!forecastResponse.ok) {
       console.log("[v0] forecast upstream failure:", forecastResponse.status)
+      const stale = readStale<Omit<WeatherPayload, "location">>(cacheKey)
+      if (stale) {
+        return Response.json({ ...stale.payload, stale: true, staleAgeMs: stale.ageMs })
+      }
       return Response.json({ error: "Weather service is unavailable right now." }, { status: 502 })
     }
 
@@ -219,9 +226,14 @@ export async function GET(request: NextRequest) {
       fetchedAt: new Date().toISOString(),
     }
 
+    writeStale(cacheKey, payload)
     return Response.json(payload)
   } catch (error) {
     console.log("[v0] weather route error:", error instanceof Error ? error.message : error)
+    const stale = readStale<Omit<WeatherPayload, "location">>(cacheKey)
+    if (stale) {
+      return Response.json({ ...stale.payload, stale: true, staleAgeMs: stale.ageMs })
+    }
     return Response.json({ error: "Could not reach the weather network." }, { status: 502 })
   }
 }
