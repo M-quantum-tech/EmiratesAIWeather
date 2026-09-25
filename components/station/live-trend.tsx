@@ -75,6 +75,17 @@ const METRICS: { id: MetricKey; label: string; short: string; icon: typeof Therm
   { id: "dni", label: "Solar DNI", short: "Solar", icon: Sun },
 ]
 
+/**
+ * Live-trend line palette — soft, light tints tuned to read cleanly on the dark
+ * chassis without the heavy, saturated look. Shared by every metric tab so the
+ * legend, stat dots and scrub markers stay in sync.
+ */
+const TREND = {
+  primary: "oklch(0.83 0.1 74)",
+  secondary: "oklch(0.81 0.07 232)",
+  humidity: "oklch(0.85 0.07 190)",
+} as const
+
 const ALERT_DOT: Record<AlertLevel, string> = {
   green: "bg-alert-green",
   yellow: "bg-alert-yellow",
@@ -231,8 +242,8 @@ function buildView(
         tooltipHead: (i) => `${clockLabel(i)}${i === nowIndex ? " · live" : ""}`,
         projectionNote: nowIndex >= 0 ? "Solid = live · dashed = AI projection to midnight" : "AI-projected day",
         series: [
-          { label: "DNI · model", color: "var(--signal)", values, format: wm2 },
-          { label: "AI beam", color: "var(--accent)", values: aiValues, format: wm2 },
+          { label: "DNI · model", color: TREND.primary, values, format: wm2 },
+          { label: "AI beam", color: TREND.secondary, values: aiValues, format: wm2 },
         ],
         sunWindow: { sunrise: day.sunrise, sunset: day.sunset },
         extra: (i) => [
@@ -296,9 +307,9 @@ function buildView(
         tooltipHead,
         projectionNote: nowIndex >= 0 ? "Solid = live · dashed = AI projection to midnight" : "AI-projected day",
         series: [
-          { label: "Temp", color: "var(--signal)", values: temps, format: t },
-          { label: "Feels", color: "var(--accent)", values: feels, format: t },
-          { label: "Humidity", color: "oklch(0.78 0.13 185)", values: hum, format: pct },
+          { label: "Temp", color: TREND.primary, values: temps, format: t },
+          { label: "Feels", color: TREND.secondary, values: feels, format: t },
+          { label: "Humidity", color: TREND.humidity, values: hum, format: pct },
         ],
         stats: [
           { label: "Temperature", value: t(cur.temperature), sub: `peak ${t(Math.max(...temps))}` },
@@ -337,8 +348,8 @@ function buildView(
         tooltipHead,
         projectionNote: nowIndex >= 0 ? "Solid = live · dashed = AI projection to midnight" : "AI-projected day",
         series: [
-          { label: "Wind", color: "var(--signal)", values: wind, format: s },
-          { label: "Gusts", color: "var(--accent)", values: gust, format: s },
+          { label: "Wind", color: TREND.primary, values: wind, format: s },
+          { label: "Gusts", color: TREND.secondary, values: gust, format: s },
         ],
         stats: [
           { label: "Wind", value: s(spd(cur.windSpeed)), sub: compass(cur.windDirection) },
@@ -378,8 +389,8 @@ function buildView(
       tooltipHead,
       projectionNote: nowIndex >= 0 ? "Solid = live · dashed = AI projection to midnight" : "AI-projected day",
       series: [
-        { label: "Rain %", color: "var(--accent)", values: prob, format: pct },
-        { label: "Humidity", color: "var(--signal)", values: hum, format: pct },
+        { label: "Rain %", color: TREND.secondary, values: prob, format: pct },
+        { label: "Humidity", color: TREND.primary, values: hum, format: pct },
       ],
       bars: { label: "Cloud cover", color: "var(--muted-foreground)", values: cloud, format: pct, max: 100 },
       stats: [
@@ -460,8 +471,8 @@ function buildView(
       tooltipHead: (i) => `${dniWhen(i)}${Math.floor(i / 24) >= 7 ? " · extended" : ""}`,
       projectionNote,
       series: [
-        { label: "DNI · model", color: "var(--signal)", values: dni, format: wm2 },
-        { label: "AI beam", color: "var(--accent)", values: ai, format: wm2 },
+        { label: "DNI · model", color: TREND.primary, values: dni, format: wm2 },
+        { label: "AI beam", color: TREND.secondary, values: ai, format: wm2 },
       ],
       extra: (i) => [
         { label: "GHI (horizontal)", value: wm2(ghi[i]) },
@@ -504,8 +515,8 @@ function buildView(
       tooltipHead,
       projectionNote,
       series: [
-        { label: "Temp", color: "var(--signal)", values: temps, format: t },
-        { label: "Feels", color: "var(--accent)", values: feels, format: t },
+        { label: "Temp", color: TREND.primary, values: temps, format: t },
+        { label: "Feels", color: TREND.secondary, values: feels, format: t },
       ],
       extra: (i) => [{ label: "Hour", value: when14(i) }],
       stats: [
@@ -542,8 +553,8 @@ function buildView(
       tooltipHead,
       projectionNote,
       series: [
-        { label: "Wind", color: "var(--signal)", values: wind, format: s },
-        { label: "Gust", color: "var(--accent)", values: gust, format: s },
+        { label: "Wind", color: TREND.primary, values: wind, format: s },
+        { label: "Gust", color: TREND.secondary, values: gust, format: s },
       ],
       extra: (i) => [{ label: "Hour", value: when14(i) }],
       stats: [
@@ -580,8 +591,8 @@ function buildView(
     tooltipHead,
     projectionNote,
     series: [
-      { label: "Rain %", color: "var(--accent)", values: prob, format: pct },
-      { label: "Humidity", color: "var(--signal)", values: hum, format: pct },
+      { label: "Rain %", color: TREND.secondary, values: prob, format: pct },
+      { label: "Humidity", color: TREND.primary, values: hum, format: pct },
     ],
     bars: { label: "Cloud cover", color: "var(--muted-foreground)", values: cloud, format: pct, max: 100 },
     extra: (i) => [
@@ -1190,12 +1201,12 @@ function TrendChart({
       >
         <defs>
           <linearGradient id="live-trend-area" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="var(--signal)" stopOpacity="0.28" />
-            <stop offset="100%" stopColor="var(--signal)" stopOpacity="0" />
+            <stop offset="0%" stopColor={TREND.primary} stopOpacity="0.16" />
+            <stop offset="100%" stopColor={TREND.primary} stopOpacity="0" />
           </linearGradient>
           {/* soft neon bloom so the bright lines read vividly against the dark chassis */}
           <filter id="live-trend-glow" x="-10%" y="-10%" width="120%" height="120%">
-            <feGaussianBlur stdDeviation="2.4" result="blur" />
+            <feGaussianBlur stdDeviation="1.1" result="blur" />
             <feMerge>
               <feMergeNode in="blur" />
               <feMergeNode in="SourceGraphic" />
@@ -1267,7 +1278,7 @@ function TrendChart({
               d={segment(ys, 0, solidTo)}
               fill="none"
               stroke={series[si].color}
-              strokeWidth={si === 0 ? 3.5 : 3}
+              strokeWidth={si === 0 ? 2 : 1.75}
               strokeLinejoin="round"
               strokeLinecap="round"
               opacity={1}
@@ -1278,7 +1289,7 @@ function TrendChart({
                 d={segment(ys, solidTo, n - 1)}
                 fill="none"
                 stroke={series[si].color}
-                strokeWidth={si === 0 ? 3.5 : 3}
+                strokeWidth={si === 0 ? 2 : 1.75}
                 strokeDasharray="2 5"
                 strokeLinejoin="round"
                 strokeLinecap="round"

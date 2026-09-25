@@ -2,7 +2,7 @@ import { redirect } from "next/navigation"
 import Link from "next/link"
 import { ArrowLeft, Cpu } from "lucide-react"
 import { getSessionUser } from "@/lib/admin"
-import { getEscalationRules, getWindMonitor, getWindSource } from "@/lib/engineering"
+import { getEscalationRules, getTrendSources, getWindMonitor, getWindSource } from "@/lib/engineering"
 import { SiteNav } from "@/components/site-nav"
 import { EngineeringConsole } from "@/components/admin/engineering-console"
 
@@ -13,10 +13,11 @@ export default async function EngineeringPage() {
   if (!sessionUser) redirect("/sign-in?redirect=/admin/engineering")
   if (sessionUser.role !== "admin") redirect("/account")
 
-  const [rules, windMonitor, windSource] = await Promise.all([
+  const [rules, windMonitor, windSource, trendSources] = await Promise.all([
     getEscalationRules(),
     getWindMonitor(),
     getWindSource(),
+    getTrendSources(),
   ])
 
   return (
@@ -46,6 +47,7 @@ export default async function EngineeringPage() {
             initialRules={rules}
             initialWindMonitor={windMonitor}
             initialWindSource={windSource}
+            initialTrendSources={trendSources}
           />
         </div>
       </section>

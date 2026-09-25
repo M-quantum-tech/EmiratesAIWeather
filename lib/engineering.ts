@@ -2,12 +2,15 @@ import { db } from "@/lib/db"
 import { sql } from "drizzle-orm"
 import {
   DEFAULT_RULES,
+  DEFAULT_TREND_SOURCES,
   DEFAULT_WIND_MONITOR,
   DEFAULT_WIND_SOURCE,
   parseRules,
+  parseTrendSources,
   parseWindMonitor,
   parseWindSource,
   type EscalationRule,
+  type TrendSourceGroup,
   type WindMonitorTier,
   type WindSourceConfig,
 } from "@/lib/escalation"
@@ -16,6 +19,7 @@ import { isAdmin } from "@/lib/admin"
 const ESCALATION_KEY = "escalation_rules"
 const WIND_MONITOR_KEY = "wind_monitor_tiers"
 const WIND_SOURCE_KEY = "wind_source_config"
+const TREND_SOURCES_KEY = "live_trend_sources"
 
 /**
  * Idempotently create the key/value settings table used by the Engineering
@@ -123,6 +127,35 @@ export async function saveWindSource(value: unknown): Promise<WindSourceConfig> 
   await db.execute(sql`
     INSERT INTO "app_setting" ("key", "value", "updatedAt")
     VALUES (${WIND_SOURCE_KEY}, ${json}::jsonb, now())
+    ON CONFLICT ("key") DO UPDATE SET "value" = ${json}::jsonb, "updatedAt" = now()
+  `)
+  return clean
+}
+
+/** Effective Live Trend + AI Projection source map — persisted overrides, or empty panels. */
+export async function getTrendSources(): Promise<TrendSourceGroup[]> {
+  try {
+    await ensureSettingsTable()
+    const res = await db.execute(sql`SELECT value FROM "app_setting" WHERE key = ${TREND_SOURCES_KEY}`)
+    const row = (res.rows as { value: unknown }[])[0]
+    if (!row) return DEFAULT_TREND_SOURCES
+    const parsed = parseTrendSources(row.value)
+    return parsed ?? DEFAULT_TREND_SOURCES
+  } catch {
+    return DEFAULT_TREND_SOURCES
+  }
+}
+
+/** Persist the Live Trend + AI Projection source map — admin only. */
+export async function saveTrendSources(value: unknown): Promise<TrendSourceGroup[]> {
+  if (!(await isAdmin())) throw new Error("Forbidden")
+  const clean = parseTrendSources(value)
+  if (!clean) throw new Error("Invalid trend sources")
+  await ensureSettingsTable()
+  const json = JSON.stringify(clean)
+  await db.execute(sql`
+    INSERT INTO "app_setting" ("key", "value", "updatedAt")
+    VALUES (${TREND_SOURCES_KEY}, ${json}::jsonb, now())
     ON CONFLICT ("key") DO UPDATE SET "value" = ${json}::jsonb, "updatedAt" = now()
   `)
   return clean
