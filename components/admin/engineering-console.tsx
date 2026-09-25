@@ -1,7 +1,8 @@
 "use client"
 
-import { useState } from "react"
-import { BellRing, Check, Cloud, LineChart, Link2, Plus, RotateCcw, Save, Square, Trash2, Volume2, Wind } from "lucide-react"
+import { useMemo, useState } from "react"
+import useSWR from "swr"
+import { BellRing, Check, Cloud, ExternalLink, LineChart, Link2, Plus, RotateCcw, Save, Square, Trash2, Volume2, Wind } from "lucide-react"
 import {
   DEFAULT_CLOUD_SOURCE,
   DEFAULT_RULES,
@@ -14,12 +15,14 @@ import {
   SITE_META,
   SITE_METRIC_KEYS,
   SITE_METRIC_META,
+  evaluateSite,
   type CloudSourceConfig,
   type EscalationRule,
   type MetricRange,
   type SiteConfig,
   type SiteKey,
   type SiteMetricKey,
+  type SiteReadings,
   type SourceLink,
   type TierDeadbands,
   type TrendSourceGroup,
@@ -27,8 +30,19 @@ import {
   type WindSourceConfig,
 } from "@/lib/escalation"
 import { playBuzzerTest, stopBuzzerTest } from "@/lib/escalation-buzzer"
-import type { AlertLevel } from "@/lib/weather"
+import { ALERT_RADII_KM, offsetLocation, type AlertLevel, type WeatherPayload } from "@/lib/weather"
+import { computeSiteReadings } from "@/lib/site-readings"
+import { useWeather } from "@/components/weather/weather-provider"
 import { cn } from "@/lib/utils"
+
+async function weatherFetcher(url: string): Promise<WeatherPayload> {
+  const response = await fetch(url)
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}))
+    throw new Error(body.error ?? "Reading failed.")
+  }
+  return response.json()
+}
 
 const LEVEL_META: Record<AlertLevel, { name: string; dot: string; ring: string; text: string }> = {
   green: { name: "Green", dot: "bg-alert-green", ring: "border-alert-green/40 hover:bg-alert-green/10", text: "text-alert-green" },
@@ -58,6 +72,38 @@ export function EngineeringConsole({
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [testing, setTesting] = useState<AlertLevel | null>(null)
+
+  // Live wiring — identical to the warning banner: the on-site station reading plus a
+  // 50 km upwind ("far site") sample, both pushed through the shared computeSiteReadings
+  // helper. Every tier's At-site / Far-site button is evaluated against these numbers with
+  // the exact same evaluateSite() used on the public banner, so a range edited here lights
+  // the same indicator here and on the station.
+  const { payload } = useWeather()
+  const farPoint = useMemo(
+    () =>
+      payload
+        ? offsetLocation(
+            payload.location.latitude,
+            payload.location.longitude,
+            payload.current.windDirection,
+            ALERT_RADII_KM.yellow,
+          )
+        : null,
+    [payload],
+  )
+  const farKey =
+    farPoint && payload
+      ? `/api/weather?lat=${farPoint.lat.toFixed(3)}&lon=${farPoint.lon.toFixed(3)}&units=${payload.units}`
+      : null
+  const { data: farData } = useSWR(farKey, weatherFetcher, {
+    refreshInterval: 60 * 1000,
+    keepPreviousData: true,
+  })
+  const siteReadings = useMemo<Record<SiteKey, SiteReadings>>(
+    () => computeSiteReadings(payload?.units ?? "metric", payload?.current, farData?.current),
+    [payload?.units, payload?.current, farData?.current],
+  )
+  const live = payload != null
 
   function update(level: AlertLevel, field: "label" | "km" | "triggers", value: string) {
     setSaved(false)
@@ -373,6 +419,8 @@ export function EngineeringConsole({
                         siteKey={siteKey}
                         site={rule[siteKey]}
                         accent={meta.text}
+                        readings={siteReadings[siteKey]}
+                        live={live}
                         onKm={(v) => updateSiteKm(rule.level, siteKey, v)}
                         onSource={(patch) => updateSiteSource(rule.level, siteKey, patch)}
                         onRangeChange={(metric, i, patch) => updateRange(rule.level, siteKey, metric, i, patch)}
@@ -1007,6 +1055,8 @@ function SitePanel({
   siteKey,
   site,
   accent,
+  readings,
+  live,
   onKm,
   onSource,
   onRangeChange,
@@ -1016,6 +1066,8 @@ function SitePanel({
   siteKey: SiteKey
   site: SiteConfig
   accent: string
+  readings: SiteReadings
+  live: boolean
   onKm: (v: string) => void
   onSource: (patch: Partial<SourceLink>) => void
   onRangeChange: (metric: SiteMetricKey, index: number, patch: Partial<MetricRange>) => void
@@ -1023,12 +1075,84 @@ function SitePanel({
   onRangeRemove: (metric: SiteMetricKey, index: number) => void
 }) {
   const info = SITE_META[siteKey]
+  // Live status — same wiring as the public banner: green until a configured range is met,
+  // then red. Only reflects a real condition when live station data is present.
+  const ev = live ? evaluateSite(site, readings) : { met: false, reason: null }
+  const met = live && ev.met
+  const statusTitle = !live
+    ? `${info.name}: waiting for live station data`
+    : met
+      ? `${info.name}: IN RANGE — ${ev.reason}`
+      : `${info.name}: within limits`
+  const statusButton = (
+    <>
+      <span
+        className={cn(
+          "h-4 w-4 shrink-0 rounded-full",
+          !live ? "bg-muted-foreground/40" : met ? "bg-alert-red tier-blink" : "bg-alert-green",
+        )}
+        aria-hidden="true"
+      />
+      <span className="flex min-w-0 flex-col text-left leading-tight">
+        <span
+          className={cn(
+            "font-mono text-sm font-bold uppercase tracking-wide",
+            met ? "text-alert-red" : live ? "text-alert-green" : "text-muted-foreground",
+          )}
+        >
+          {siteKey === "atSite" ? "At site" : "Far site"}
+        </span>
+        <span className="truncate text-[0.6875rem] font-medium text-muted-foreground">
+          {!live ? "Awaiting data" : met ? "In range" : "Clear"}
+        </span>
+      </span>
+      {site.source.url ? (
+        <ExternalLink className="ml-auto h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      ) : null}
+    </>
+  )
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border/70 bg-background/40 p-3">
       <div className="flex flex-col gap-0.5">
         <span className={cn("font-mono text-xs font-bold uppercase tracking-wide", accent)}>{info.name}</span>
         <span className="text-[0.6875rem] leading-snug text-muted-foreground/80">{info.hint}</span>
       </div>
+
+      {/* Live status indicator — bigger, roomy tap target that switches green → red */}
+      {site.source.url ? (
+        <a
+          href={site.source.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={statusTitle}
+          aria-label={statusTitle}
+          className={cn(
+            "flex items-center gap-3 rounded-lg border px-4 py-3 transition-colors",
+            met
+              ? "border-alert-red/50 bg-alert-red/15"
+              : live
+                ? "border-alert-green/40 bg-alert-green/10 hover:bg-alert-green/15"
+                : "border-border bg-background/60",
+          )}
+        >
+          {statusButton}
+        </a>
+      ) : (
+        <div
+          title={statusTitle}
+          aria-label={statusTitle}
+          className={cn(
+            "flex items-center gap-3 rounded-lg border px-4 py-3",
+            met
+              ? "border-alert-red/50 bg-alert-red/15"
+              : live
+                ? "border-alert-green/40 bg-alert-green/10"
+                : "border-border bg-background/60",
+          )}
+        >
+          {statusButton}
+        </div>
+      )}
 
       <label className="flex flex-col gap-1">
         <span className="label-caps text-muted-foreground">Detection band (KM range)</span>

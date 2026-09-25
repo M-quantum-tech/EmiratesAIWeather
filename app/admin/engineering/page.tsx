@@ -5,6 +5,7 @@ import { requireAdmin } from "@/lib/admin"
 import { getCloudSource, getEscalationRules, getTrendSources, getWindMonitor, getWindSource } from "@/lib/engineering"
 import { SiteNav } from "@/components/site-nav"
 import { EngineeringConsole } from "@/components/admin/engineering-console"
+import { WeatherProvider } from "@/components/weather/weather-provider"
 
 export const metadata = { title: "Engineering console — EmiratesAIWeather" }
 
@@ -42,13 +43,15 @@ export default async function EngineeringPage() {
         </p>
 
         <div className="mt-8">
-          <EngineeringConsole
-            initialRules={rules}
-            initialWindMonitor={windMonitor}
-            initialWindSource={windSource}
-            initialCloudSource={cloudSource}
-            initialTrendSources={trendSources}
-          />
+          <WeatherProvider>
+            <EngineeringConsole
+              initialRules={rules}
+              initialWindMonitor={windMonitor}
+              initialWindSource={windSource}
+              initialCloudSource={cloudSource}
+              initialTrendSources={trendSources}
+            />
+          </WeatherProvider>
         </div>
       </section>
     </main>
