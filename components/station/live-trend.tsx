@@ -125,7 +125,11 @@ type Series = {
   format: (v: number) => string
   /** When true, the line renders fully dotted — the Open-Meteo AI-prediction overlay. */
   dashed?: boolean
-}
+  /** Lines sharing a group id share one auto-scaled range, so same-unit series compare truthfully. */
+  group?: string
+  /** When "right", the line is scaled to the view's secondary (right-hand) axis instead of its own range. */
+  axis?: "left" | "right"
+  }
 
 type Stat = { label: string; value: string; sub: string }
 
@@ -159,6 +163,11 @@ type View = {
   scrubComment?: (i: number) => string
   /** Optional bar layer drawn behind the lines (e.g. on-site cloud cover %). */
   bars?: { label: string; color: string; values: number[]; format: (v: number) => string; max: number }
+  /**
+   * Optional right-hand secondary axis (e.g. 0–100% for sky transmittance + cloud
+   * cover) so percentage layers get a proper labelled range beside the primary unit.
+   */
+  rightAxis?: { label: string; lo: number; hi: number; format: (v: number) => string }
   /**
    * Optional filled area layer drawn behind everything — NCM Ghaith trajectory
    * cloud-cover deck rendered as a soft gray/silver fill (0–100%).
@@ -282,10 +291,11 @@ function buildView(
         tooltipHead: (i) => `${clockLabel(i)}${i === nowIndex ? " · live" : ""}`,
         projectionNote: nowIndex >= 0 ? "Solid = NCM mirror · dotted = Open-Meteo AI prediction" : "AI-projected day",
         series: [
-          { label: "DNI · model", color: TREND.primary, values, format: wm2 },
-          { label: "Transmittance", color: TREND.humidity, values: trans, format: (v) => `${Math.round(v)}%` },
-          { label: "AI beam", color: TREND.secondary, values: aiValues, format: wm2, dashed: true },
+          { label: "DNI · model", color: TREND.primary, values, format: wm2, group: "wm2" },
+          { label: "Transmittance", color: TREND.humidity, values: trans, format: (v) => `${Math.round(v)}%`, axis: "right" },
+          { label: "AI beam", color: TREND.secondary, values: aiValues, format: wm2, dashed: true, group: "wm2" },
         ],
+        rightAxis: { label: "%", lo: 0, hi: 100, format: (v) => `${Math.round(v)}%` },
         cloudArea: { label: "Clouds (NCM trajectory)", color: "var(--muted-foreground)", values: cloudCover, format: (v) => `${Math.round(v)}%`, max: 100 },
         bars: { label: "Precip (NCM hail)", color: "oklch(0.62 0.17 250)", values: precip, format: precipFmt, max: precipMax },
         sunWindow: { sunrise: day.sunrise, sunset: day.sunset },
@@ -873,7 +883,10 @@ export function LiveTrend() {
               )}
             </div>
             <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-              {view.projectionNote} · Y-axis auto-scaled to {view.series[0].label} · each line on its own range
+              {view.projectionNote}
+              {view.rightAxis
+                ? ` · left axis ${view.series.find((s) => s.axis !== "right")?.label ?? view.series[0].label} · right axis ${view.rightAxis.label}`
+                : ` · Y-axis auto-scaled to ${view.series[0].label} · each line on its own range`}
             </span>
           </div>
 
@@ -1197,8 +1210,15 @@ const W = 1000
 const H = 360
 const TOP = 30
 const BOT = 34
-/** Left gutter (in viewBox units) reserved for the auto-scaled Y-axis labels. */
-const AXIS_PAD = 8
+  /** Left gutter (in viewBox units) reserved for the auto-scaled Y-axis labels. */
+ const AXIS_PAD = 30
+
+/** Compact numeric axis tick — units live in the legend/footer, so labels stay short and unclipped. */
+function tickLabel(v: number): string {
+  const r = Math.round(v)
+  if (Math.abs(r) >= 1000) return `${(r / 1000).toFixed(r % 1000 === 0 ? 0 : 1)}k`
+  return String(r)
+}
 
 /** Round a raw interval up to a friendly 1 / 2 / 5 × 10ⁿ step for axis ticks. */
 function niceStep(raw: number): number {
@@ -1237,30 +1257,54 @@ function TrendChart({
   active: number | null
   onActive: (i: number | null) => void
 }) {
-  const { n, series, xLabels, boundary, nowIndex, bars, cloudArea } = view
+  const { n, series, xLabels, boundary, nowIndex, bars, cloudArea, rightAxis } = view
+  const hasRight = !!rightAxis && series.some((s) => s.axis === "right")
+  // Leave a matching gutter on the right when a secondary axis is shown.
   const plotL = AXIS_PAD
-  const plotW = W - AXIS_PAD
+  const plotR = hasRight ? W - AXIS_PAD : W
+  const plotW = plotR - plotL
   const px = (i: number) => (n <= 1 ? plotL : plotL + (i / (n - 1)) * plotW)
   // Half the gap between samples, used to size the cloud-cover bars.
   const barHalf = n <= 1 ? plotW / 2 : (plotW / (n - 1)) * 0.34
 
-  // Auto-scale each series to friendly rounded bounds, so every line sits inside a
-  // clean human-readable range instead of hugging the canvas edges.
-  const bounds = series.map((serie) => niceBounds(serie.values))
+  // Resolve each series' scale. Lines sharing a `group` share one auto-scaled range
+  // (so same-unit series — e.g. DNI model vs AI beam — compare truthfully), while
+  // right-axis lines borrow the view's fixed secondary range. Everything else keeps
+  // its own friendly rounded bounds so it fills the canvas cleanly.
+  const groupBounds = new Map<string, { lo: number; hi: number }>()
+  for (const g of new Set(series.filter((s) => s.group).map((s) => s.group as string))) {
+    const vals = series.filter((s) => s.group === g).flatMap((s) => s.values)
+    groupBounds.set(g, niceBounds(vals))
+  }
+  const bounds = series.map((serie) => {
+    if (serie.axis === "right" && rightAxis) return { lo: rightAxis.lo, hi: rightAxis.hi }
+    if (serie.group && groupBounds.has(serie.group)) return groupBounds.get(serie.group) as { lo: number; hi: number }
+    return niceBounds(serie.values)
+  })
   const normed = series.map((serie, si) => {
     const { lo, hi } = bounds[si]
     const span = hi - lo || 1
     return serie.values.map((v) => TOP + (1 - (v - lo) / span) * (H - TOP - BOT))
   })
 
-  // Y-axis ticks derived from the primary series' auto range, labelled in its own unit.
+  // Left Y-axis ticks — labelled in the primary (left-axis) series' own unit.
   const gridFracs = [0, 0.25, 0.5, 0.75, 1]
-  const primaryBounds = bounds[0]
+  const primaryLeft = series.findIndex((s) => s.axis !== "right")
+  const primaryBounds = bounds[primaryLeft < 0 ? 0 : primaryLeft]
+  const primaryFmt = series[primaryLeft < 0 ? 0 : primaryLeft].format
   const axisTicks = gridFracs.map((f) => ({
     f,
     y: TOP + f * (H - TOP - BOT),
     value: primaryBounds.hi - f * (primaryBounds.hi - primaryBounds.lo),
   }))
+  // Right Y-axis ticks — the secondary percentage range (transmittance + cloud deck).
+  const rightTicks = hasRight
+    ? gridFracs.map((f) => ({
+        f,
+        y: TOP + f * (H - TOP - BOT),
+        value: rightAxis!.hi - f * (rightAxis!.hi - rightAxis!.lo),
+      }))
+    : []
 
   const segment = (ys: number[], from: number, to: number) => {
     if (to <= from) return ""
@@ -1316,7 +1360,7 @@ function TrendChart({
           />
         ))}
 
-        {/* Y-axis tick labels — auto-scaled to the primary series' own range/unit */}
+        {/* Left Y-axis tick labels — auto-scaled to the primary left-axis series' unit */}
         {axisTicks.map((tick) => (
           <text
             key={tick.f}
@@ -1326,15 +1370,32 @@ function TrendChart({
             className="fill-muted-foreground font-mono"
             style={{ fontSize: "11px" }}
           >
-            {series[0].format(tick.value)}
+            {tickLabel(tick.value)}
+          </text>
+        ))}
+
+        {/* Right Y-axis tick labels — secondary percentage range (transmittance + cloud deck) */}
+        {rightTicks.map((tick) => (
+          <text
+            key={`r-${tick.f}`}
+            x={plotR + 3}
+            y={Math.min(H - 2, Math.max(9, tick.y + 3))}
+            textAnchor="start"
+            className="fill-muted-foreground font-mono"
+            style={{ fontSize: "11px" }}
+          >
+            {rightAxis!.format(tick.value)}
           </text>
         ))}
 
         {/* NCM Ghaith #trajectory cloud deck — soft gray/silver filled area, drawn behind everything */}
         {cloudArea
           ? (() => {
+              // Share the right-hand % axis when present so the cloud deck reads against
+              // the same 0–100% scale as transmittance; otherwise fall back to its own max.
+              const cloudHi = hasRight ? rightAxis!.hi : cloudArea.max
               const ys = cloudArea.values.map(
-                (v) => H - BOT - (Math.min(Math.max(v, 0), cloudArea.max) / cloudArea.max) * (H - TOP - BOT),
+                (v) => H - BOT - (Math.min(Math.max(v, 0), cloudHi) / cloudHi) * (H - TOP - BOT),
               )
               if (ys.length < 2) return null
               const top = ys.map((y, i) => `${i === 0 ? "M" : "L"}${px(i).toFixed(1)} ${y.toFixed(1)}`).join(" ")
