@@ -600,6 +600,46 @@ export function parseTrendSources(value: unknown): TrendSourceGroup[] | null {
   )
 }
 
+/**
+ * A single external data feed the AI prediction engine reads from. Operators
+ * register any number of these in the Engineering Console — each carries a
+ * label, an http(s) link and an on/off toggle so a source can be staged and
+ * enabled later. Every enabled source is passed into the AI context, so the
+ * assistant blends multiple feeds (NCM, Open-Meteo, satellite, custom) instead
+ * of a single hard-coded source.
+ */
+export type AiPredictionSource = {
+  /** Display name shown in the console and cited to the AI. */
+  label: string
+  /** Absolute http(s) link to the feed. */
+  url: string
+  /** When false the source is staged but excluded from AI prediction. */
+  enabled: boolean
+}
+
+/** Default multi-source pool for AI prediction — official UAE + open feeds. */
+export const DEFAULT_AI_SOURCES: AiPredictionSource[] = [
+  { label: "NCM Official Warnings", url: "https://www.ncm.gov.ae/maps-warnings?lang=en", enabled: true },
+  { label: "NCM Ghaith · COSMO-UAE", url: "https://ghaith.ncm.gov.ae/?lang=en", enabled: true },
+  { label: "Open-Meteo Forecast API", url: "https://api.open-meteo.com/v1/forecast", enabled: true },
+]
+
+/** Validate an unknown value into a clean AiPredictionSource[] (max 24). */
+export function parseAiSources(value: unknown): AiPredictionSource[] | null {
+  if (!Array.isArray(value)) return null
+  const out: AiPredictionSource[] = []
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue
+    const r = raw as Record<string, unknown>
+    const label = String(r.label ?? "").slice(0, 80).trim()
+    const url = sanitizeSourceUrl(r.url)
+    if (!label && !url) continue
+    out.push({ label: label || url!, url: url ?? "", enabled: r.enabled !== false })
+    if (out.length >= 24) break
+  }
+  return out
+}
+
 /** Shape of one buzzer tone profile. */
 export type BuzzerTone = {
   pattern: number[]

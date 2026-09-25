@@ -2,8 +2,9 @@
 
 import { useMemo, useState } from "react"
 import useSWR from "swr"
-import { BellRing, Check, Cloud, ExternalLink, FlaskConical, LineChart, Link2, Plus, RotateCcw, Save, Square, Trash2, Volume2, Wind } from "lucide-react"
+import { BellRing, Check, Cloud, Database, ExternalLink, FlaskConical, LineChart, Link2, Plus, Power, RotateCcw, Save, Square, Trash2, Volume2, Wind } from "lucide-react"
 import {
+  DEFAULT_AI_SOURCES,
   DEFAULT_CLOUD_SOURCE,
   DEFAULT_RULES,
   DEFAULT_SITE_CONFIG,
@@ -17,6 +18,7 @@ import {
   SITE_METRIC_META,
   evaluateSite,
   evaluateWindMonitor,
+  type AiPredictionSource,
   type CloudSourceConfig,
   type EscalationRule,
   type MetricRange,
@@ -76,12 +78,14 @@ export function EngineeringConsole({
   initialWindSource,
   initialCloudSource,
   initialTrendSources,
+  initialAiSources,
 }: {
   initialRules: EscalationRule[]
   initialWindMonitor: WindMonitorTier[]
   initialWindSource: WindSourceConfig
   initialCloudSource: CloudSourceConfig
   initialTrendSources: TrendSourceGroup[]
+  initialAiSources: AiPredictionSource[]
 }) {
   const [rules, setRules] = useState<EscalationRule[]>(initialRules)
   const [saving, setSaving] = useState(false)
@@ -370,6 +374,9 @@ export function EngineeringConsole({
 
       {/* Live Trend + AI Projection reference sources (per panel) */}
       <TrendSourceEditor initialGroups={initialTrendSources} />
+
+      {/* AI prediction multi-source data pool */}
+      <AiSourceEditor initialSources={initialAiSources} />
 
       {/* Editable escalation rules */}
       <section className="rounded-xl border border-border bg-card p-5">
@@ -1189,6 +1196,179 @@ function TrendSourceEditor({ initialGroups }: { initialGroups: TrendSourceGroup[
           </div>
         ))}
       </div>
+    </section>
+  )
+}
+
+function AiSourceEditor({ initialSources }: { initialSources: AiPredictionSource[] }) {
+  const [sources, setSources] = useState<AiPredictionSource[]>(initialSources.map((s) => ({ ...s })))
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const enabledCount = sources.filter((s) => s.enabled).length
+
+  function update(index: number, patch: Partial<AiPredictionSource>) {
+    setSaved(false)
+    setSources((prev) => prev.map((s, i) => (i === index ? { ...s, ...patch } : s)))
+  }
+
+  function add() {
+    setSaved(false)
+    setSources((prev) => [...prev, { label: "", url: "", enabled: true }])
+  }
+
+  function remove(index: number) {
+    setSaved(false)
+    setSources((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  function resetDefaults() {
+    setSaved(false)
+    setError(null)
+    setSources(DEFAULT_AI_SOURCES.map((s) => ({ ...s })))
+  }
+
+  async function save() {
+    setSaving(true)
+    setError(null)
+    try {
+      const res = await fetch("/api/ai-sources", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sources }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error ?? "Save failed")
+      setSources((data.sources as AiPredictionSource[]).map((s) => ({ ...s })))
+      setSaved(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-border bg-card p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Database className="h-4 w-4 text-accent" aria-hidden="true" />
+          <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-foreground">
+            AI prediction data sources
+          </h2>
+          <span className="rounded-md border border-border bg-background/60 px-2 py-0.5 font-mono text-[0.6875rem] text-muted-foreground">
+            {enabledCount}/{sources.length} active
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={resetDefaults}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-background/60"
+          >
+            <RotateCcw className="h-3 w-3" aria-hidden="true" />
+            Reset to defaults
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={saving}
+            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
+          >
+            {saved ? <Check className="h-3 w-3" aria-hidden="true" /> : <Save className="h-3 w-3" aria-hidden="true" />}
+            {saving ? "Saving…" : saved ? "Saved" : "Save sources"}
+          </button>
+        </div>
+      </div>
+      <p className="mt-2 text-sm text-muted-foreground">
+        Register every feed the AI prediction engine should read from — NCM warnings, Ghaith COSMO-UAE, Open-Meteo, a
+        satellite feed or any custom link. Add a source now and toggle it on when you want it in the mix; only sources
+        switched <strong className="text-foreground">on</strong> are blended into the assistant&apos;s live context and cited in its answers.
+      </p>
+      {error ? <p className="mt-2 text-sm text-alert-red">{error}</p> : null}
+
+      <div className="mt-4 flex flex-col gap-2">
+        {sources.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-border bg-background/30 px-3 py-6 text-center text-xs text-muted-foreground/70">
+            No sources yet — add a feed for the AI to read from.
+          </p>
+        ) : (
+          sources.map((src, i) => (
+            <div
+              key={i}
+              className={cn(
+                "flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center",
+                src.enabled ? "border-accent/40 bg-background/40" : "border-border/70 bg-background/20 opacity-70",
+              )}
+            >
+              <button
+                type="button"
+                onClick={() => update(i, { enabled: !src.enabled })}
+                className={cn(
+                  "inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-2 font-mono text-[0.6875rem] uppercase tracking-wider transition-colors",
+                  src.enabled
+                    ? "border-signal/50 bg-signal/15 text-signal"
+                    : "border-border bg-background text-muted-foreground hover:bg-background/60",
+                )}
+                aria-pressed={src.enabled}
+                aria-label={src.enabled ? "Disable source" : "Enable source"}
+              >
+                <Power className="h-3.5 w-3.5" aria-hidden="true" />
+                {src.enabled ? "On" : "Off"}
+              </button>
+              <input
+                type="text"
+                value={src.label}
+                placeholder="Source name"
+                onChange={(e) => update(i, { label: e.target.value })}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent sm:w-1/3"
+              />
+              <span className="relative flex-1">
+                <Link2 className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                <input
+                  type="url"
+                  inputMode="url"
+                  value={src.url}
+                  placeholder="https://link-to-feed"
+                  onChange={(e) => update(i, { url: e.target.value })}
+                  className="w-full rounded-md border border-border bg-background py-2 pl-8 pr-3 text-sm text-foreground outline-none focus:border-accent"
+                />
+              </span>
+              <div className="flex shrink-0 items-center gap-1">
+                {src.url ? (
+                  <a
+                    href={src.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="grid h-9 w-9 place-items-center rounded-md border border-border text-muted-foreground transition-colors hover:border-accent/50 hover:text-accent"
+                    aria-label={`Open ${src.label || "source"} in a new tab`}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                  </a>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => remove(i)}
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-border text-muted-foreground transition-colors hover:border-alert-red/50 hover:text-alert-red"
+                  aria-label="Remove source"
+                >
+                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <button
+        type="button"
+        onClick={add}
+        className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-background/60"
+      >
+        <Plus className="h-3 w-3" aria-hidden="true" />
+        Add source
+      </button>
     </section>
   )
 }

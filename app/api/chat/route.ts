@@ -5,11 +5,21 @@ import {
   toUIMessageStream,
   type UIMessage,
 } from "ai"
+import { getAiSources } from "@/lib/engineering"
 
 export const maxDuration = 30
 
 export async function POST(req: Request) {
   const { messages, context }: { messages: UIMessage[]; context?: string } = await req.json()
+
+  // Blend every operator-enabled prediction feed into the AI's grounding context.
+  const sources = await getAiSources()
+  const enabled = sources.filter((s) => s.enabled && s.url)
+  const sourceBlock = enabled.length
+    ? `Data sources you are grounded on (blend and cite these by name when relevant):\n${enabled
+        .map((s) => `- ${s.label}: ${s.url}`)
+        .join("\n")}`
+    : ""
 
   const result = streamText({
     model: "openai/gpt-4.1-mini",
@@ -19,7 +29,8 @@ export async function POST(req: Request) {
       "You can also offer light, encouraging wellness, hydration, and sun-safety guidance when relevant.",
       "Be concise, warm, and practical. Use short paragraphs or bullet points. Never invent precise numbers you were not given — if you lack data, say so and suggest checking the live dashboard.",
       context ? `Live weather context for the user's current location:\n${context}` : "No live weather context is available right now.",
-    ].join("\n\n"),
+      sourceBlock,
+    ].filter(Boolean).join("\n\n"),
     messages: await convertToModelMessages(messages),
   })
 

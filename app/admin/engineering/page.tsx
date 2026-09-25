@@ -2,7 +2,7 @@ import { redirect } from "next/navigation"
 import Link from "next/link"
 import { ArrowLeft, Cpu } from "lucide-react"
 import { requireAdmin } from "@/lib/admin"
-import { getCloudSource, getEscalationRules, getTrendSources, getWindMonitor, getWindSource } from "@/lib/engineering"
+import { getAiSources, getCloudSource, getEscalationRules, getTrendSources, getWindMonitor, getWindSource } from "@/lib/engineering"
 import { SiteNav } from "@/components/site-nav"
 import { EngineeringConsole } from "@/components/admin/engineering-console"
 import { WeatherProvider } from "@/components/weather/weather-provider"
@@ -12,12 +12,13 @@ export const metadata = { title: "Engineering console — EmiratesAIWeather" }
 export default async function EngineeringPage() {
   await requireAdmin("/admin/engineering")
 
-  const [rules, windMonitor, windSource, cloudSource, trendSources] = await Promise.all([
+  const [rules, windMonitor, windSource, cloudSource, trendSources, aiSources] = await Promise.all([
     getEscalationRules(),
     getWindMonitor(),
     getWindSource(),
     getCloudSource(),
     getTrendSources(),
+    getAiSources(),
   ])
 
   return (
@@ -50,6 +51,7 @@ export default async function EngineeringPage() {
               initialWindSource={windSource}
               initialCloudSource={cloudSource}
               initialTrendSources={trendSources}
+              initialAiSources={aiSources}
             />
           </WeatherProvider>
         </div>
