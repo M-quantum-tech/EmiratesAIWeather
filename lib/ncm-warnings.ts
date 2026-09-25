@@ -34,7 +34,19 @@ function fmt(d: Date): string {
   return `${p(d.getDate())}/${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
-function classify(gust: number, precip: number, code: number): { level: WarnLevel; score: number } {
+// NCM issues its fog "Be Aware" warning from forecast horizontal visibility, not
+// from a weather symbol. Open-Meteo reports visibility in metres. These are the
+// standard aviation/met fog thresholds NCM's alerts track.
+const VIS_DENSE_FOG = 1000 // < 1 km: dense fog
+const VIS_FOG = 2000 // < 2 km: fog
+const VIS_MIST = 5000 // < 5 km: mist / reduced horizontal visibility
+
+/** True when the hour meets NCM's fog criteria (by symbol or by visibility). */
+function isFoggy(code: number, visibility: number): boolean {
+  return FOG.has(code) || (Number.isFinite(visibility) && visibility > 0 && visibility < VIS_MIST)
+}
+
+function classify(gust: number, precip: number, code: number, visibility: number): { level: WarnLevel; score: number } {
   let score = 0
   if (gust >= 90) score += 60
   else if (gust >= 65) score += 42
@@ -50,7 +62,12 @@ function classify(gust: number, precip: number, code: number): { level: WarnLeve
   score = Math.min(100, Math.round(score))
   // Fog / low visibility is a standalone NCM "Be Aware" (yellow) category and
   // must surface even when wind and rain are calm — matching the NCM fog alert.
-  if (FOG.has(code)) score = Math.max(score, 18)
+  // Scale the floor by how low the forecast horizontal visibility drops.
+  if (isFoggy(code, visibility)) {
+    const vis = Number.isFinite(visibility) && visibility > 0 ? visibility : VIS_FOG
+    const foFloor = vis < VIS_DENSE_FOG ? 26 : vis < VIS_FOG ? 20 : 16
+    score = Math.max(score, foFloor)
+  }
   let level: WarnLevel = "green"
   if (score >= 62) level = "red"
   else if (score >= 40) level = "orange"
@@ -58,16 +75,22 @@ function classify(gust: number, precip: number, code: number): { level: WarnLeve
   return { level, score }
 }
 
-function describe(gust: number, precip: number, code: number): { hazards: string[]; headline: string; description: string } {
+function describe(
+  gust: number,
+  precip: number,
+  code: number,
+  visibility: number,
+): { hazards: string[]; headline: string; description: string } {
   const hazards: string[] = []
   const windy = gust >= 40
   const rainy = precip > 0 || CONVECTIVE.has(code)
-  const foggy = FOG.has(code)
+  const foggy = isFoggy(code, visibility)
+  const denseFog = foggy && Number.isFinite(visibility) && visibility > 0 && visibility < VIS_DENSE_FOG
 
   if (rainy) hazards.push(THUNDER.has(code) ? "Thunder rain" : "Rain")
   if (CONVECTIVE.has(code)) hazards.push("Cumulonimbus clouds")
   if (windy) hazards.push("Dust or Sand", "Wind")
-  if (foggy) hazards.push("Fog / low visibility")
+  if (foggy) hazards.push(denseFog ? "Dense fog / very low visibility" : "Fog / low visibility")
 
   let description = "Fair weather with no significant hazards expected."
   if (rainy && windy)
@@ -107,7 +130,7 @@ export type WarningFrames = {
 export async function fetchWarningFrames(signal?: AbortSignal, hours = 24): Promise<WarningFrames> {
   const lat = EMIRATES.map((e) => e.lat).join(",")
   const lon = EMIRATES.map((e) => e.lon).join(",")
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=wind_gusts_10m,wind_speed_10m,precipitation,weather_code&wind_speed_unit=kmh&timezone=Asia%2FDubai&forecast_days=2`
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=wind_gusts_10m,wind_speed_10m,precipitation,weather_code,visibility&wind_speed_unit=kmh&timezone=Asia%2FDubai&forecast_days=2`
   const res = await fetch(url, { signal })
   if (!res.ok) throw new Error("warnings fetch failed")
   const json = await res.json()
@@ -131,9 +154,10 @@ export async function fetchWarningFrames(signal?: AbortSignal, hours = 24): Prom
       const gust = Number(h.wind_gusts_10m?.[j] ?? h.wind_speed_10m?.[j] ?? 0)
       const precip = Number(h.precipitation?.[j] ?? 0)
       const code = Number(h.weather_code?.[j] ?? 0)
-      const { level, score } = classify(gust, precip, code)
+      const visibility = Number(h.visibility?.[j] ?? Number.NaN)
+      const { level, score } = classify(gust, precip, code, visibility)
       if (level === "green") return
-      const { hazards, headline, description } = describe(gust, precip, code)
+      const { hazards, headline, description } = describe(gust, precip, code, visibility)
       frame.push({ name: e.name, level, score, gust, precip, hazards, headline, description, from: fromStr, to: toStr })
     })
     frame.sort((a, b) => b.score - a.score)
