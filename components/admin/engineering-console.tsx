@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react"
 import useSWR from "swr"
-import { BellRing, Check, Cloud, ExternalLink, LineChart, Link2, Plus, RotateCcw, Save, Square, Trash2, Volume2, Wind } from "lucide-react"
+import { BellRing, Check, Cloud, ExternalLink, FlaskConical, LineChart, Link2, Plus, RotateCcw, Save, Square, Trash2, Volume2, Wind } from "lucide-react"
 import {
   DEFAULT_CLOUD_SOURCE,
   DEFAULT_RULES,
@@ -45,11 +45,26 @@ async function weatherFetcher(url: string): Promise<WeatherPayload> {
   return response.json()
 }
 
-const LEVEL_META: Record<AlertLevel, { name: string; dot: string; ring: string; text: string }> = {
-  green: { name: "Green", dot: "bg-alert-green", ring: "border-alert-green/40 hover:bg-alert-green/10", text: "text-alert-green" },
-  yellow: { name: "Yellow", dot: "bg-alert-yellow", ring: "border-alert-yellow/40 hover:bg-alert-yellow/10", text: "text-alert-yellow" },
-  orange: { name: "Orange", dot: "bg-alert-orange", ring: "border-alert-orange/40 hover:bg-alert-orange/10", text: "text-alert-orange" },
-  red: { name: "Red", dot: "bg-alert-red", ring: "border-alert-red/50 hover:bg-alert-red/10", text: "text-alert-red" },
+const LEVEL_META: Record<
+  AlertLevel,
+  { name: string; dot: string; ring: string; text: string; ringActive: string; border: string; fill: string }
+> = {
+  green: { name: "Green", dot: "bg-alert-green", ring: "border-alert-green/40 hover:bg-alert-green/10", text: "text-alert-green", ringActive: "ring-alert-green/50", border: "border-alert-green/40", fill: "bg-alert-green/10" },
+  yellow: { name: "Yellow", dot: "bg-alert-yellow", ring: "border-alert-yellow/40 hover:bg-alert-yellow/10", text: "text-alert-yellow", ringActive: "ring-alert-yellow/50", border: "border-alert-yellow/40", fill: "bg-alert-yellow/10" },
+  orange: { name: "Orange", dot: "bg-alert-orange", ring: "border-alert-orange/40 hover:bg-alert-orange/10", text: "text-alert-orange", ringActive: "ring-alert-orange/60", border: "border-alert-orange/50", fill: "bg-alert-orange/15" },
+  red: { name: "Red", dot: "bg-alert-red", ring: "border-alert-red/50 hover:bg-alert-red/10", text: "text-alert-red", ringActive: "ring-alert-red/60", border: "border-alert-red/50", fill: "bg-alert-red/15" },
+}
+
+/**
+ * Representative test readings per tier for the Simulator. Values are chosen to land in each
+ * level's severity band so operators can preview the exact green → yellow → orange → red
+ * cascade the live stations would produce, without waiting for real weather.
+ */
+const SIM_PRESETS: Record<AlertLevel, SiteReadings> = {
+  green: { windMs: 6, gustMs: 9, rainMm: 0, cloudPct: 20 },
+  yellow: { windMs: 15, gustMs: 20, rainMm: 3, cloudPct: 55 },
+  orange: { windMs: 20, gustMs: 26, rainMm: 12, cloudPct: 70 },
+  red: { windMs: 25, gustMs: 32, rainMm: 32, cloudPct: 90 },
 }
 
 let uid = 0
@@ -73,6 +88,11 @@ export function EngineeringConsole({
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [testing, setTesting] = useState<AlertLevel | null>(null)
+  // Simulator — when a level is active the At-site / Far-site indicators and the active tier
+  // are driven from these test readings instead of the live stations, so operators can rehearse
+  // the full green → red escalation on demand. null = live data.
+  const [simLevel, setSimLevel] = useState<AlertLevel | null>(null)
+  const [simValues, setSimValues] = useState<SiteReadings>({ ...SIM_PRESETS.green })
 
   // Live wiring — identical to the warning banner: the on-site station reading plus a
   // 50 km upwind ("far site") sample, both pushed through the shared computeSiteReadings
@@ -105,12 +125,20 @@ export function EngineeringConsole({
     [payload?.units, payload?.current, farData?.current],
   )
   const live = payload != null
-  // Wind Event Monitor trigger — evaluated against the live on-site wind through the
+  // When the Simulator is active, the test readings replace the live station numbers for both
+  // sites so every downstream evaluator (evaluateSite + evaluateWindMonitor) lights the same
+  // indicators it would from real data. Otherwise the live readings flow through untouched.
+  const effectiveReadings = useMemo<Record<SiteKey, SiteReadings>>(
+    () => (simLevel ? { atSite: { ...simValues }, farSite: { ...simValues } } : siteReadings),
+    [simLevel, simValues, siteReadings],
+  )
+  const effectiveLive = live || simLevel != null
+  // Wind Event Monitor trigger — evaluated against the effective on-site wind through the
   // same shared helper the banner uses. Below every alerting threshold it stays green;
   // once the wind reaches a tier it lights the At-site button red alongside the range check.
   const windEval = useMemo(
-    () => evaluateWindMonitor(siteReadings.atSite.windMs, initialWindMonitor),
-    [siteReadings.atSite.windMs, initialWindMonitor],
+    () => evaluateWindMonitor(effectiveReadings.atSite.windMs, initialWindMonitor),
+    [effectiveReadings.atSite.windMs, initialWindMonitor],
   )
 
   function update(level: AlertLevel, field: "label" | "km" | "triggers", value: string) {
@@ -260,6 +288,19 @@ export function EngineeringConsole({
     }
   }
 
+  function simulate(level: AlertLevel) {
+    setSimLevel(level)
+    setSimValues({ ...SIM_PRESETS[level] })
+  }
+
+  function updateSimValue(key: keyof SiteReadings, value: string) {
+    const n = value === "" ? 0 : Number(value)
+    if (!Number.isFinite(n) || n < 0) return
+    // Editing a value implies a simulation is running — default to green if none is active yet.
+    setSimLevel((cur) => cur ?? "green")
+    setSimValues((prev) => ({ ...prev, [key]: n }))
+  }
+
   function test(level: AlertLevel) {
     playBuzzerTest(level)
     setTesting(level)
@@ -363,11 +404,86 @@ export function EngineeringConsole({
         </p>
         {error ? <p className="mt-2 text-sm text-alert-red">{error}</p> : null}
 
+        {/* Simulator — drive the At-site / Far-site indicators and the active tier from test readings */}
+        <div className="mt-4 rounded-lg border border-border/70 bg-background/30 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <FlaskConical className="h-4 w-4 text-accent" aria-hidden="true" />
+              <span className="label-caps text-foreground">Simulator</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSimLevel(null)}
+              disabled={simLevel === null}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-background/60 disabled:opacity-50"
+            >
+              <RotateCcw className="h-3 w-3" aria-hidden="true" />
+              Back to live
+            </button>
+          </div>
+          <p className="mt-1.5 text-xs text-muted-foreground/80">
+            Push test readings through the exact same wiring as the live stations. Pick a level to watch the At-site
+            and Far-site indicators and the active tier switch from green up to red, or type your own values in the row
+            below.
+          </p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-4">
+            {ESCALATION_LEVELS.map((level) => {
+              const meta = LEVEL_META[level]
+              const active = simLevel === level
+              return (
+                <button
+                  key={level}
+                  type="button"
+                  onClick={() => simulate(level)}
+                  aria-pressed={active}
+                  aria-label={`Simulate ${meta.name}`}
+                  className={cn(
+                    "flex items-center gap-2 rounded-lg border bg-background/40 px-3 py-2.5 text-left transition-colors",
+                    meta.ring,
+                    active && cn("ring-2 ring-inset", meta.ringActive),
+                  )}
+                >
+                  <span
+                    className={cn("h-3 w-3 rounded-full", meta.dot, active && level !== "green" && "tier-blink")}
+                    aria-hidden="true"
+                  />
+                  <span className={cn("font-mono text-xs font-bold uppercase tracking-wide", meta.text)}>
+                    {meta.name}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+          <div className="mt-3 flex flex-col gap-1.5">
+            <span className="label-caps text-muted-foreground">Test live values — applied to both sites</span>
+            <div className="grid gap-3 sm:grid-cols-4">
+              <NumberField label="Wind speed" unit="m/s" value={simValues.windMs} onChange={(v) => updateSimValue("windMs", v)} />
+              <NumberField label="Wind gust" unit="m/s" value={simValues.gustMs} onChange={(v) => updateSimValue("gustMs", v)} />
+              <NumberField label="Rainfall" unit="mm" value={simValues.rainMm} onChange={(v) => updateSimValue("rainMm", v)} />
+              <NumberField label="Cloud cover" unit="%" value={simValues.cloudPct} onChange={(v) => updateSimValue("cloudPct", v)} />
+            </div>
+          </div>
+          {simLevel ? (
+            <p className={cn("mt-2 text-xs font-medium", LEVEL_META[simLevel].text)}>
+              Simulating {LEVEL_META[simLevel].name} — the indicators below reflect these test readings, not the live
+              stations. Press &ldquo;Back to live&rdquo; to resume real data.
+            </p>
+          ) : (
+            <p className="mt-2 text-xs text-muted-foreground/70">Live — indicators reflect real station readings.</p>
+          )}
+        </div>
+
         <div className="mt-4 flex flex-col gap-4">
           {rules.map((rule) => {
             const meta = LEVEL_META[rule.level]
             return (
-              <div key={rule.level} className="rounded-lg border border-border/70 bg-background/30 p-4">
+              <div
+                key={rule.level}
+                className={cn(
+                  "rounded-lg border border-border/70 bg-background/30 p-4 transition-shadow",
+                  simLevel === rule.level && cn("ring-2 ring-inset", meta.ringActive),
+                )}
+              >
                 <div className="flex items-center gap-2">
                   <span className={cn("h-3 w-3 rounded-full", meta.dot)} aria-hidden="true" />
                   <span className={cn("font-mono text-xs font-bold uppercase tracking-wide", meta.text)}>{meta.name}</span>
@@ -382,7 +498,7 @@ export function EngineeringConsole({
                   <span className="label-caps text-muted-foreground">
                     Dead bands · active hysteresis — tier holds until readings drop past these margins
                   </span>
-                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="grid gap-3 sm:grid-cols-3">
                     <NumberField
                       label="Wind speed"
                       unit="m/s"
@@ -396,18 +512,16 @@ export function EngineeringConsole({
                       onChange={(v) => updateDeadband(rule.level, "gustMs", v)}
                     />
                     <NumberField
-                      label="Wind direction"
-                      unit="°"
-                      value={rule.deadbands.directionDeg}
-                      onChange={(v) => updateDeadband(rule.level, "directionDeg", v)}
-                    />
-                    <NumberField
                       label="Rainfall"
                       unit="mm"
                       value={rule.deadbands.rainMm}
                       onChange={(v) => updateDeadband(rule.level, "rainMm", v)}
                     />
                   </div>
+                  <p className="text-xs text-muted-foreground/70">
+                    Wind direction is not set here — it is recorded live and shown on the Wind Direction &amp; Speed
+                    panel, read from whichever site reports the highest wind speed.
+                  </p>
                 </div>
                 {/* At site / Far site detection panels */}
                 <div className="mt-4 flex flex-col gap-2">
@@ -427,8 +541,9 @@ export function EngineeringConsole({
                         siteKey={siteKey}
                         site={rule[siteKey]}
                         accent={meta.text}
-                        readings={siteReadings[siteKey]}
-                        live={live}
+                        readings={effectiveReadings[siteKey]}
+                        live={effectiveLive}
+                        simLevel={simLevel}
                         windMet={siteKey === "atSite" && windEval.met}
                         windReason={siteKey === "atSite" ? windEval.reason : null}
                         onKm={(v) => updateSiteKm(rule.level, siteKey, v)}
@@ -1067,6 +1182,7 @@ function SitePanel({
   accent,
   readings,
   live,
+  simLevel,
   windMet,
   windReason,
   onKm,
@@ -1080,6 +1196,7 @@ function SitePanel({
   accent: string
   readings: SiteReadings
   live: boolean
+  simLevel: AlertLevel | null
   windMet: boolean
   windReason: string | null
   onKm: (v: string) => void
@@ -1096,17 +1213,31 @@ function SitePanel({
   // reflects the same three-condition wiring (at-site range · far-site range · wind event).
   const rangeReason = ev.met ? ev.reason : windMet ? windReason : null
   const met = live && (ev.met || windMet)
-  const statusTitle = !live
-    ? `${info.name}: waiting for live station data`
-    : met
-      ? `${info.name}: IN RANGE — ${rangeReason}`
-      : `${info.name}: within limits`
+  // Tone drives the indicator colour. Under simulation it follows the chosen tier so the
+  // operator sees the full green → yellow → orange → red cascade; otherwise it stays the
+  // live binary (green until a range trips, then red).
+  const simActive = simLevel != null
+  const simName = simLevel ? LEVEL_META[simLevel].name : ""
+  const tone: AlertLevel | "off" = !live ? "off" : simLevel ?? (met ? "red" : "green")
+  const toneMeta = tone === "off" ? null : LEVEL_META[tone]
+  const blink = tone === "yellow" || tone === "orange" || tone === "red"
+  const containerTone = toneMeta ? cn(toneMeta.border, toneMeta.fill) : "border-border bg-background/60"
+  const statusWord = tone === "off" ? "Awaiting data" : simActive ? `Simulated ${simName}` : met ? "In range" : "Clear"
+  const statusTitle =
+    tone === "off"
+      ? `${info.name}: waiting for live station data`
+      : simActive
+        ? `${info.name}: SIMULATED ${simName}${rangeReason ? ` — ${rangeReason}` : ""}`
+        : met
+          ? `${info.name}: IN RANGE — ${rangeReason}`
+          : `${info.name}: within limits`
   const statusButton = (
     <>
       <span
         className={cn(
           "h-4 w-4 shrink-0 rounded-full",
-          !live ? "bg-muted-foreground/40" : met ? "bg-alert-red tier-blink" : "bg-alert-green",
+          toneMeta ? toneMeta.dot : "bg-muted-foreground/40",
+          blink && "tier-blink",
         )}
         aria-hidden="true"
       />
@@ -1114,14 +1245,12 @@ function SitePanel({
         <span
           className={cn(
             "font-mono text-sm font-bold uppercase tracking-wide",
-            met ? "text-alert-red" : live ? "text-alert-green" : "text-muted-foreground",
+            toneMeta ? toneMeta.text : "text-muted-foreground",
           )}
         >
           {siteKey === "atSite" ? "At site" : "Far site"}
         </span>
-        <span className="truncate text-[0.6875rem] font-medium text-muted-foreground">
-          {!live ? "Awaiting data" : met ? "In range" : "Clear"}
-        </span>
+        <span className="truncate text-[0.6875rem] font-medium text-muted-foreground">{statusWord}</span>
       </span>
       {site.source.url ? (
         <ExternalLink className="ml-auto h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
