@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server"
 import type { SolarDay, SolarPayload } from "@/lib/weather"
 import { fetchWithRetry, readStale, writeStale } from "@/lib/upstream-cache"
+import { buildMirrorSolar } from "@/lib/ncm-mirror"
 
 // Open-Meteo hourly irradiance fields. DNI is the beam component on a sun-tracking
 // surface; GHI (shortwave) is total on horizontal; diffuse is the scattered share;
@@ -53,7 +54,7 @@ export async function GET(request: NextRequest) {
       if (stale) {
         return Response.json({ ...stale.payload, stale: true, staleAgeMs: stale.ageMs })
       }
-      return Response.json({ error: "Solar service is unavailable right now." }, { status: 502 })
+      return Response.json(buildMirrorSolar(latitude, longitude, forecastDays))
     }
 
     const data = await response.json()

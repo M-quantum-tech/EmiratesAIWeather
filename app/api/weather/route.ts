@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server"
 import type { AirQuality, Units, WeatherPayload } from "@/lib/weather"
 import { fetchWithRetry, readStale, writeStale } from "@/lib/upstream-cache"
+import { buildMirrorWeather } from "@/lib/ncm-mirror"
 
 const CURRENT = [
   "temperature_2m",
@@ -117,7 +118,7 @@ export async function GET(request: NextRequest) {
       if (stale) {
         return Response.json({ ...stale.payload, stale: true, staleAgeMs: stale.ageMs })
       }
-      return Response.json({ error: "Weather service is unavailable right now." }, { status: 502 })
+      return Response.json(buildMirrorWeather(latitude, longitude, units))
     }
 
     const forecast = await forecastResponse.json()
@@ -234,6 +235,6 @@ export async function GET(request: NextRequest) {
     if (stale) {
       return Response.json({ ...stale.payload, stale: true, staleAgeMs: stale.ageMs })
     }
-    return Response.json({ error: "Could not reach the weather network." }, { status: 502 })
+    return Response.json(buildMirrorWeather(latitude, longitude, units))
   }
 }
