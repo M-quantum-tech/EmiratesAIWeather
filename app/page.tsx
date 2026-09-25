@@ -7,7 +7,6 @@ import { HourlyBreakdown } from "@/components/forecast/hourly-breakdown"
 import { NcmSources } from "@/components/weather/ncm-sources"
 import { Webcams } from "@/components/weather/webcams"
 import { StationDashboard } from "@/components/station/station-dashboard"
-import { LiveTrend } from "@/components/station/live-trend"
 import { RegisterPanel } from "@/components/players/register-panel"
 import { AdUnit } from "@/components/station/ad-unit"
 import { ChessGame } from "@/components/games/chess-game"
@@ -46,15 +45,10 @@ export default function Page() {
               <AlertBanner />
             </div>
 
-            {/* 1 · Live trend + AI projection — normalized multi-metric forecast (24H / 14-day)
-                    with predictive timing + measures, that drives the breakdown below */}
+            {/* 1 · 24-hour forecast breakdown — hour-by-hour temperature & feels-like,
+                    precipitation, humidity & sky, full-day DNI and a wind & gusts grid,
+                    all driven by the selected day's live NCM-mirrored data. */}
             <section id="forecast" className="mt-6 scroll-mt-6">
-              <LiveTrend />
-            </section>
-
-            {/* 3 · The selected day's 24-hour breakdown. Scrub the trend or tap a day
-                    in the panel above to drive this hour-by-hour panel. */}
-            <section id="hourly" className="mt-6 scroll-mt-6">
               <HourlyBreakdown />
             </section>
 
