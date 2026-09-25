@@ -159,6 +159,11 @@ type View = {
   scrubComment?: (i: number) => string
   /** Optional bar layer drawn behind the lines (e.g. on-site cloud cover %). */
   bars?: { label: string; color: string; values: number[]; format: (v: number) => string; max: number }
+  /**
+   * Optional filled area layer drawn behind everything — NCM Ghaith trajectory
+   * cloud-cover deck rendered as a soft gray/silver fill (0–100%).
+   */
+  cloudArea?: { label: string; color: string; values: number[]; format: (v: number) => string; max: number }
 }
 
 /** Format an Open-Meteo local ISO timestamp (…THH:MM) to a friendly clock label. */
@@ -245,6 +250,14 @@ function buildView(
       const refl = day.hourlyReflectivity.slice(0, 24)
       const atten = day.hourlyAttenuation.slice(0, 24)
       const n = values.length
+      // NCM Ghaith mirror layers aligned hour-for-hour with the beam curve:
+      //  • #trajectory cloud-cover deck  → soft gray/silver filled area (0–100%)
+      //  • #hail precipitation           → blue bars anchored to the baseline
+      const dniHours: HourlyReading[] = (payload.hourlyByDay?.[selectedDay] ?? payload.hourly ?? []).slice(0, 24)
+      const cloudCover = dniHours.map((h) => h.cloudCover)
+      const precip = dniHours.map((h) => (isMetric ? h.precipitation * 25.4 : h.precipitation))
+      const precipMax = Math.max(...precip, isMetric ? 1 : 0.04)
+      const precipFmt = (v: number) => (isMetric ? `${v.toFixed(1)} mm` : `${v.toFixed(2)} in`)
       const xLabels = values.map((_, i) => (i % 3 === 0 ? String(i).padStart(2, "0") : ""))
       const nowIndex = selectedDay === 0 ? payload.currentHourIndex : -1
       const boundary = nowIndex >= 0 ? nowIndex : n - 1
@@ -273,6 +286,8 @@ function buildView(
           { label: "Transmittance", color: TREND.humidity, values: trans, format: (v) => `${Math.round(v)}%` },
           { label: "AI beam", color: TREND.secondary, values: aiValues, format: wm2, dashed: true },
         ],
+        cloudArea: { label: "Clouds (NCM trajectory)", color: "var(--muted-foreground)", values: cloudCover, format: (v) => `${Math.round(v)}%`, max: 100 },
+        bars: { label: "Precip (NCM hail)", color: "oklch(0.62 0.17 250)", values: precip, format: precipFmt, max: precipMax },
         sunWindow: { sunrise: day.sunrise, sunset: day.sunset },
         extra: (i) => [
           { label: "GHI (horizontal)", value: wm2(ghiValues[i]) },
@@ -838,6 +853,18 @@ export function LiveTrend() {
                   {serie.label}
                 </span>
               ))}
+              {view.cloudArea ? (
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block h-2 w-4 rounded-sm" style={{ background: view.cloudArea.color, opacity: 0.35 }} />
+                  {view.cloudArea.label}
+                </span>
+              ) : null}
+              {view.bars ? (
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block h-2 w-2 rounded-sm" style={{ background: view.bars.color }} />
+                  {view.bars.label}
+                </span>
+              ) : null}
               {view.series.some((serie) => serie.dashed) ? null : (
                 <span className="flex items-center gap-1.5">
                   <span className="inline-block h-0 w-4 border-t-2 border-dashed border-muted-foreground" />
@@ -1210,7 +1237,7 @@ function TrendChart({
   active: number | null
   onActive: (i: number | null) => void
 }) {
-  const { n, series, xLabels, boundary, nowIndex, bars } = view
+  const { n, series, xLabels, boundary, nowIndex, bars, cloudArea } = view
   const plotL = AXIS_PAD
   const plotW = W - AXIS_PAD
   const px = (i: number) => (n <= 1 ? plotL : plotL + (i / (n - 1)) * plotW)
@@ -1302,6 +1329,33 @@ function TrendChart({
             {series[0].format(tick.value)}
           </text>
         ))}
+
+        {/* NCM Ghaith #trajectory cloud deck — soft gray/silver filled area, drawn behind everything */}
+        {cloudArea
+          ? (() => {
+              const ys = cloudArea.values.map(
+                (v) => H - BOT - (Math.min(Math.max(v, 0), cloudArea.max) / cloudArea.max) * (H - TOP - BOT),
+              )
+              if (ys.length < 2) return null
+              const top = ys.map((y, i) => `${i === 0 ? "M" : "L"}${px(i).toFixed(1)} ${y.toFixed(1)}`).join(" ")
+              const area = `${top} L${px(n - 1).toFixed(1)} ${(H - BOT).toFixed(1)} L${px(0).toFixed(1)} ${(H - BOT).toFixed(1)} Z`
+              return (
+                <>
+                  <path d={area} fill={cloudArea.color} opacity={0.14} />
+                  <path
+                    d={top}
+                    fill="none"
+                    stroke={cloudArea.color}
+                    strokeWidth={1.5}
+                    strokeLinejoin="round"
+                    strokeLinecap="round"
+                    opacity={0.5}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                </>
+              )
+            })()
+          : null}
 
         {/* optional bar layer (e.g. on-site cloud cover %) drawn behind the lines */}
         {bars
