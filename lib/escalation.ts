@@ -195,6 +195,54 @@ export function parseWindSource(value: unknown): WindSourceConfig | null {
   return { label: label || DEFAULT_WIND_SOURCE.label, url: url ?? DEFAULT_WIND_SOURCE.url }
 }
 
+/**
+ * The four Live Trend + AI Projection panels. Each can carry any number of
+ * reference-source links that the Engineering Console assigns now or leaves
+ * ready to fill in future — mirroring the escalation data-source pattern.
+ */
+export const TREND_METRIC_KEYS = ["comfort", "wind", "sky", "dni"] as const
+export type TrendMetricKey = (typeof TREND_METRIC_KEYS)[number]
+
+export const TREND_METRIC_LABELS: Record<TrendMetricKey, string> = {
+  comfort: "Temperature & comfort",
+  wind: "Wind & air",
+  sky: "Sky & rainfall",
+  dni: "Solar DNI",
+}
+
+/** One Live Trend panel and the reference feeds assigned behind it. */
+export type TrendSourceGroup = {
+  key: TrendMetricKey
+  /** Display label for the panel (kept in sync from TREND_METRIC_LABELS). */
+  label: string
+  /** Reference-source links — each optionally carries a live http(s) link. */
+  links: SourceLink[]
+}
+
+/** Default Live Trend source map — one empty group per panel, ready to assign. */
+export const DEFAULT_TREND_SOURCES: TrendSourceGroup[] = TREND_METRIC_KEYS.map((key) => ({
+  key,
+  label: TREND_METRIC_LABELS[key],
+  links: [],
+}))
+
+/** Validate an unknown value into a clean TrendSourceGroup[] (always all 4 panels). */
+export function parseTrendSources(value: unknown): TrendSourceGroup[] | null {
+  if (!Array.isArray(value)) return null
+  const byKey = new Map<TrendMetricKey, TrendSourceGroup>()
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue
+    const r = raw as Record<string, unknown>
+    const key = r.key as TrendMetricKey
+    if (!TREND_METRIC_KEYS.includes(key)) continue
+    byKey.set(key, { key, label: TREND_METRIC_LABELS[key], links: parseSourceLinks(r.links) })
+  }
+  // Always return every panel in a stable order, filling gaps with empties.
+  return TREND_METRIC_KEYS.map(
+    (key) => byKey.get(key) ?? { key, label: TREND_METRIC_LABELS[key], links: [] },
+  )
+}
+
 /** Shape of one buzzer tone profile. */
 export type BuzzerTone = {
   pattern: number[]

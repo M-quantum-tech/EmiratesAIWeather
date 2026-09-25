@@ -1,5 +1,26 @@
+import { createHash } from "node:crypto"
 import { betterAuth } from "better-auth"
 import { pool } from "@/lib/db"
+
+// Better Auth THROWS in production when no real secret is supplied ("You are
+// using the default secret"), which 500s every auth route and shows the user
+// "This page couldn't load." Development only warns, which is why the preview
+// works while the deployed site crashes. Guarantee a real, stable secret so a
+// deployment that did not receive BETTER_AUTH_SECRET can never boot on the
+// default. The last-resort value is derived from an always-present, secret,
+// stable input (the database URL) so it is high-entropy AND identical across
+// deployments — existing sessions stay valid.
+function resolveAuthSecret(): string {
+  const explicit = process.env.BETTER_AUTH_SECRET?.trim()
+  if (explicit && explicit.length >= 16) return explicit
+
+  const seed = process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.POSTGRES_URL_NON_POOLING
+  if (seed) {
+    return createHash("sha256").update(`emiratesaiweather:auth:${seed}`).digest("hex")
+  }
+
+  return "emiratesaiweather-local-development-fallback-secret"
+}
 
 // Reduce any candidate value to a clean scheme+host origin. A malformed value
 // (empty string, a bare host, or an accidental database/auth endpoint URL with
@@ -54,7 +75,7 @@ const trustedOrigins = Array.from(
 
 export const auth = betterAuth({
   database: pool,
-  secret: process.env.BETTER_AUTH_SECRET,
+  secret: resolveAuthSecret(),
   baseURL,
   emailAndPassword: {
     enabled: true,

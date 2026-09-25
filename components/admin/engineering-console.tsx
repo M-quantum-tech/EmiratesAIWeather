@@ -1,14 +1,16 @@
 "use client"
 
 import { useState } from "react"
-import { BellRing, Check, Link2, Plus, RotateCcw, Save, Square, Trash2, Volume2, Wind } from "lucide-react"
+import { BellRing, Check, LineChart, Link2, Plus, RotateCcw, Save, Square, Trash2, Volume2, Wind } from "lucide-react"
 import {
   DEFAULT_RULES,
+  DEFAULT_TREND_SOURCES,
   DEFAULT_WIND_MONITOR,
   DEFAULT_WIND_SOURCE,
   ESCALATION_LEVELS,
   type EscalationRule,
   type SourceLink,
+  type TrendSourceGroup,
   type WindMonitorTier,
   type WindSourceConfig,
 } from "@/lib/escalation"
@@ -30,10 +32,12 @@ export function EngineeringConsole({
   initialRules,
   initialWindMonitor,
   initialWindSource,
+  initialTrendSources,
 }: {
   initialRules: EscalationRule[]
   initialWindMonitor: WindMonitorTier[]
   initialWindSource: WindSourceConfig
+  initialTrendSources: TrendSourceGroup[]
 }) {
   const [rules, setRules] = useState<EscalationRule[]>(initialRules)
   const [saving, setSaving] = useState(false)
@@ -165,6 +169,9 @@ export function EngineeringConsole({
 
       {/* Wind speed & gust source link (NCM COSMO-UAE wind) */}
       <WindSourceEditor initialSource={initialWindSource} />
+
+      {/* Live Trend + AI Projection reference sources (per panel) */}
+      <TrendSourceEditor initialGroups={initialTrendSources} />
 
       {/* Editable escalation rules */}
       <section className="rounded-xl border border-border bg-card p-5">
@@ -544,6 +551,154 @@ function WindSourceEditor({ initialSource }: { initialSource: WindSourceConfig }
             />
           </span>
         </label>
+      </div>
+    </section>
+  )
+}
+
+function TrendSourceEditor({ initialGroups }: { initialGroups: TrendSourceGroup[] }) {
+  const [groups, setGroups] = useState<TrendSourceGroup[]>(
+    initialGroups.map((g) => ({ ...g, links: g.links.map((l) => ({ ...l })) })),
+  )
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  function updateLink(key: string, index: number, patch: Partial<SourceLink>) {
+    setSaved(false)
+    setGroups((prev) =>
+      prev.map((g) =>
+        g.key === key ? { ...g, links: g.links.map((l, i) => (i === index ? { ...l, ...patch } : l)) } : g,
+      ),
+    )
+  }
+
+  function addLink(key: string) {
+    setSaved(false)
+    setGroups((prev) => prev.map((g) => (g.key === key ? { ...g, links: [...g.links, { label: "", url: "" }] } : g)))
+  }
+
+  function removeLink(key: string, index: number) {
+    setSaved(false)
+    setGroups((prev) => prev.map((g) => (g.key === key ? { ...g, links: g.links.filter((_, i) => i !== index) } : g)))
+  }
+
+  function resetDefaults() {
+    setSaved(false)
+    setError(null)
+    setGroups(DEFAULT_TREND_SOURCES.map((g) => ({ ...g, links: g.links.map((l) => ({ ...l })) })))
+  }
+
+  async function save() {
+    setSaving(true)
+    setError(null)
+    try {
+      const res = await fetch("/api/trend-sources", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ groups }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error ?? "Save failed")
+      setGroups((data.groups as TrendSourceGroup[]).map((g) => ({ ...g, links: g.links.map((l) => ({ ...l })) })))
+      setSaved(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-border bg-card p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <LineChart className="h-4 w-4 text-accent" aria-hidden="true" />
+          <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-foreground">
+            Live Trend + AI Projection sources
+          </h2>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={resetDefaults}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-background/60"
+          >
+            <RotateCcw className="h-3 w-3" aria-hidden="true" />
+            Reset to defaults
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={saving}
+            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
+          >
+            {saved ? <Check className="h-3 w-3" aria-hidden="true" /> : <Save className="h-3 w-3" aria-hidden="true" />}
+            {saving ? "Saving…" : saved ? "Saved" : "Save sources"}
+          </button>
+        </div>
+      </div>
+      <p className="mt-2 text-sm text-muted-foreground">
+        Assign the reference feeds behind each Live Trend panel — Temperature &amp; comfort, Wind &amp; air, Sky &amp;
+        rainfall and Solar DNI. Add as many source rows as you need now, or leave rows ready to assign links in future.
+        Paste a link and it renders as a live, clickable source.
+      </p>
+      {error ? <p className="mt-2 text-sm text-alert-red">{error}</p> : null}
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        {groups.map((group) => (
+          <div key={group.key} className="flex flex-col rounded-lg border border-border/70 bg-background/30 p-4">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-mono text-xs font-bold uppercase tracking-wide text-foreground">{group.label}</span>
+              <button
+                type="button"
+                onClick={() => addLink(group.key)}
+                className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[0.6875rem] font-medium text-muted-foreground transition-colors hover:bg-background/60"
+              >
+                <Plus className="h-3 w-3" aria-hidden="true" />
+                Add link
+              </button>
+            </div>
+            {group.links.length === 0 ? (
+              <p className="mt-3 text-xs text-muted-foreground/70">No sources yet — add a row to assign later.</p>
+            ) : (
+              <div className="mt-3 flex flex-col gap-2">
+                {group.links.map((src, i) => (
+                  <div key={i} className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <input
+                      type="text"
+                      value={src.label}
+                      placeholder="Source name"
+                      onChange={(e) => updateLink(group.key, i, { label: e.target.value })}
+                      className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent sm:w-2/5"
+                    />
+                    <div className="flex flex-1 items-center gap-2">
+                      <span className="relative flex-1">
+                        <Link2 className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                        <input
+                          type="url"
+                          inputMode="url"
+                          value={src.url ?? ""}
+                          placeholder="https://link-to-feed (optional)"
+                          onChange={(e) => updateLink(group.key, i, { url: e.target.value })}
+                          className="w-full rounded-md border border-border bg-background py-2 pl-8 pr-3 text-sm text-foreground outline-none focus:border-accent"
+                        />
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => removeLink(group.key, i)}
+                        className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-border text-muted-foreground transition-colors hover:border-alert-red/50 hover:text-alert-red"
+                        aria-label="Remove source"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
       </div>
     </section>
   )
