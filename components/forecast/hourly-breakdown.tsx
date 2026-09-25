@@ -26,10 +26,10 @@ async function fetcher(url: string): Promise<SolarPayload> {
 /* Palette mirrored from the reference "24-hour detailed weather trend" board. */
 const DNI_COLOR = "#d8a94a" // brass / gold DNI line
 const DNI_FILL = "#b98a2c" // olive-gold area under the DNI curve
-const CLOUD_LINE = "#9cc0ea" // light steel-blue cloud line
-const CLOUD_FILL = "#6f9bd1" // steel-blue cloud area
+const CLOUD_LINE = "#c7d2e0" // light silver cloud line
+const CLOUD_FILL = "#8b97a8" // gray / silver cloud area
 const GUST_COLOR = "#e0803a" // orange gust readout
-const RAIN_COLOR = "#22d3ee" // cyan rain bars + icons (distinct from the steel-blue clouds)
+const RAIN_COLOR = "#3b82f6" // blue rain bars + icons (distinct from the gray clouds)
 
 /* Chart geometry (viewBox units — stretched to container width). */
 const CHART_W = 960
@@ -378,7 +378,7 @@ export function HourlyBreakdown() {
                     <span className="font-mono text-[0.5rem] tabular-nums text-muted-foreground">
                       {h.precipitation > 0 ? h.precipitation.toFixed(2) : "0.00"}
                     </span>
-                    <WeatherIcon code={h.weatherCode} className="h-3.5 w-3.5 text-[#22d3ee]" />
+                    <WeatherIcon code={h.weatherCode} className="h-3.5 w-3.5 text-[#3b82f6]" />
                   </Cell>
                 ))}
               </TableRow>
