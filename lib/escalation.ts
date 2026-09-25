@@ -226,6 +226,45 @@ export function parseSiteConfig(value: unknown, fallback: SiteConfig): SiteConfi
   }
 }
 
+/** Live readings for one site, normalised to native SI units, compared against its ranges. */
+export type SiteReadings = {
+  windMs: number
+  gustMs: number
+  rainMm: number
+  cloudPct: number
+}
+
+/** Danger metrics that can trip a site indicator (cloud cover is contextual, not a trigger). */
+const SITE_TRIGGER_METRICS: { key: SiteMetricKey; label: string }[] = [
+  { key: "windMs", label: "Wind" },
+  { key: "gustMs", label: "Gust" },
+  { key: "rainMm", label: "Rain" },
+]
+
+/**
+ * Evaluate a site's configured ranges against a live reading. The site's condition is
+ * "met" once any danger metric climbs into the top (most severe) configured band — this
+ * is exactly what drives each tier's At-site / Near-site indicator from green to a red
+ * blink, so the ladder buttons stay wired to the ranges edited in the Engineering Console.
+ */
+export function evaluateSite(
+  config: SiteConfig,
+  readings: SiteReadings,
+): { met: boolean; reason: string | null } {
+  for (const { key, label } of SITE_TRIGGER_METRICS) {
+    const ranges = config[key]
+    if (!ranges.length) continue
+    const top = ranges[ranges.length - 1]
+    const value = readings[key]
+    if (Number.isFinite(value) && value >= top.min) {
+      const unit = SITE_METRIC_META[key].unit
+      const shown = Number.isInteger(value) ? String(value) : value.toFixed(1)
+      return { met: true, reason: `${label} ${shown} ${unit} · ${top.label}` }
+    }
+  }
+  return { met: false, reason: null }
+}
+
 /**
  * Per-level entry thresholds used to gate hysteresis, mirroring the live banner's
  * severity bands: gust/wind onset at 15 m/s (54 km/h) → yellow, 20 m/s (72 km/h)

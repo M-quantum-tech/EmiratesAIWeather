@@ -50,8 +50,11 @@ import {
   DEFAULT_RULES,
   DEFAULT_WIND_MONITOR,
   DEFAULT_WIND_SOURCE,
+  evaluateSite,
   type CloudSourceConfig,
   type EscalationRule,
+  type SiteKey,
+  type SiteReadings,
   type WindMonitorTier,
   type WindSourceConfig,
 } from "@/lib/escalation"
@@ -108,6 +111,12 @@ const LADDER: { level: AlertLevel; label: string; solid: string }[] = [
   { level: "yellow", label: "YELLOW", solid: "bg-alert-yellow" },
   { level: "orange", label: "ORANGE", solid: "bg-alert-orange" },
   { level: "red", label: "RED", solid: "bg-alert-red" },
+]
+
+/** The two detection sites shown under every tier button, wired to each rule's ranges. */
+const SITE_ROWS: { key: SiteKey; name: string }[] = [
+  { key: "atSite", name: "At site" },
+  { key: "farSite", name: "Near site" },
 ]
 
 const HAZARD_ICON: Record<HazardKey, typeof Wind> = {
@@ -447,6 +456,25 @@ export function AlertBanner() {
   const toMs = (v: number) => (payload.units === "metric" ? v : v * 1.609) / 3.6
   const windMs = toMs(payload.current.windSpeed)
   const farGustMs = farGust != null ? toMs(farGust) : null
+  // Live per-site readings (native SI units) fed into each tier's configured ranges. The
+  // on-site station drives "At site"; the 50 km upwind sample drives "Near site". These are
+  // what the escalation-rule ranges are evaluated against so the ladder indicators stay wired
+  // to whatever thresholds are set in the Engineering Console.
+  const toMm = (v: number) => (payload.units === "metric" ? v : v * 25.4)
+  const siteReadings: Record<SiteKey, SiteReadings> = {
+    atSite: {
+      windMs,
+      gustMs,
+      rainMm: toMm(payload.current.precipitation),
+      cloudPct: payload.current.cloudCover,
+    },
+    farSite: {
+      windMs: farData ? toMs(farData.current.windSpeed) : 0,
+      gustMs: farGustMs ?? 0,
+      rainMm: farData ? toMm(farData.current.precipitation) : 0,
+      cloudPct: farData?.current.cloudCover ?? 0,
+    },
+  }
   return (
     <section aria-label="Advance AI safety model" className={cn("station-rise rounded-xl border", styles.bar)}>
       {/* Header ribbon */}
@@ -582,22 +610,23 @@ export function AlertBanner() {
             <span className={cn("font-mono text-sm font-bold tabular-nums", styles.text)}>{alert.score}</span>
           </div>
 
-          {/* Tier ladder — button-style graphics that blink on the active level */}
+          {/* Tier ladder — each button is wired to its escalation-rule ranges and carries
+              At-site / Near-site indicators that blink red when live readings meet the tier. */}
           <div className="grid grid-cols-4 gap-2">
             {LADDER.map((rung, i) => {
               const active = i === activeIndex
               const rungStyles = LEVEL_STYLES[rung.level]
+              const rule = rules.find((r) => r.level === rung.level)
               return (
-                <button
+                <div
                   key={rung.level}
-                  type="button"
-                  aria-pressed={active}
+                  aria-current={active ? "true" : undefined}
                   aria-label={`${rung.label} tier${active ? " — active" : ""}`}
                   className={cn(
                     "flex flex-col items-center gap-1.5 rounded-lg border px-2 py-2.5 transition-all",
                     active
                       ? cn(rungStyles.chip, rungStyles.text, "tier-blink opacity-100 shadow-sm")
-                      : "border-border bg-background/40 opacity-50 hover:opacity-75",
+                      : "border-border bg-background/40 opacity-70 hover:opacity-90",
                   )}
                 >
                   <span
@@ -623,7 +652,68 @@ export function AlertBanner() {
                   >
                     {rung.level === "green" ? `${ALERT_RADII_KM.green}km+` : `${ALERT_RADII_KM[rung.level]} km`}
                   </span>
-                </button>
+
+                  {/* At-site / Near-site detection — green when clear, red-blink when met */}
+                  <div className="mt-1 w-full space-y-1 border-t border-border/50 pt-1.5">
+                    {SITE_ROWS.map(({ key, name }) => {
+                      const cfg = rule?.[key]
+                      const ev = cfg
+                        ? evaluateSite(cfg, siteReadings[key])
+                        : { met: false, reason: null }
+                      const src = cfg?.source
+                      const label = key === "atSite" ? "AWS" : "COSMO"
+                      const common = cn(
+                        "flex w-full items-center gap-1 rounded px-1 py-0.5 transition-colors",
+                        ev.met ? "bg-alert-red/15" : "hover:bg-background/60",
+                      )
+                      const inner = (
+                        <>
+                          <span
+                            className={cn(
+                              "h-1.5 w-1.5 shrink-0 rounded-full",
+                              ev.met ? "bg-alert-red tier-blink" : "bg-alert-green",
+                            )}
+                            aria-hidden="true"
+                          />
+                          <span
+                            className={cn(
+                              "truncate font-mono text-[0.4375rem] uppercase tracking-wide",
+                              ev.met ? "font-bold text-alert-red" : "text-muted-foreground",
+                            )}
+                          >
+                            {name}
+                          </span>
+                          {src?.url ? (
+                            <ExternalLink
+                              className="ml-auto h-2 w-2 shrink-0 text-muted-foreground"
+                              aria-hidden="true"
+                            />
+                          ) : null}
+                        </>
+                      )
+                      const title = ev.met
+                        ? `${name} · ${rung.label}: ${ev.reason}`
+                        : `${name} · ${rung.label}: within limits${src?.label ? ` · ${src.label}` : ""}`
+                      return src?.url ? (
+                        <a
+                          key={key}
+                          href={src.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={title}
+                          aria-label={title}
+                          className={common}
+                        >
+                          {inner}
+                        </a>
+                      ) : (
+                        <div key={key} title={title} aria-label={title} className={common}>
+                          {inner}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
               )
             })}
           </div>
