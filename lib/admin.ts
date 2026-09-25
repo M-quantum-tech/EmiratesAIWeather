@@ -17,7 +17,7 @@ export type AccessStatus = "pending" | "allowed" | "denied"
  */
 export const ADMIN_ACCOUNTS = [
   { email: "m-quantum-tech@mquantum.tech", password: "Imax@1993", name: "M-Quantum-Tech" },
-  { email: "m-quantum-tech1@mquantum.tech", password: "Imax@2026", name: "M-Quantum-Tech1" },
+  { email: "m-quantum-tech007@mquantum.tech", password: "Imax@2026", name: "M-Quantum-Tech007" },
 ] as const
 
 const ADMIN_EMAILS = new Set(ADMIN_ACCOUNTS.map((a) => a.email.toLowerCase()))
