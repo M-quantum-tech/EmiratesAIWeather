@@ -564,6 +564,48 @@ const ALERT_META: Record<AlertLevel, { code: string; emoji: string; title: strin
   red: { code: "RED", emoji: "🏃‍♂️💨", title: "RED" },
 }
 
+const ALERT_COPY: Record<AlertLevel, { headline: string; detail: string; advice: string }> = {
+  green: {
+    headline: "All clear — conditions are calm and safe",
+    detail: `No significant wind, rain or air-quality hazards are tracking within ${ALERT_RADII_KM.green} km of your location.`,
+    advice: "Enjoy the outdoors — a great window for any activity.",
+  },
+  yellow: {
+    headline: "Caution — stay weather-aware",
+    detail: `Minor hazards developing about ${ALERT_RADII_KM.yellow} km out. Keep an eye on changing wind, rain or air-quality trends.`,
+    advice: "Carry a layer or umbrella and check back before heading out.",
+  },
+  orange: {
+    headline: "Severe — prepare and take precautions",
+    detail: `Notable hazards closing within ${ALERT_RADII_KM.orange} km — strong gusts, heavy rain, extreme feels-like, or poor air.`,
+    advice: "Postpone exposed activities, secure loose items, and stay near shelter.",
+  },
+  red: {
+    headline: "Danger — take shelter immediately",
+    detail: `Severe hazards detected within ${ALERT_RADII_KM.red} km of you. Travel and outdoor exposure are risky right now.`,
+    advice: "Stay indoors, avoid travel, and follow official emergency guidance.",
+  },
+}
+
+/**
+ * Return the alert re-cast to a different tier, keeping its live hazards/score but
+ * swapping the level-tied presentation (code, emoji, title, copy). Used by the live
+ * banner to display the hysteresis-held tier while preserving the raw readings.
+ */
+export function withAlertLevel(alert: WeatherAlert, level: AlertLevel): WeatherAlert {
+  if (level === alert.level) return alert
+  const meta = ALERT_META[level]
+  return {
+    ...alert,
+    level,
+    code: meta.code,
+    emoji: meta.emoji,
+    title: meta.title,
+    danger: alert.danger || level === "red",
+    ...ALERT_COPY[level],
+  }
+}
+
 /**
  * Four-level weather alert model, following the NCM-style escalation rules:
  *  • Level 1 GREEN  — a hazard exists but is still far out: intensifying convection

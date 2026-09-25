@@ -70,6 +70,58 @@ export function parseDeadbands(value: unknown, level: AlertLevel): TierDeadbands
 
 export const ESCALATION_LEVELS: AlertLevel[] = ["green", "yellow", "orange", "red"]
 
+/**
+ * Per-level entry thresholds used to gate hysteresis, mirroring the live banner's
+ * severity bands: gust/wind onset at 15 m/s (54 km/h) → yellow, 20 m/s (72 km/h)
+ * → orange, 25 m/s (90 km/h) → red; rain (6 h accumulation) at 1 / 10 / 30 mm.
+ * A held tier is only released once the reading falls below its entry minus the
+ * tier's configured dead band, so noisy readings can't flap the alarm.
+ */
+export const LEVEL_WIND_ENTRY_MS: Record<AlertLevel, number> = { green: 0, yellow: 15, orange: 20, red: 25 }
+export const LEVEL_RAIN_ENTRY_MM: Record<AlertLevel, number> = { green: 0, yellow: 1, orange: 10, red: 30 }
+
+/** Live driving metrics compared against the entry thresholds (native SI units). */
+export type HysteresisReadings = {
+  /** Sustained wind (m/s). */
+  windMs: number
+  /** Wind gust (m/s). */
+  gustMs: number
+  /** Rain accumulation over the next 6 h (mm). */
+  rainMm: number
+}
+
+/**
+ * Apply dead-band hysteresis to a freshly-computed alert level.
+ *  • Escalation (or no change) takes effect immediately — the alarm never waits to rise.
+ *  • De-escalation is suppressed: the previously-held tier stays latched until every
+ *    driving metric drops below that tier's entry threshold minus its dead band, then
+ *    it releases one rung at a time (so a fast clear can still fall through several tiers).
+ * Direction dead band is not a severity driver, so it governs directional-shift
+ * significance elsewhere rather than gating the tier here.
+ */
+export function applyLevelHysteresis(
+  raw: AlertLevel,
+  held: AlertLevel | null,
+  readings: HysteresisReadings,
+  rules: EscalationRule[],
+): AlertLevel {
+  if (held == null) return raw
+  const rank = (l: AlertLevel) => ESCALATION_LEVELS.indexOf(l)
+  if (rank(raw) >= rank(held)) return raw
+  let current = held
+  while (rank(raw) < rank(current)) {
+    const db = rules.find((r) => r.level === current)?.deadbands ?? DEFAULT_DEADBANDS[current]
+    const windRelease = LEVEL_WIND_ENTRY_MS[current] - db.windMs
+    const gustRelease = LEVEL_WIND_ENTRY_MS[current] - db.gustMs
+    const rainRelease = LEVEL_RAIN_ENTRY_MM[current] - db.rainMm
+    const stillHeld =
+      readings.windMs > windRelease || readings.gustMs > gustRelease || readings.rainMm > rainRelease
+    if (stillHeld) return current
+    current = ESCALATION_LEVELS[rank(current) - 1]
+  }
+  return current
+}
+
 /** Accept only safe, absolute http(s) links for a rendered data source. */
 export function sanitizeSourceUrl(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined

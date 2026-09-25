@@ -246,7 +246,7 @@ export function EngineeringConsole({
                 {/* Dead bands — hysteresis gates paired with the KM range above */}
                 <div className="mt-3 flex flex-col gap-2">
                   <span className="label-caps text-muted-foreground">
-                    Dead bands · gate this tier against the KM range (intensifying clouds)
+                    Dead bands · active hysteresis — tier holds until readings drop past these margins
                   </span>
                   <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                     <NumberField

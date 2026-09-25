@@ -36,6 +36,7 @@ import {
   predictArrivals,
   rainAttenuation,
   speedUnit,
+  withAlertLevel,
   type AlertLevel,
   type ArrivalKey,
   type HazardKey,
@@ -43,6 +44,7 @@ import {
 } from "@/lib/weather"
 import { fetchWarningFrames, type EmirateWarning } from "@/lib/ncm-warnings"
 import {
+  applyLevelHysteresis,
   BUZZER_TONE,
   DEFAULT_CLOUD_SOURCE,
   DEFAULT_RULES,
@@ -225,7 +227,30 @@ export function AlertBanner() {
     { refreshInterval: 300_000, revalidateOnFocus: false },
   )
   const cloudSource = cloudSourceData?.source ?? DEFAULT_CLOUD_SOURCE
-  const alert = useMemo(() => (payload ? buildAlert(payload) : null), [payload])
+  const rawAlert = useMemo(() => (payload ? buildAlert(payload) : null), [payload])
+  // Dead-band hysteresis: the displayed tier escalates immediately but only de-escalates
+  // once every driving metric has fallen below the held tier's entry threshold minus its
+  // configured dead band — so noisy readings can't flap the alarm between tiers.
+  const [heldLevel, setHeldLevel] = useState<AlertLevel | null>(null)
+  const heldRef = useRef<AlertLevel | null>(null)
+  useEffect(() => {
+    if (!rawAlert) return
+    const raw = Object.fromEntries(rawAlert.hazards.map((h) => [h.key, h.raw])) as Record<string, number>
+    const readings = {
+      windMs: (raw.wind ?? 0) / 3.6,
+      gustMs: (raw.gust ?? 0) / 3.6,
+      rainMm: raw.rain ?? 0,
+    }
+    const next = applyLevelHysteresis(rawAlert.level, heldRef.current, readings, rules)
+    if (next !== heldRef.current) {
+      heldRef.current = next
+      setHeldLevel(next)
+    }
+  }, [rawAlert, rules])
+  const alert = useMemo(
+    () => (rawAlert ? withAlertLevel(rawAlert, heldLevel ?? rawAlert.level) : null),
+    [rawAlert, heldLevel],
+  )
   const level = alert?.level ?? null
   // Acknowledgment latch: the alarm sounds whenever the detected level differs from the
   // last level the operator acknowledged. The first observed level is auto-armed silently;
