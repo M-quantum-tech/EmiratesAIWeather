@@ -5,7 +5,6 @@ import { computeStats, ensureUserAccessColumns, getAdminMembers, requireAdmin } 
 import { formatCents } from "@/lib/plans"
 import { getEffectivePlans } from "@/lib/pricing"
 import { SiteNav } from "@/components/site-nav"
-import { AccessControls, MembersTable, ServiceWindow } from "@/components/admin/members-table"
 import { PricingEditor, type PriceRow } from "@/components/admin/pricing-editor"
 
 export const metadata = { title: "Admin dashboard — EmiratesAIWeather" }
@@ -40,13 +39,27 @@ export default async function AdminPage() {
               Members, subscriptions and revenue across EmiratesAIWeather.
             </p>
           </div>
-          <Link
-            href="/admin/engineering"
-            className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-background/60"
-          >
-            <Cpu className="h-4 w-4 text-accent" aria-hidden="true" />
-            Engineering console
-          </Link>
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              href="/admin/users"
+              className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-background/60"
+            >
+              <UserCheck className="h-4 w-4 text-accent" aria-hidden="true" />
+              User management
+              {pending.length > 0 ? (
+                <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-400">
+                  {pending.length}
+                </span>
+              ) : null}
+            </Link>
+            <Link
+              href="/admin/engineering"
+              className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-background/60"
+            >
+              <Cpu className="h-4 w-4 text-accent" aria-hidden="true" />
+              Engineering console
+            </Link>
+          </div>
         </div>
 
         <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -99,7 +112,7 @@ export default async function AdminPage() {
           <div className="flex items-center gap-2">
             <UserCheck className="h-4 w-4 text-accent" aria-hidden="true" />
             <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-foreground">
-              User requests
+              User management
             </h2>
             {pending.length > 0 ? (
               <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-400">
@@ -108,33 +121,21 @@ export default async function AdminPage() {
             ) : null}
           </div>
           <p className="-mt-2 text-sm text-muted-foreground">
-            New sign-ins land here as pending. Allow or deny access and set an optional service window.
+            Approve or deny access requests, set service windows, manage roles and reset passwords in the
+            dedicated user management portal.
           </p>
-          {pending.length === 0 ? (
-            <div className="rounded-xl border border-border bg-card px-4 py-6 text-sm text-muted-foreground">
-              No pending requests. New sign-ups will appear here for approval.
-            </div>
-          ) : (
-            <div className="grid gap-3 sm:grid-cols-2">
-              {pending.map((m) => (
-                <div key={m.id} className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
-                  <div className="flex flex-col">
-                    <span className="font-medium text-foreground">{m.name}</span>
-                    <span className="text-xs text-muted-foreground">{m.email}</span>
-                  </div>
-                  <AccessControls member={m} />
-                  <ServiceWindow member={m} />
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="mt-10 flex flex-col gap-4">
-          <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-foreground">
-            Members
-          </h2>
-          <MembersTable members={members} currentUserId={sessionUser.id} />
+          <Link
+            href="/admin/users"
+            className="inline-flex w-fit items-center gap-2 rounded-lg border border-accent/50 bg-accent/10 px-4 py-2.5 text-sm font-semibold text-accent transition-colors hover:bg-accent/20"
+          >
+            <Users className="h-4 w-4" aria-hidden="true" />
+            Open user management
+            {pending.length > 0 ? (
+              <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-medium">
+                {pending.length}
+              </span>
+            ) : null}
+          </Link>
         </div>
       </section>
     </main>
