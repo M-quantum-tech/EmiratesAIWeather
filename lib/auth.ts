@@ -65,11 +65,28 @@ const baseURL = runtimeOrigins[0] ?? toOrigin(process.env.BETTER_AUTH_URL) ?? "h
 // sign-in/sign-up with "Invalid origin" and the user sees "invalid login".
 // BETTER_AUTH_URL is still trusted here so a deliberate canonical URL keeps
 // working even though it no longer dictates baseURL.
+// Stable wildcard patterns for every origin this app is legitimately served
+// from. Concrete origins above come from env vars that may or may not be
+// present on a given deployment; these patterns guarantee the live origin is
+// trusted regardless — whether the app is opened on its Vercel domain or
+// embedded in the cross-site v0 preview. Without this, Better Auth's CSRF
+// origin check rejects sign-in with "Invalid origin" after a deployment and
+// the admin console looks broken. Better Auth 1.7+ supports wildcard origins.
+const wildcardTrustedOrigins = [
+  "https://*.vercel.app",
+  "https://*.v0.build",
+  "https://*.v0.dev",
+  "https://*.vusercontent.net",
+]
+
 const trustedOrigins = Array.from(
   new Set(
-    ["http://localhost:3000", ...runtimeOrigins, toOrigin(process.env.BETTER_AUTH_URL)].filter(
-      (origin): origin is string => Boolean(origin),
-    ),
+    [
+      "http://localhost:3000",
+      ...runtimeOrigins,
+      toOrigin(process.env.BETTER_AUTH_URL),
+      ...wildcardTrustedOrigins,
+    ].filter((origin): origin is string => Boolean(origin)),
   ),
 )
 
