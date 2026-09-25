@@ -1,5 +1,8 @@
 export type WarnLevel = "green" | "yellow" | "orange" | "red"
 
+/** Where a warning came from — the official NCM bulletin, our Open-Meteo engine, or both. */
+export type WarnSource = "NCM" | "Open-Meteo" | "NCM + Open-Meteo"
+
 export type EmirateWarning = {
   /** Must match the `name` property in public/geo/uae-emirates.geojson. */
   name: string
@@ -12,6 +15,64 @@ export type EmirateWarning = {
   description: string
   from: string
   to: string
+  source: WarnSource
+}
+
+/** One official NCM warning, mirrored from ncm.gov.ae/maps-warnings. */
+export type NcmWarning = {
+  id: string
+  /** Short type shown on the card, e.g. "Fog". */
+  type: string
+  level: WarnLevel
+  /** Affected emirates — names MUST match the geojson `name` property. */
+  emirates: string[]
+  headline: string
+  description: string
+  /** Asia/Dubai local wall-clock, e.g. "2026-09-25T23:00". */
+  from: string
+  to: string
+}
+
+/**
+ * Official NCM warnings copied from https://www.ncm.gov.ae/maps-warnings?lang=en.
+ *
+ * NCM publishes NO machine-readable feed — every warnings endpoint returns 404
+ * and the map data is locked to their own origin — so their current published
+ * bulletin is mirrored here and COMBINED with the live Open-Meteo timeline.
+ * Whenever NCM issues or updates a warning, edit this list (type, level,
+ * affected emirates, description, from/to) and it will immediately play on the
+ * map polygons and appear in the sidebar alongside the Open-Meteo warnings.
+ */
+export const NCM_WARNINGS: NcmWarning[] = [
+  {
+    id: "fog-2026-09-25",
+    type: "Fog",
+    level: "yellow",
+    emirates: ["Abu Dhabi", "Dubai", "Sharjah", "Ajman", "Umm al-Quwain", "Ras al-Khaimah"],
+    headline: "Fog / low visibility",
+    description:
+      "A chance of fog formation with a deterioration in horizontal visibility, which may drop even further at times over some coastal and internal areas.",
+    from: "2026-09-25T23:00",
+    to: "2026-09-26T08:30",
+  },
+]
+
+const SEVERITY: Record<WarnLevel, number> = { green: 0, yellow: 1, orange: 2, red: 3 }
+
+function levelToScore(level: WarnLevel): number {
+  return level === "red" ? 62 : level === "orange" ? 40 : level === "yellow" ? 14 : 0
+}
+
+/** Asia/Dubai is UTC+4 year-round (no DST). */
+function dubaiMs(iso: string): number {
+  return new Date(`${iso}:00+04:00`).getTime()
+}
+
+/** Format an Asia/Dubai ISO wall-clock ("2026-09-25T23:00") as "25/09 23:00". */
+export function fmtNcmTime(iso: string): string {
+  const [date, time = "00:00"] = iso.split("T")
+  const [, month = "01", day = "01"] = date.split("-")
+  return `${day}/${month} ${time.slice(0, 5)}`
 }
 
 // Representative point per emirate (matches the ADM1 polygon names).
@@ -158,8 +219,55 @@ export async function fetchWarningFrames(signal?: AbortSignal, hours = 24): Prom
       const { level, score } = classify(gust, precip, code, visibility)
       if (level === "green") return
       const { hazards, headline, description } = describe(gust, precip, code, visibility)
-      frame.push({ name: e.name, level, score, gust, precip, hazards, headline, description, from: fromStr, to: toStr })
+      frame.push({
+        name: e.name,
+        level,
+        score,
+        gust,
+        precip,
+        hazards,
+        headline,
+        description,
+        from: fromStr,
+        to: toStr,
+        source: "Open-Meteo",
+      })
     })
+
+    // Fold in the official NCM warnings active during this hour, combining them
+    // with the Open-Meteo warnings so both feeds display on the same map.
+    const hourMs = dubaiMs(timeAxis[j])
+    NCM_WARNINGS.forEach((nw) => {
+      if (hourMs < dubaiMs(nw.from) || hourMs >= dubaiMs(nw.to)) return
+      nw.emirates.forEach((name) => {
+        const existing = frame.find((f) => f.name === name)
+        if (existing) {
+          // Same emirate flagged by both feeds — keep the higher severity and mark both sources.
+          if (SEVERITY[nw.level] > SEVERITY[existing.level]) {
+            existing.level = nw.level
+            existing.score = Math.max(existing.score, levelToScore(nw.level))
+          }
+          existing.source = "NCM + Open-Meteo"
+          existing.hazards = Array.from(new Set([nw.headline, ...existing.hazards]))
+          existing.description = `NCM: ${nw.description} · Open-Meteo: ${existing.description}`
+        } else {
+          frame.push({
+            name,
+            level: nw.level,
+            score: levelToScore(nw.level),
+            gust: 0,
+            precip: 0,
+            hazards: [nw.headline],
+            headline: `${nw.type} — ${nw.headline}`,
+            description: nw.description,
+            from: fmtNcmTime(nw.from),
+            to: fmtNcmTime(nw.to),
+            source: "NCM",
+          })
+        }
+      })
+    })
+
     frame.sort((a, b) => b.score - a.score)
     frames.push(frame)
     times.push(timeAxis[j])

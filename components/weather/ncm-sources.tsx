@@ -29,6 +29,8 @@ import { createStationLayer, type StationMode } from "@/lib/station-layer"
 import { stationReadings } from "@/lib/stations"
 import {
   fetchWarningFrames,
+  fmtNcmTime,
+  NCM_WARNINGS,
   WARN_FILL,
   WARN_LEGEND,
   type EmirateWarning,
@@ -939,6 +941,32 @@ export function NcmSources() {
 
             {/* Right sidebar warning cards */}
             <div className="absolute right-3 top-32 z-[500] flex max-h-[58%] w-60 flex-col gap-2 overflow-auto sm:w-64">
+              {/* Official NCM bulletin — always visible, mirrored from ncm.gov.ae and combined with Open-Meteo. */}
+              {NCM_WARNINGS.length > 0 && (
+                <article className="overflow-hidden rounded-md border border-alert-yellow/60 bg-card shadow">
+                  <header className="flex items-center justify-center gap-1.5 border-b border-border bg-primary px-3 py-1.5 font-mono text-[0.625rem] font-bold uppercase tracking-wider text-primary-foreground">
+                    <ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" /> NCM Official Warnings
+                  </header>
+                  {NCM_WARNINGS.map((w) => (
+                    <div key={w.id} className="border-b border-border px-3 py-2 last:border-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-foreground">{w.type}</span>
+                        <span className={cn("rounded px-1.5 py-0.5 font-mono text-[0.5rem] font-bold uppercase tracking-wider", BANNER_TONE[w.level])}>
+                          {w.level === "yellow" ? "Be Aware" : w.level === "orange" ? "Be Prepared" : w.level === "red" ? "Take Action" : "Advisory"}
+                        </span>
+                      </div>
+                      <div className="mt-1 font-mono text-[0.5625rem] uppercase tracking-wide text-muted-foreground">
+                        From {fmtNcmTime(w.from)} to {fmtNcmTime(w.to)}
+                      </div>
+                      <p className="mt-1 text-[0.6875rem] leading-relaxed text-foreground">{w.description}</p>
+                      <p className="mt-1 font-mono text-[0.5rem] uppercase tracking-wide text-muted-foreground">
+                        Source: ncm.gov.ae · combined with Open-Meteo
+                      </p>
+                    </div>
+                  ))}
+                </article>
+              )}
+
               <div className="rounded-md border border-white/15 bg-primary/90 px-3 py-2 text-center font-mono text-[0.625rem] uppercase tracking-wider text-primary-foreground shadow">
                 {display.length
                   ? `${display.length} warning${display.length > 1 ? "s" : ""} this hour`
@@ -949,15 +977,27 @@ export function NcmSources() {
                   <header className={cn("px-3 py-2 text-center text-xs font-bold leading-tight", BANNER_TONE[w.level])}>
                     {w.name}: {w.headline}
                   </header>
-                  <div className="border-b border-border bg-secondary px-3 py-1 text-center font-mono text-[0.5625rem] uppercase tracking-wide text-muted-foreground">
-                    From {w.from} to {w.to}
+                  <div className="flex items-center justify-between gap-2 border-b border-border bg-secondary px-3 py-1 font-mono text-[0.5625rem] uppercase tracking-wide text-muted-foreground">
+                    <span>From {w.from} to {w.to}</span>
+                    <span
+                      className={cn(
+                        "shrink-0 rounded px-1.5 py-0.5 font-bold tracking-wider",
+                        w.source === "NCM"
+                          ? "bg-alert-yellow text-black"
+                          : w.source === "NCM + Open-Meteo"
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-muted text-muted-foreground",
+                      )}
+                    >
+                      {w.source}
+                    </span>
                   </div>
                   <p className="px-3 py-2 text-[0.6875rem] leading-relaxed text-foreground">{w.description}</p>
                 </article>
               ))}
               <p className="rounded-md border border-dashed border-border bg-card/70 px-3 py-2 text-[0.625rem] leading-relaxed text-muted-foreground">
-                Real 24-hour warning timeline derived from live Open-Meteo forecast for the seven emirates, playing one
-                hour every 2 seconds. Refreshes every minute — same cycle as wind, radar &amp; clouds.
+                Combined feed: official NCM warnings (mirrored from ncm.gov.ae) plus a real 24-hour timeline derived from
+                live Open-Meteo forecast for the seven emirates, playing one hour every 2 seconds. Refreshes every minute.
               </p>
             </div>
 
