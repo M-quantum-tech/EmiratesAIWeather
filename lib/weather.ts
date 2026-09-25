@@ -33,6 +33,8 @@ export type HourlyReading = {
   time: string
   temperature: number
   apparentTemperature: number
+  /** Hourly dew point at 2 m, matching the current-reading dew point unit. */
+  dewPoint: number
   precipitationProbability: number
   precipitation: number
   windSpeed: number

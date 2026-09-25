@@ -21,6 +21,7 @@ const CURRENT = [
 const HOURLY = [
   "temperature_2m",
   "apparent_temperature",
+  "dew_point_2m",
   "precipitation_probability",
   "precipitation",
   "wind_speed_10m",
@@ -140,6 +141,7 @@ export async function GET(request: NextRequest) {
       time,
       temperature: num(hourlyRaw.temperature_2m?.[index]),
       apparentTemperature: num(hourlyRaw.apparent_temperature?.[index]),
+      dewPoint: num(hourlyRaw.dew_point_2m?.[index]),
       precipitationProbability: num(hourlyRaw.precipitation_probability?.[index]),
       precipitation: num(hourlyRaw.precipitation?.[index]),
       windSpeed: num(hourlyRaw.wind_speed_10m?.[index]),
