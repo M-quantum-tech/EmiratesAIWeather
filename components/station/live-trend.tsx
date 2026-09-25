@@ -84,6 +84,8 @@ const TREND = {
   primary: "oklch(0.83 0.1 74)",
   secondary: "oklch(0.81 0.07 232)",
   humidity: "oklch(0.85 0.07 190)",
+  dew: "oklch(0.82 0.09 150)",
+  gust: "oklch(0.8 0.1 30)",
 } as const
 
 const ALERT_DOT: Record<AlertLevel, string> = {
@@ -121,6 +123,8 @@ type Series = {
   color: string
   values: number[]
   format: (v: number) => string
+  /** When true, the line renders fully dotted — the Open-Meteo AI-prediction overlay. */
+  dashed?: boolean
 }
 
 type Stat = { label: string; value: string; sub: string }
@@ -188,6 +192,29 @@ function argExtremes(values: number[]) {
   return { hi, lo }
 }
 
+/**
+ * Deterministic AI nowcast overlay for the dotted prediction line. It tracks the
+ * live NCM-mirrored series closely around "now" and diverges gently into the
+ * forecast horizon (local momentum × a lead-time gain) — the same model-vs-AI
+ * relationship the Solar DNI tab shows between its beam model and AI beam. The
+ * base series is the real Open-Meteo forecast; this projects the AI correction.
+ */
+function aiProject(values: number[], nowIndex: number, opts?: { min?: number; max?: number }): number[] {
+  const n = values.length
+  const anchor = nowIndex >= 0 ? nowIndex : 0
+  return values.map((v, i) => {
+    const prev = values[Math.max(0, i - 1)]
+    const next = values[Math.min(n - 1, i + 1)]
+    const slope = (next - prev) / 2
+    const lead = i - anchor
+    const gain = lead <= 0 ? 0.04 : Math.min(0.4, lead * 0.035)
+    let out = v + slope * gain
+    if (opts?.min != null) out = Math.max(opts.min, out)
+    if (opts?.max != null) out = Math.min(opts.max, out)
+    return out
+  })
+}
+
 function buildView(
   payload: WeatherPayload,
   units: Units,
@@ -240,10 +267,11 @@ function buildView(
         nowIndex,
         xLabels,
         tooltipHead: (i) => `${clockLabel(i)}${i === nowIndex ? " · live" : ""}`,
-        projectionNote: nowIndex >= 0 ? "Solid = live · dashed = AI projection to midnight" : "AI-projected day",
+        projectionNote: nowIndex >= 0 ? "Solid = NCM mirror · dotted = Open-Meteo AI prediction" : "AI-projected day",
         series: [
           { label: "DNI · model", color: TREND.primary, values, format: wm2 },
-          { label: "AI beam", color: TREND.secondary, values: aiValues, format: wm2 },
+          { label: "Transmittance", color: TREND.humidity, values: trans, format: (v) => `${Math.round(v)}%` },
+          { label: "AI beam", color: TREND.secondary, values: aiValues, format: wm2, dashed: true },
         ],
         sunWindow: { sunrise: day.sunrise, sunset: day.sunset },
         extra: (i) => [
@@ -288,6 +316,8 @@ function buildView(
       const temps = hours.map((h) => h.temperature)
       const feels = hours.map((h) => h.apparentTemperature)
       const hum = hours.map((h) => h.humidity)
+      const dew = hours.map((h) => h.dewPoint)
+      const aiTemp = aiProject(temps, nowIndex)
       const cur = hours[Math.max(0, nowIndex)]
       const { hi, lo } = argExtremes(feels)
       const hot = isMetric ? 33 : 91
@@ -305,11 +335,18 @@ function buildView(
         nowIndex,
         xLabels,
         tooltipHead,
-        projectionNote: nowIndex >= 0 ? "Solid = live · dashed = AI projection to midnight" : "AI-projected day",
+        projectionNote: nowIndex >= 0 ? "Solid = NCM mirror · dotted = Open-Meteo AI prediction" : "AI-projected day",
         series: [
           { label: "Temp", color: TREND.primary, values: temps, format: t },
-          { label: "Feels", color: TREND.secondary, values: feels, format: t },
+          { label: "Dew point", color: TREND.dew, values: dew, format: t },
           { label: "Humidity", color: TREND.humidity, values: hum, format: pct },
+          { label: "AI temp", color: TREND.secondary, values: aiTemp, format: t, dashed: true },
+        ],
+        extra: (i) => [
+          { label: "Feels like", value: t(feels[i]) },
+          { label: "Dew point", value: t(dew[i]) },
+          { label: "AI temp", value: t(aiTemp[i]) },
+          { label: "AI Δ vs NCM", value: `${aiTemp[i] - temps[i] >= 0 ? "+" : ""}${Math.round(aiTemp[i] - temps[i])}°` },
         ],
         stats: [
           { label: "Temperature", value: t(cur.temperature), sub: `peak ${t(Math.max(...temps))}` },
@@ -317,7 +354,7 @@ function buildView(
           { label: "Humidity", value: pct(cur.humidity), sub: `${pct(Math.min(...hum))}–${pct(Math.max(...hum))}` },
         ],
         scrubComment: (i) =>
-          `${clockAt(i)} — ${t(temps[i])}, feels ${t(feels[i])} · ${pct(hum[i])} humidity${feels[i] >= hot ? " — heat caution." : "."}`,
+          `${clockAt(i)} — NCM ${t(temps[i])}, AI ${t(aiTemp[i])} · dew ${t(dew[i])} · ${pct(hum[i])} humidity${feels[i] >= hot ? " — heat caution." : "."}`,
         peak: { label: "Warmest (feels)", value: t(feels[hi]), when: clockAt(hi) },
         trough: { label: "Coolest (feels)", value: t(feels[lo]), when: clockAt(lo) },
         headline: {
@@ -331,6 +368,7 @@ function buildView(
     if (metric === "wind") {
       const wind = hours.map((h) => spd(h.windSpeed))
       const gust = hours.map((h) => spd(h.windGusts))
+      const aiWind = aiProject(wind, nowIndex, { min: 0 })
       const cur = hours[Math.max(0, nowIndex)]
       const { hi, lo } = argExtremes(gust)
       const gustKmh = hours.map((h) => toKmh(h.windGusts))
@@ -346,10 +384,19 @@ function buildView(
         nowIndex,
         xLabels,
         tooltipHead,
-        projectionNote: nowIndex >= 0 ? "Solid = live · dashed = AI projection to midnight" : "AI-projected day",
+        projectionNote: nowIndex >= 0 ? "Solid = NCM mirror · dotted = Open-Meteo AI prediction" : "AI-projected day",
         series: [
           { label: "Wind", color: TREND.primary, values: wind, format: s },
-          { label: "Gusts", color: TREND.secondary, values: gust, format: s },
+          { label: "Gusts", color: TREND.gust, values: gust, format: s },
+          { label: "AI wind", color: TREND.secondary, values: aiWind, format: s, dashed: true },
+        ],
+        extra: (i) => [
+          { label: "Direction", value: `${compass(hours[i].windDirection)} · ${Math.round(hours[i].windDirection)}°` },
+          { label: "AI wind", value: s(aiWind[i]) },
+          {
+            label: "AI Δ vs NCM",
+            value: `${aiWind[i] - wind[i] >= 0 ? "+" : ""}${(aiWind[i] - wind[i]).toFixed(isMetric ? 1 : 0)} ${speedUnit(units)}`,
+          },
         ],
         stats: [
           { label: "Wind", value: s(spd(cur.windSpeed)), sub: compass(cur.windDirection) },
@@ -357,7 +404,7 @@ function buildView(
           { label: "Direction", value: compass(cur.windDirection), sub: `${Math.round(cur.windDirection)}°` },
         ],
         scrubComment: (i) =>
-          `${clockAt(i)} — wind ${s(wind[i])}, gusting ${s(gust[i])} from ${compass(hours[i].windDirection)}${gustKmh[i] >= 50 ? " — dust likely." : "."}`,
+          `${clockAt(i)} — NCM wind ${s(wind[i])} (AI ${s(aiWind[i])}), gusting ${s(gust[i])} from ${compass(hours[i].windDirection)} ${Math.round(hours[i].windDirection)}°${gustKmh[i] >= 50 ? " — dust likely." : "."}`,
         peak: { label: "Strongest gust", value: s(gust[hi]), when: clockAt(hi) },
         trough: { label: "Calmest hour", value: s(gust[lo]), when: clockAt(lo) },
         headline: {
@@ -371,6 +418,7 @@ function buildView(
     const prob = hours.map((h) => h.precipitationProbability)
     const hum = hours.map((h) => h.humidity)
     const cloud = hours.map((h) => h.cloudCover)
+    const aiRain = aiProject(prob, nowIndex, { min: 0, max: 100 })
     const total = hours.reduce((sum, h) => sum + h.precipitation, 0)
     const cur = hours[Math.max(0, nowIndex)]
     const cloudWord = (c: number) => (c >= 85 ? "overcast" : c >= 55 ? "cloudy" : c >= 25 ? "partly cloudy" : "clear")
@@ -387,10 +435,11 @@ function buildView(
       nowIndex,
       xLabels,
       tooltipHead,
-      projectionNote: nowIndex >= 0 ? "Solid = live · dashed = AI projection to midnight" : "AI-projected day",
+      projectionNote: nowIndex >= 0 ? "Solid = NCM mirror · dotted = Open-Meteo AI prediction" : "AI-projected day",
       series: [
-        { label: "Rain %", color: TREND.secondary, values: prob, format: pct },
-        { label: "Humidity", color: TREND.primary, values: hum, format: pct },
+        { label: "Rain %", color: TREND.primary, values: prob, format: pct },
+        { label: "Humidity", color: TREND.humidity, values: hum, format: pct },
+        { label: "AI rain %", color: TREND.secondary, values: aiRain, format: pct, dashed: true },
       ],
       bars: { label: "Cloud cover", color: "var(--muted-foreground)", values: cloud, format: pct, max: 100 },
       stats: [
@@ -400,10 +449,11 @@ function buildView(
       ],
       extra: (i) => [
         { label: "Cloud cover", value: `${pct(cloud[i])} · ${cloudWord(cloud[i])}` },
+        { label: "AI rain %", value: pct(aiRain[i]) },
         { label: "Precip total", value: `${total.toFixed(1)} ${precipUnit(units)}` },
       ],
       scrubComment: (i) =>
-        `${clockAt(i)} — ${cloudWord(cloud[i])} (${pct(cloud[i])} cloud) · ${pct(prob[i])} rain chance · ${pct(hum[i])} humidity${prob[i] >= 50 ? " — showers likely." : "."}`,
+        `${clockAt(i)} — ${cloudWord(cloud[i])} (${pct(cloud[i])} cloud) · NCM ${pct(prob[i])} rain (AI ${pct(aiRain[i])}) · ${pct(hum[i])} humidity${prob[i] >= 50 ? " — showers likely." : "."}`,
       peak: { label: "Peak rain chance", value: pct(prob[hi]), when: clockAt(hi) },
       trough: { label: "Driest hour", value: pct(prob[lo]), when: clockAt(lo) },
       headline: {
@@ -776,14 +826,20 @@ export function LiveTrend() {
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
               {view.series.map((serie) => (
                 <span key={serie.label} className="flex items-center gap-1.5">
-                  <span className="inline-block h-0.5 w-4 rounded-sm" style={{ background: serie.color }} />
+                  {serie.dashed ? (
+                    <span className="inline-block h-0 w-4 border-t-2 border-dotted" style={{ borderColor: serie.color }} />
+                  ) : (
+                    <span className="inline-block h-0.5 w-4 rounded-sm" style={{ background: serie.color }} />
+                  )}
                   {serie.label}
                 </span>
               ))}
-              <span className="flex items-center gap-1.5">
-                <span className="inline-block h-0 w-4 border-t-2 border-dashed border-muted-foreground" />
-                AI projection
-              </span>
+              {view.series.some((serie) => serie.dashed) ? null : (
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block h-0 w-4 border-t-2 border-dashed border-muted-foreground" />
+                  AI projection
+                </span>
+              )}
             </div>
             <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
               {view.projectionNote} · Y-axis auto-scaled to {view.series[0].label} · each line on its own range
@@ -1271,34 +1327,55 @@ function TrendChart({
           <rect x={px(boundary)} y={0} width={W - px(boundary)} height={H} fill="var(--foreground)" opacity="0.03" />
         ) : null}
 
-        {/* each series: solid (near-term) + dashed (AI projection) */}
-        {normed.map((ys, si) => (
-          <g key={series[si].label} filter="url(#live-trend-glow)">
-            <path
-              d={segment(ys, 0, solidTo)}
-              fill="none"
-              stroke={series[si].color}
-              strokeWidth={si === 0 ? 2 : 1.75}
-              strokeLinejoin="round"
-              strokeLinecap="round"
-              opacity={1}
-              vectorEffect="non-scaling-stroke"
-            />
-            {boundary < n - 1 ? (
+        {/* each series: solid NCM-mirror line, or a fully dotted Open-Meteo AI-prediction line */}
+        {normed.map((ys, si) => {
+          const serie = series[si]
+          const width = si === 0 ? 2 : 1.75
+          if (serie.dashed) {
+            return (
+              <g key={serie.label} filter="url(#live-trend-glow)">
+                <path
+                  d={segment(ys, 0, n - 1)}
+                  fill="none"
+                  stroke={serie.color}
+                  strokeWidth={width}
+                  strokeDasharray="1.5 4"
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                  opacity={0.9}
+                  vectorEffect="non-scaling-stroke"
+                />
+              </g>
+            )
+          }
+          return (
+            <g key={serie.label} filter="url(#live-trend-glow)">
               <path
-                d={segment(ys, solidTo, n - 1)}
+                d={segment(ys, 0, solidTo)}
                 fill="none"
-                stroke={series[si].color}
-                strokeWidth={si === 0 ? 2 : 1.75}
-                strokeDasharray="2 5"
+                stroke={serie.color}
+                strokeWidth={width}
                 strokeLinejoin="round"
                 strokeLinecap="round"
-                opacity={si === 0 ? 0.95 : 0.85}
+                opacity={1}
                 vectorEffect="non-scaling-stroke"
               />
-            ) : null}
-          </g>
-        ))}
+              {boundary < n - 1 ? (
+                <path
+                  d={segment(ys, solidTo, n - 1)}
+                  fill="none"
+                  stroke={serie.color}
+                  strokeWidth={width}
+                  strokeDasharray="2 5"
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                  opacity={si === 0 ? 0.95 : 0.85}
+                  vectorEffect="non-scaling-stroke"
+                />
+              ) : null}
+            </g>
+          )
+        })}
 
         {/* live "now" marker */}
         {nowIndex >= 0 ? (

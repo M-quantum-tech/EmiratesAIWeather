@@ -1,5 +1,7 @@
 import type { NextRequest } from "next/server"
 import type { AirQuality, Units, WeatherPayload } from "@/lib/weather"
+import { fetchWithRetry, readStale, writeStale } from "@/lib/upstream-cache"
+import { buildMirrorWeather } from "@/lib/ncm-mirror"
 
 const CURRENT = [
   "temperature_2m",
@@ -21,6 +23,7 @@ const CURRENT = [
 const HOURLY = [
   "temperature_2m",
   "apparent_temperature",
+  "dew_point_2m",
   "precipitation_probability",
   "precipitation",
   "wind_speed_10m",
@@ -101,15 +104,21 @@ export async function GET(request: NextRequest) {
   airUrl.searchParams.set("current", AIR)
   airUrl.searchParams.set("timezone", "auto")
 
+  const cacheKey = `weather:${latitude.toFixed(3)}:${longitude.toFixed(3)}:${units}:${model}`
+
   try {
     const [forecastResponse, airResponse] = await Promise.all([
-      fetch(forecastUrl, { next: { revalidate: 180 } }),
-      fetch(airUrl, { next: { revalidate: 600 } }),
+      fetchWithRetry(forecastUrl, { next: { revalidate: 180 } }),
+      fetchWithRetry(airUrl, { next: { revalidate: 600 } }),
     ])
 
     if (!forecastResponse.ok) {
       console.log("[v0] forecast upstream failure:", forecastResponse.status)
-      return Response.json({ error: "Weather service is unavailable right now." }, { status: 502 })
+      const stale = readStale<Omit<WeatherPayload, "location">>(cacheKey)
+      if (stale) {
+        return Response.json({ ...stale.payload, stale: true, staleAgeMs: stale.ageMs })
+      }
+      return Response.json(buildMirrorWeather(latitude, longitude, units))
     }
 
     const forecast = await forecastResponse.json()
@@ -140,6 +149,7 @@ export async function GET(request: NextRequest) {
       time,
       temperature: num(hourlyRaw.temperature_2m?.[index]),
       apparentTemperature: num(hourlyRaw.apparent_temperature?.[index]),
+      dewPoint: num(hourlyRaw.dew_point_2m?.[index]),
       precipitationProbability: num(hourlyRaw.precipitation_probability?.[index]),
       precipitation: num(hourlyRaw.precipitation?.[index]),
       windSpeed: num(hourlyRaw.wind_speed_10m?.[index]),
@@ -217,9 +227,14 @@ export async function GET(request: NextRequest) {
       fetchedAt: new Date().toISOString(),
     }
 
+    writeStale(cacheKey, payload)
     return Response.json(payload)
   } catch (error) {
     console.log("[v0] weather route error:", error instanceof Error ? error.message : error)
-    return Response.json({ error: "Could not reach the weather network." }, { status: 502 })
+    const stale = readStale<Omit<WeatherPayload, "location">>(cacheKey)
+    if (stale) {
+      return Response.json({ ...stale.payload, stale: true, staleAgeMs: stale.ageMs })
+    }
+    return Response.json(buildMirrorWeather(latitude, longitude, units))
   }
 }

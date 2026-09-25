@@ -33,6 +33,8 @@ export type HourlyReading = {
   time: string
   temperature: number
   apparentTemperature: number
+  /** Hourly dew point at 2 m, matching the current-reading dew point unit. */
+  dewPoint: number
   precipitationProbability: number
   precipitation: number
   windSpeed: number
@@ -90,7 +92,15 @@ export type WeatherPayload = {
   daily: DailyReading[]
   air: AirQuality | null
   fetchedAt: string
-}
+  /** True when served from the stale cache because upstream was unavailable. */
+  stale?: boolean
+  /** Age (ms) of the stale payload, when `stale` is true. */
+  staleAgeMs?: number
+  /** Data source of record: live Open-Meteo, or the NCM climatology mirror fallback. */
+  source?: "open-meteo" | "ncm-mirror"
+  /** True when the reading came from the NCM mirror rather than a live fetch. */
+  mirror?: boolean
+  }
 
 type Condition = { label: string; short: string; group: ConditionGroup }
 export type ConditionGroup =
@@ -385,7 +395,15 @@ export type SolarPayload = {
   /** Up to 14 daily aggregates, ordered from today forward. */
   days: SolarDay[]
   fetchedAt: string
-}
+  /** True when served from the stale cache because upstream was unavailable. */
+  stale?: boolean
+  /** Age (ms) of the stale payload, when `stale` is true. */
+  staleAgeMs?: number
+  /** Data source of record: live Open-Meteo, or the NCM climatology mirror fallback. */
+  source?: "open-meteo" | "ncm-mirror"
+  /** True when the reading came from the NCM mirror rather than a live fetch. */
+  mirror?: boolean
+  }
 
 /** Qualitative band for a DNI daily energy yield (kWh/m²/day) — solar-resource grading. */
 export function dniBand(energy: number): { label: string; tone: "bad" | "warn" | "moderate" | "good" } {
