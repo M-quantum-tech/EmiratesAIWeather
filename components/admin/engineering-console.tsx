@@ -5,12 +5,21 @@ import { BellRing, Check, Cloud, LineChart, Link2, Plus, RotateCcw, Save, Square
 import {
   DEFAULT_CLOUD_SOURCE,
   DEFAULT_RULES,
+  DEFAULT_SITE_CONFIG,
   DEFAULT_TREND_SOURCES,
   DEFAULT_WIND_MONITOR,
   DEFAULT_WIND_SOURCE,
   ESCALATION_LEVELS,
+  SITE_KEYS,
+  SITE_META,
+  SITE_METRIC_KEYS,
+  SITE_METRIC_META,
   type CloudSourceConfig,
   type EscalationRule,
+  type MetricRange,
+  type SiteConfig,
+  type SiteKey,
+  type SiteMetricKey,
   type SourceLink,
   type TierDeadbands,
   type TrendSourceGroup,
@@ -89,6 +98,75 @@ export function EngineeringConsole({
     )
   }
 
+  function updateSiteKm(level: AlertLevel, siteKey: SiteKey, value: string) {
+    setSaved(false)
+    setRules((prev) =>
+      prev.map((r) => (r.level === level ? { ...r, [siteKey]: { ...r[siteKey], km: value } } : r)),
+    )
+  }
+
+  function updateSiteSource(level: AlertLevel, siteKey: SiteKey, patch: Partial<SourceLink>) {
+    setSaved(false)
+    setRules((prev) =>
+      prev.map((r) =>
+        r.level === level ? { ...r, [siteKey]: { ...r[siteKey], source: { ...r[siteKey].source, ...patch } } } : r,
+      ),
+    )
+  }
+
+  function updateRange(
+    level: AlertLevel,
+    siteKey: SiteKey,
+    metric: SiteMetricKey,
+    index: number,
+    patch: Partial<MetricRange>,
+  ) {
+    setSaved(false)
+    setRules((prev) =>
+      prev.map((r) => {
+        if (r.level !== level) return r
+        const site = r[siteKey]
+        return {
+          ...r,
+          [siteKey]: { ...site, [metric]: site[metric].map((rg, i) => (i === index ? { ...rg, ...patch } : rg)) },
+        }
+      }),
+    )
+  }
+
+  function addRange(level: AlertLevel, siteKey: SiteKey, metric: SiteMetricKey) {
+    setSaved(false)
+    setRules((prev) =>
+      prev.map((r) => {
+        if (r.level !== level) return r
+        const site = r[siteKey]
+        return { ...r, [siteKey]: { ...site, [metric]: [...site[metric], { min: 0, max: null, label: "" }] } }
+      }),
+    )
+  }
+
+  function removeRange(level: AlertLevel, siteKey: SiteKey, metric: SiteMetricKey, index: number) {
+    setSaved(false)
+    setRules((prev) =>
+      prev.map((r) => {
+        if (r.level !== level) return r
+        const site = r[siteKey]
+        return { ...r, [siteKey]: { ...site, [metric]: site[metric].filter((_, i) => i !== index) } }
+      }),
+    )
+  }
+
+  function cloneSite(site: SiteConfig): SiteConfig {
+    return {
+      ...site,
+      windMs: site.windMs.map((r) => ({ ...r })),
+      gustMs: site.gustMs.map((r) => ({ ...r })),
+      rainMm: site.rainMm.map((r) => ({ ...r })),
+      cloudPct: site.cloudPct.map((r) => ({ ...r })),
+      source: { ...site.source },
+    }
+  }
+
   function resetDefaults() {
     setSaved(false)
     setError(null)
@@ -97,6 +175,8 @@ export function EngineeringConsole({
         ...r,
         sourceLinks: r.sourceLinks.map((s) => ({ ...s })),
         deadbands: { ...r.deadbands },
+        atSite: cloneSite(DEFAULT_SITE_CONFIG[r.level].atSite),
+        farSite: cloneSite(DEFAULT_SITE_CONFIG[r.level].farSite),
       })),
     )
   }
@@ -275,6 +355,34 @@ export function EngineeringConsole({
                     />
                   </div>
                 </div>
+                {/* At site / Far site detection panels */}
+                <div className="mt-4 flex flex-col gap-2">
+                  <div className="flex flex-col gap-1">
+                    <span className="label-caps text-foreground">Site detection · at site vs far site</span>
+                    <p className="text-xs text-muted-foreground/80">
+                      {rule.level === "green"
+                        ? "Green stays on its at-site ranges; far-site stations are watched, and a reading in the far-site ranges escalates to the next tier."
+                        : "At-site ranges confirm this tier here; far-site ranges are the early-warning watch that escalates to the next tier."}{" "}
+                      Wind direction is not set here — it is read live from whichever site reports the highest wind speed.
+                    </p>
+                  </div>
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    {SITE_KEYS.map((siteKey) => (
+                      <SitePanel
+                        key={siteKey}
+                        siteKey={siteKey}
+                        site={rule[siteKey]}
+                        accent={meta.text}
+                        onKm={(v) => updateSiteKm(rule.level, siteKey, v)}
+                        onSource={(patch) => updateSiteSource(rule.level, siteKey, patch)}
+                        onRangeChange={(metric, i, patch) => updateRange(rule.level, siteKey, metric, i, patch)}
+                        onRangeAdd={(metric) => addRange(rule.level, siteKey, metric)}
+                        onRangeRemove={(metric, i) => removeRange(rule.level, siteKey, metric, i)}
+                      />
+                    ))}
+                  </div>
+                </div>
+
                 <div className="mt-3 flex flex-col gap-1">
                   <span className="label-caps text-muted-foreground">Trigger criteria</span>
                   <textarea
@@ -892,6 +1000,159 @@ function TrendSourceEditor({ initialGroups }: { initialGroups: TrendSourceGroup[
         ))}
       </div>
     </section>
+  )
+}
+
+function SitePanel({
+  siteKey,
+  site,
+  accent,
+  onKm,
+  onSource,
+  onRangeChange,
+  onRangeAdd,
+  onRangeRemove,
+}: {
+  siteKey: SiteKey
+  site: SiteConfig
+  accent: string
+  onKm: (v: string) => void
+  onSource: (patch: Partial<SourceLink>) => void
+  onRangeChange: (metric: SiteMetricKey, index: number, patch: Partial<MetricRange>) => void
+  onRangeAdd: (metric: SiteMetricKey) => void
+  onRangeRemove: (metric: SiteMetricKey, index: number) => void
+}) {
+  const info = SITE_META[siteKey]
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border border-border/70 bg-background/40 p-3">
+      <div className="flex flex-col gap-0.5">
+        <span className={cn("font-mono text-xs font-bold uppercase tracking-wide", accent)}>{info.name}</span>
+        <span className="text-[0.6875rem] leading-snug text-muted-foreground/80">{info.hint}</span>
+      </div>
+
+      <label className="flex flex-col gap-1">
+        <span className="label-caps text-muted-foreground">Detection band (KM range)</span>
+        <input
+          type="text"
+          value={site.km}
+          placeholder="0–20 km"
+          onChange={(e) => onKm(e.target.value)}
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent"
+        />
+      </label>
+
+      {SITE_METRIC_KEYS.map((metric) => (
+        <RangeEditor
+          key={metric}
+          metric={metric}
+          ranges={site[metric]}
+          onChange={(i, patch) => onRangeChange(metric, i, patch)}
+          onAdd={() => onRangeAdd(metric)}
+          onRemove={(i) => onRangeRemove(metric, i)}
+        />
+      ))}
+
+      <div className="flex flex-col gap-1.5">
+        <span className="label-caps text-muted-foreground">Data source link</span>
+        <input
+          type="text"
+          value={site.source.label}
+          placeholder="Station feed name"
+          onChange={(e) => onSource({ label: e.target.value })}
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent"
+        />
+        <span className="relative">
+          <Link2 className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+          <input
+            type="url"
+            inputMode="url"
+            value={site.source.url ?? ""}
+            placeholder="https://link-to-weather-station (optional)"
+            onChange={(e) => onSource({ url: e.target.value })}
+            className="w-full rounded-md border border-border bg-background py-2 pl-8 pr-3 text-sm text-foreground outline-none focus:border-accent"
+          />
+        </span>
+      </div>
+    </div>
+  )
+}
+
+function RangeEditor({
+  metric,
+  ranges,
+  onChange,
+  onAdd,
+  onRemove,
+}: {
+  metric: SiteMetricKey
+  ranges: MetricRange[]
+  onChange: (index: number, patch: Partial<MetricRange>) => void
+  onAdd: () => void
+  onRemove: (index: number) => void
+}) {
+  const meta = SITE_METRIC_META[metric]
+  return (
+    <div className="flex flex-col gap-1.5 rounded-md border border-border/50 bg-background/30 p-2.5">
+      <div className="flex items-center justify-between">
+        <span className="label-caps text-muted-foreground">
+          {meta.label} <span className="text-muted-foreground/60">({meta.unit})</span>
+        </span>
+        <button
+          type="button"
+          onClick={onAdd}
+          className="inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-[0.625rem] font-medium text-muted-foreground transition-colors hover:bg-background/60"
+        >
+          <Plus className="h-2.5 w-2.5" aria-hidden="true" />
+          Range
+        </button>
+      </div>
+      {ranges.length === 0 ? (
+        <p className="text-[0.6875rem] text-muted-foreground/70">No ranges — add one.</p>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          {ranges.map((rg, i) => (
+            <div key={i} className="flex items-center gap-1.5">
+              <input
+                type="number"
+                min={0}
+                max={meta.max}
+                value={rg.min}
+                aria-label={`${meta.label} range ${i + 1} minimum`}
+                onChange={(e) => onChange(i, { min: e.target.value === "" ? 0 : Number(e.target.value) })}
+                className="w-14 rounded-md border border-border bg-background px-2 py-1.5 text-center text-xs text-foreground outline-none focus:border-accent"
+              />
+              <span className="text-xs text-muted-foreground">–</span>
+              <input
+                type="number"
+                min={0}
+                max={meta.max}
+                value={rg.max ?? ""}
+                placeholder="∞"
+                aria-label={`${meta.label} range ${i + 1} maximum (blank = open-ended)`}
+                onChange={(e) => onChange(i, { max: e.target.value === "" ? null : Number(e.target.value) })}
+                className="w-14 rounded-md border border-border bg-background px-2 py-1.5 text-center text-xs text-foreground outline-none focus:border-accent"
+              />
+              <input
+                type="text"
+                value={rg.label}
+                placeholder="Severity"
+                aria-label={`${meta.label} range ${i + 1} severity label`}
+                onChange={(e) => onChange(i, { label: e.target.value })}
+                className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:border-accent"
+              />
+              <button
+                type="button"
+                onClick={() => onRemove(i)}
+                className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-border text-muted-foreground transition-colors hover:border-alert-red/50 hover:text-alert-red"
+                aria-label={`Remove ${meta.label} range ${i + 1}`}
+              >
+                <Trash2 className="h-3 w-3" aria-hidden="true" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 

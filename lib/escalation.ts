@@ -42,6 +42,10 @@ export type EscalationRule = {
   sourceLinks: SourceLink[]
   /** Hysteresis dead bands that gate this tier, paired with its KM range. */
   deadbands: TierDeadbands
+  /** On-site detection — the ranges that confirm this tier is active here. */
+  atSite: SiteConfig
+  /** Distant early-warning detection — reaching these ranges escalates the tier. */
+  farSite: SiteConfig
 }
 
 /** Built-in dead bands per tier — widen as severity climbs to avoid flapping. */
@@ -69,6 +73,158 @@ export function parseDeadbands(value: unknown, level: AlertLevel): TierDeadbands
 }
 
 export const ESCALATION_LEVELS: AlertLevel[] = ["green", "yellow", "orange", "red"]
+
+/**
+ * Each tier is evaluated at two locations. "At site" is the on-site weather
+ * station that confirms the tier is actually happening here; "far site" is the
+ * ring of distant stations kept under observation — if a far-site reading climbs
+ * into its range, the tier escalates to the next level. Wind direction is
+ * deliberately not configured here: it is always read live from whichever site
+ * currently reports the highest wind speed.
+ */
+export const SITE_KEYS = ["atSite", "farSite"] as const
+export type SiteKey = (typeof SITE_KEYS)[number]
+
+export const SITE_META: Record<SiteKey, { name: string; hint: string }> = {
+  atSite: {
+    name: "At site",
+    hint: "On-site station — these ranges confirm this tier is active here.",
+  },
+  farSite: {
+    name: "Far site",
+    hint: "Distant stations under observation — a reading in these ranges escalates to the next tier.",
+  },
+}
+
+/**
+ * The driving parameters configured per site. Wind direction is intentionally
+ * excluded — it follows whichever site reports the highest live wind speed.
+ */
+export const SITE_METRIC_KEYS = ["windMs", "gustMs", "rainMm", "cloudPct"] as const
+export type SiteMetricKey = (typeof SITE_METRIC_KEYS)[number]
+
+export const SITE_METRIC_META: Record<SiteMetricKey, { label: string; unit: string; max: number }> = {
+  windMs: { label: "Wind speed", unit: "m/s", max: 120 },
+  gustMs: { label: "Wind gust", unit: "m/s", max: 150 },
+  rainMm: { label: "Rainfall", unit: "mm", max: 500 },
+  cloudPct: { label: "Cloud cover", unit: "%", max: 100 },
+}
+
+/** One severity band for a metric. `max: null` means open-ended (∞). */
+export type MetricRange = { min: number; max: number | null; label: string }
+
+/** One site's detection config: KM band, per-metric severity ranges, and a feed. */
+export type SiteConfig = {
+  /** Detection band label, e.g. "0–20 km". */
+  km: string
+  windMs: MetricRange[]
+  gustMs: MetricRange[]
+  rainMm: MetricRange[]
+  cloudPct: MetricRange[]
+  /** Pasteable weather-station feed for this site (renders live when linked). */
+  source: SourceLink
+}
+
+const DEFAULT_WIND_RANGES: MetricRange[] = [
+  { min: 0, max: 10, label: "Low" },
+  { min: 10, max: 15, label: "Moderate" },
+  { min: 15, max: 20, label: "High" },
+  { min: 20, max: null, label: "Severe" },
+]
+const DEFAULT_GUST_RANGES: MetricRange[] = [
+  { min: 0, max: 14, label: "Low" },
+  { min: 14, max: 20, label: "Moderate" },
+  { min: 20, max: 28, label: "High" },
+  { min: 28, max: null, label: "Severe" },
+]
+const DEFAULT_RAIN_RANGES: MetricRange[] = [
+  { min: 0, max: 1, label: "Trace" },
+  { min: 1, max: 10, label: "Light" },
+  { min: 10, max: 30, label: "Moderate" },
+  { min: 30, max: null, label: "Heavy" },
+]
+const DEFAULT_CLOUD_RANGES: MetricRange[] = [
+  { min: 0, max: 25, label: "Clear" },
+  { min: 25, max: 50, label: "Partly" },
+  { min: 50, max: 75, label: "Cloudy" },
+  { min: 75, max: 100, label: "Overcast" },
+]
+
+function defaultSite(km: string, source: SourceLink): SiteConfig {
+  return {
+    km,
+    windMs: DEFAULT_WIND_RANGES.map((r) => ({ ...r })),
+    gustMs: DEFAULT_GUST_RANGES.map((r) => ({ ...r })),
+    rainMm: DEFAULT_RAIN_RANGES.map((r) => ({ ...r })),
+    cloudPct: DEFAULT_CLOUD_RANGES.map((r) => ({ ...r })),
+    source: { ...source },
+  }
+}
+
+/** Build a fresh At-site / Far-site pair with the default NCM station feeds. */
+function levelSites(): Record<SiteKey, SiteConfig> {
+  return {
+    atSite: defaultSite("0–20 km", {
+      label: "NCM AWS Wind · at site",
+      url: "https://ghaith.ncm.gov.ae/?lang=en#aws-wind",
+    }),
+    farSite: defaultSite("20–80 km", {
+      label: "NCM COSMO-UAE Wind · far site",
+      url: "https://ghaith.ncm.gov.ae/?lang=en#cosmo-uae-wind",
+    }),
+  }
+}
+
+/** Built-in At-site / Far-site config per tier — fully editable in the console. */
+export const DEFAULT_SITE_CONFIG: Record<AlertLevel, Record<SiteKey, SiteConfig>> = {
+  green: levelSites(),
+  yellow: levelSites(),
+  orange: levelSites(),
+  red: levelSites(),
+}
+
+/** Parse an unknown value into a clean MetricRange[] (falling back when empty). */
+export function parseMetricRanges(value: unknown, fallback: MetricRange[], max: number): MetricRange[] {
+  if (!Array.isArray(value)) return fallback.map((r) => ({ ...r }))
+  const out: MetricRange[] = []
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue
+    const r = raw as Record<string, unknown>
+    const minN = Number(r.min)
+    const min = Number.isFinite(minN) && minN >= 0 ? Math.min(Math.round(minN * 10) / 10, max) : 0
+    let hi: number | null = null
+    if (r.max !== null && r.max !== undefined && r.max !== "") {
+      const maxN = Number(r.max)
+      if (Number.isFinite(maxN) && maxN >= 0) hi = Math.min(Math.round(maxN * 10) / 10, max)
+    }
+    out.push({ min, max: hi, label: String(r.label ?? "").slice(0, 40) })
+    if (out.length >= 10) break
+  }
+  return out.length ? out : fallback.map((r) => ({ ...r }))
+}
+
+/** Parse a per-site data source, allowing an intentionally empty (unassigned) feed. */
+function parseSiteSource(value: unknown): SourceLink {
+  if (!value || typeof value !== "object") return { label: "" }
+  const r = value as Record<string, unknown>
+  const label = String(r.label ?? "").slice(0, 80).trim()
+  const url = sanitizeSourceUrl(r.url)
+  if (!label && !url) return { label: "" }
+  return { label: label || url!, ...(url ? { url } : {}) }
+}
+
+/** Parse an unknown value into a clean SiteConfig, falling back per field. */
+export function parseSiteConfig(value: unknown, fallback: SiteConfig): SiteConfig {
+  const r = value && typeof value === "object" ? (value as Record<string, unknown>) : {}
+  return {
+    km: (String(r.km ?? "").slice(0, 40).trim() || fallback.km),
+    windMs: parseMetricRanges(r.windMs, fallback.windMs, SITE_METRIC_META.windMs.max),
+    gustMs: parseMetricRanges(r.gustMs, fallback.gustMs, SITE_METRIC_META.gustMs.max),
+    rainMm: parseMetricRanges(r.rainMm, fallback.rainMm, SITE_METRIC_META.rainMm.max),
+    cloudPct: parseMetricRanges(r.cloudPct, fallback.cloudPct, SITE_METRIC_META.cloudPct.max),
+    source: r.source === undefined ? { ...fallback.source } : parseSiteSource(r.source),
+  }
+}
 
 /**
  * Per-level entry thresholds used to gate hysteresis, mirroring the live banner's
@@ -175,6 +331,8 @@ export const DEFAULT_RULES: EscalationRule[] = [
       { label: "NCM", url: "https://www.ncm.gov.ae/?lang=en" },
     ],
     deadbands: { ...DEFAULT_DEADBANDS.green },
+    atSite: DEFAULT_SITE_CONFIG.green.atSite,
+    farSite: DEFAULT_SITE_CONFIG.green.farSite,
   },
   {
     level: "yellow",
@@ -187,6 +345,8 @@ export const DEFAULT_RULES: EscalationRule[] = [
       { label: "NCM Al Bahar", url: "https://www.ncm.gov.ae/albahar?lang=en" },
     ],
     deadbands: { ...DEFAULT_DEADBANDS.yellow },
+    atSite: DEFAULT_SITE_CONFIG.yellow.atSite,
+    farSite: DEFAULT_SITE_CONFIG.yellow.farSite,
   },
   {
     level: "orange",
@@ -201,6 +361,8 @@ export const DEFAULT_RULES: EscalationRule[] = [
       { label: "NCM Al Bahar", url: "https://www.ncm.gov.ae/albahar?lang=en" },
     ],
     deadbands: { ...DEFAULT_DEADBANDS.orange },
+    atSite: DEFAULT_SITE_CONFIG.orange.atSite,
+    farSite: DEFAULT_SITE_CONFIG.orange.farSite,
   },
   {
     level: "red",
@@ -213,6 +375,8 @@ export const DEFAULT_RULES: EscalationRule[] = [
       { label: "NCM Al Bahar", url: "https://www.ncm.gov.ae/albahar?lang=en" },
     ],
     deadbands: { ...DEFAULT_DEADBANDS.red },
+    atSite: DEFAULT_SITE_CONFIG.red.atSite,
+    farSite: DEFAULT_SITE_CONFIG.red.farSite,
   },
 ]
 
@@ -409,6 +573,7 @@ export function parseRules(value: unknown): EscalationRule[] | null {
     if (!ESCALATION_LEVELS.includes(level)) continue
     const sourceLinks = parseSourceLinks(r.sourceLinks)
     const sources = sourceLinks.length ? sourcesSummary(sourceLinks) : String(r.sources ?? "").slice(0, 200)
+    const siteDefaults = DEFAULT_SITE_CONFIG[level]
     byLevel.set(level, {
       level,
       label: String(r.label ?? "").slice(0, 80),
@@ -417,6 +582,8 @@ export function parseRules(value: unknown): EscalationRule[] | null {
       sources,
       sourceLinks,
       deadbands: parseDeadbands(r.deadbands, level),
+      atSite: parseSiteConfig(r.atSite, siteDefaults.atSite),
+      farSite: parseSiteConfig(r.farSite, siteDefaults.farSite),
     })
   }
   // Always return in ladder order, filling any missing tier from defaults.
