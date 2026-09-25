@@ -33,20 +33,34 @@ export function playBuzzerTest(level: AlertLevel, durationMs = 2400) {
   const tone = BUZZER_TONE[level]
 
   const beep = (freq: number, at: number, dur: number) => {
-    const osc = audio.createOscillator()
-    const gain = audio.createGain()
-    osc.type = tone.type
-    osc.frequency.value = freq
-    gain.gain.setValueAtTime(0.0001, at)
-    gain.gain.exponentialRampToValueAtTime(tone.gain, at + 0.02)
-    gain.gain.exponentialRampToValueAtTime(0.0001, at + dur)
-    osc.connect(gain).connect(audio.destination)
-    osc.start(at)
-    osc.stop(at + dur)
+    // Layer fundamental + detuned twin + sub-octave into one master gain so higher
+    // tiers read as a big, loud danger horn rather than a thin beep.
+    const master = audio.createGain()
+    master.gain.setValueAtTime(0.0001, at)
+    master.gain.exponentialRampToValueAtTime(tone.gain, at + 0.02)
+    master.gain.setValueAtTime(tone.gain, at + dur * 0.7)
+    master.gain.exponentialRampToValueAtTime(0.0001, at + dur)
+    master.connect(audio.destination)
+
+    const voice = (f: number, detune: number, level: number) => {
+      const osc = audio.createOscillator()
+      const g = audio.createGain()
+      osc.type = tone.type
+      osc.frequency.value = f
+      if (detune) osc.detune.value = detune
+      g.gain.value = level
+      osc.connect(g).connect(master)
+      osc.start(at)
+      osc.stop(at + dur)
+    }
+    voice(freq, 0, 1)
+    if (tone.detune) voice(freq, tone.detune, 0.9)
+    if (tone.sub) voice(freq / 2, 0, 0.7)
   }
   const cycle = () => {
     const t = audio.currentTime
-    tone.pattern.forEach((freq, i) => beep(freq, t + i * tone.step, 0.2))
+    const hold = tone.hold ?? 0.2
+    tone.pattern.forEach((freq, i) => beep(freq, t + i * tone.step, hold))
   }
   cycle()
   loopTimer = setInterval(cycle, tone.interval)
