@@ -50,11 +50,16 @@ import {
   DEFAULT_RULES,
   DEFAULT_WIND_MONITOR,
   DEFAULT_WIND_SOURCE,
+  evaluateSite,
+  evaluateWindMonitor,
   type CloudSourceConfig,
   type EscalationRule,
+  type SiteKey,
+  type SiteReadings,
   type WindMonitorTier,
   type WindSourceConfig,
 } from "@/lib/escalation"
+import { computeSiteReadings } from "@/lib/site-readings"
 import { ProximityRings } from "@/components/weather/proximity-rings"
 import { WindDirectionRadar } from "@/components/weather/wind-direction-radar"
 import { useWeather } from "@/components/weather/weather-provider"
@@ -108,6 +113,12 @@ const LADDER: { level: AlertLevel; label: string; solid: string }[] = [
   { level: "yellow", label: "YELLOW", solid: "bg-alert-yellow" },
   { level: "orange", label: "ORANGE", solid: "bg-alert-orange" },
   { level: "red", label: "RED", solid: "bg-alert-red" },
+]
+
+/** The two detection sites shown under every tier button, wired to each rule's ranges. */
+const SITE_ROWS: { key: SiteKey; name: string }[] = [
+  { key: "atSite", name: "At site" },
+  { key: "farSite", name: "Near site" },
 ]
 
 const HAZARD_ICON: Record<HazardKey, typeof Wind> = {
@@ -252,32 +263,6 @@ export function AlertBanner() {
     [rawAlert, heldLevel],
   )
   const level = alert?.level ?? null
-  // Acknowledgment latch: the alarm sounds whenever the detected level differs from the
-  // last level the operator acknowledged. The first observed level is auto-armed silently;
-  // every subsequent change re-arms the alarm until Acknowledge is pressed.
-  const [ackedLevel, setAckedLevel] = useState<AlertLevel | null>(null)
-  const [changedFrom, setChangedFrom] = useState<AlertLevel | null>(null)
-  const prevLevelRef = useRef<AlertLevel | null>(null)
-  useEffect(() => {
-    if (!level) return
-    const prev = prevLevelRef.current
-    if (prev === null) {
-      setAckedLevel(level)
-    } else if (prev !== level) {
-      setAckedLevel(null)
-      setChangedFrom(prev)
-    }
-    prevLevelRef.current = level
-  }, [level])
-  const alarmActive = level != null && ackedLevel !== level
-  const acknowledge = () => setAckedLevel(level)
-  // Auto-silence: whenever the alarm arms on a level change it sounds for at most
-  // 15 seconds, then auto-acknowledges — unless the operator resets it sooner.
-  useEffect(() => {
-    if (!alarmActive) return
-    const timer = window.setTimeout(() => setAckedLevel(level), 15_000)
-    return () => window.clearTimeout(timer)
-  }, [alarmActive, level])
   const [ncm, setNcm] = useState<EmirateWarning | null>(null)
 
   // Live NCM Al Bahar warning for the current hour — matched to the user's emirate
@@ -347,6 +332,45 @@ export function AlertBanner() {
     refreshInterval: 60 * 1000,
     keepPreviousData: true,
   })
+
+  // Per-site live readings, derived through the SAME shared helper the Engineering
+  // Console uses, so the At-site / Far-site indicators here and there fire from
+  // identical numbers against identical ranges.
+  const siteReadings = useMemo<Record<SiteKey, SiteReadings>>(
+    () => computeSiteReadings(payload?.units ?? "metric", payload?.current, farData?.current),
+    [payload?.units, payload?.current, farData?.current],
+  )
+  // Evaluate the active tier's ranges. The alarm/blink is driven by three
+  // independent conditions — nothing sounds because a tier is merely "active"; it
+  // sounds when (1) an at-site reading meets the tier's range, (2) a far-site
+  // reading meets it, or (3) the live on-site wind meets a Wind Event Monitor
+  // threshold. Below every alerting threshold the wind event stays green.
+  const windEval = useMemo(
+    () => evaluateWindMonitor(siteReadings.atSite.windMs, windTiers),
+    [siteReadings.atSite.windMs, windTiers],
+  )
+  const siteEval = useMemo(() => {
+    const rule = rules.find((r) => r.level === level) ?? null
+    const at = rule ? evaluateSite(rule.atSite, siteReadings.atSite) : { met: false, reason: null }
+    const far = rule ? evaluateSite(rule.farSite, siteReadings.farSite) : { met: false, reason: null }
+    return { at, far, anyMet: at.met || far.met }
+  }, [rules, level, siteReadings])
+  // Any of the three wired conditions arms the alarm and blink.
+  const siteAlarm = siteEval.anyMet || windEval.met
+  // Acknowledgment latch: the buzzer sounds while a site condition is met and un-acked.
+  // Clearing the condition (all sites back to green) re-arms it for the next trip.
+  const [acked, setAcked] = useState(false)
+  useEffect(() => {
+    if (!siteAlarm) setAcked(false)
+  }, [siteAlarm])
+  const alarmActive = siteAlarm && !acked
+  const acknowledge = () => setAcked(true)
+  // Auto-silence after 15 s while the condition persists, unless reset sooner.
+  useEffect(() => {
+    if (!alarmActive) return
+    const timer = window.setTimeout(() => setAcked(true), 15_000)
+    return () => window.clearTimeout(timer)
+  }, [alarmActive])
 
   const danger = alert?.danger ?? false
   useBuzzer(alarmActive, level ?? "green")
@@ -447,6 +471,9 @@ export function AlertBanner() {
   const toMs = (v: number) => (payload.units === "metric" ? v : v * 1.609) / 3.6
   const windMs = toMs(payload.current.windSpeed)
   const farGustMs = farGust != null ? toMs(farGust) : null
+  // Per-site readings (`siteReadings`) and their evaluation (`siteEval`) are computed
+  // above via the shared helper so the ladder indicators, the buzzer and the console
+  // all stay wired to the same numbers and the same Engineering Console ranges.
   return (
     <section aria-label="Advance AI safety model" className={cn("station-rise rounded-xl border", styles.bar)}>
       {/* Header ribbon */}
@@ -512,7 +539,8 @@ export function AlertBanner() {
         </span>
       </div>
 
-      {/* Alarm strip — sounds on any level change until acknowledged, tinted to the level */}
+      {/* Alarm strip — sounds ONLY while an at-site or far-site reading meets this tier's
+          escalation range, until acknowledged; tinted to the active level. */}
       {alarmActive ? (
         <div
           role="alert"
@@ -521,7 +549,15 @@ export function AlertBanner() {
           <Siren className="h-4 w-4 shrink-0 animate-pulse" aria-hidden="true" />
           <span className="text-sm font-bold uppercase tracking-wide">{alert.title} buzzer</span>
           <span className="text-xs font-medium text-foreground/80">
-            {changedFrom ? `Level changed ${changedFrom.toUpperCase()} → ${alert.title}` : `Armed at ${alert.title}`}
+            {siteEval.at.met && siteEval.far.met
+              ? "At site + far site in range"
+              : siteEval.at.met
+                ? `At site in range · ${siteEval.at.reason}`
+                : siteEval.far.met
+                  ? `Far site in range · ${siteEval.far.reason}`
+                  : windEval.met
+                    ? `Wind event met · ${windEval.reason}`
+                    : `Armed at ${alert.title}`}
             {danger ? ` · severe conditions within ${DANGER_RADIUS_KM} km` : ""} — sounding for 15 s or until reset.
           </span>
           <button
@@ -582,34 +618,39 @@ export function AlertBanner() {
             <span className={cn("font-mono text-sm font-bold tabular-nums", styles.text)}>{alert.score}</span>
           </div>
 
-          {/* Tier ladder — button-style graphics that blink on the active level */}
-          <div className="grid grid-cols-4 gap-2">
+          {/* Tier ladder — each button is wired to its escalation-rule ranges and carries
+              At-site / Near-site indicators that blink red when live readings meet the tier.
+              The active tier only blinks when one of its sites is actually met — a tier being
+              "active" on the severity meter never blinks or sounds on its own. */}
+          <div className="grid grid-cols-4 gap-3">
             {LADDER.map((rung, i) => {
               const active = i === activeIndex
               const rungStyles = LEVEL_STYLES[rung.level]
+              const rule = rules.find((r) => r.level === rung.level)
+              // Blink the active card only when its own at-site or far-site condition is met.
+              const blink = active && siteAlarm
               return (
-                <button
+                <div
                   key={rung.level}
-                  type="button"
-                  aria-pressed={active}
-                  aria-label={`${rung.label} tier${active ? " — active" : ""}`}
+                  aria-current={active ? "true" : undefined}
+                  aria-label={`${rung.label} tier${active ? " — active" : ""}${blink ? " — condition met" : ""}`}
                   className={cn(
-                    "flex flex-col items-center gap-1.5 rounded-lg border px-2 py-2.5 transition-all",
+                    "flex flex-col items-center gap-2 rounded-xl border px-3 py-3.5 transition-all",
                     active
-                      ? cn(rungStyles.chip, rungStyles.text, "tier-blink opacity-100 shadow-sm")
-                      : "border-border bg-background/40 opacity-50 hover:opacity-75",
+                      ? cn(rungStyles.chip, rungStyles.text, "opacity-100 shadow-sm", blink && "tier-blink")
+                      : "border-border bg-background/40 opacity-70 hover:opacity-90",
                   )}
                 >
                   <span
                     className={cn(
-                      "h-3 w-full rounded-full",
+                      "h-3.5 w-full rounded-full",
                       rung.solid,
                       active ? "opacity-100" : "opacity-60",
                     )}
                   />
                   <span
                     className={cn(
-                      "font-mono text-[0.5625rem] font-bold uppercase tracking-wide",
+                      "font-mono text-xs font-bold uppercase tracking-wide",
                       active ? rungStyles.text : "text-muted-foreground/70",
                     )}
                   >
@@ -617,13 +658,73 @@ export function AlertBanner() {
                   </span>
                   <span
                     className={cn(
-                      "font-mono text-[0.5rem] uppercase tracking-wide",
+                      "font-mono text-[0.625rem] uppercase tracking-wide",
                       active ? rungStyles.text : "text-muted-foreground",
                     )}
                   >
                     {rung.level === "green" ? `${ALERT_RADII_KM.green}km+` : `${ALERT_RADII_KM[rung.level]} km`}
                   </span>
-                </button>
+
+                  {/* At-site / Near-site detection — green when clear, red-blink when met */}
+                  <div className="mt-1 w-full space-y-1.5 border-t border-border/50 pt-2">
+                    {SITE_ROWS.map(({ key, name }) => {
+                      const cfg = rule?.[key]
+                      const ev = cfg
+                        ? evaluateSite(cfg, siteReadings[key])
+                        : { met: false, reason: null }
+                      const src = cfg?.source
+                      const common = cn(
+                        "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 transition-colors",
+                        ev.met ? "bg-alert-red/15" : "hover:bg-background/60",
+                      )
+                      const inner = (
+                        <>
+                          <span
+                            className={cn(
+                              "h-2.5 w-2.5 shrink-0 rounded-full",
+                              ev.met ? "bg-alert-red tier-blink" : "bg-alert-green",
+                            )}
+                            aria-hidden="true"
+                          />
+                          <span
+                            className={cn(
+                              "truncate font-mono text-[0.5625rem] uppercase tracking-wide",
+                              ev.met ? "font-bold text-alert-red" : "text-muted-foreground",
+                            )}
+                          >
+                            {name}
+                          </span>
+                          {src?.url ? (
+                            <ExternalLink
+                              className="ml-auto h-2.5 w-2.5 shrink-0 text-muted-foreground"
+                              aria-hidden="true"
+                            />
+                          ) : null}
+                        </>
+                      )
+                      const title = ev.met
+                        ? `${name} · ${rung.label}: ${ev.reason}`
+                        : `${name} · ${rung.label}: within limits${src?.label ? ` · ${src.label}` : ""}`
+                      return src?.url ? (
+                        <a
+                          key={key}
+                          href={src.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={title}
+                          aria-label={title}
+                          className={common}
+                        >
+                          {inner}
+                        </a>
+                      ) : (
+                        <div key={key} title={title} aria-label={title} className={common}>
+                          {inner}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
               )
             })}
           </div>

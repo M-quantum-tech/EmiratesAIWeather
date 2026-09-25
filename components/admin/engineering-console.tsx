@@ -1,8 +1,10 @@
 "use client"
 
-import { useState } from "react"
-import { BellRing, Check, Cloud, LineChart, Link2, Plus, RotateCcw, Save, Square, Trash2, Volume2, Wind } from "lucide-react"
+import { useMemo, useState } from "react"
+import useSWR from "swr"
+import { BellRing, Check, Cloud, Database, ExternalLink, FlaskConical, LineChart, Link2, Plus, Power, RotateCcw, Save, Square, Trash2, Volume2, Wind } from "lucide-react"
 import {
+  DEFAULT_AI_SOURCES,
   DEFAULT_CLOUD_SOURCE,
   DEFAULT_RULES,
   DEFAULT_SITE_CONFIG,
@@ -14,12 +16,16 @@ import {
   SITE_META,
   SITE_METRIC_KEYS,
   SITE_METRIC_META,
+  evaluateSite,
+  evaluateWindMonitor,
+  type AiPredictionSource,
   type CloudSourceConfig,
   type EscalationRule,
   type MetricRange,
   type SiteConfig,
   type SiteKey,
   type SiteMetricKey,
+  type SiteReadings,
   type SourceLink,
   type TierDeadbands,
   type TrendSourceGroup,
@@ -27,14 +33,40 @@ import {
   type WindSourceConfig,
 } from "@/lib/escalation"
 import { playBuzzerTest, stopBuzzerTest } from "@/lib/escalation-buzzer"
-import type { AlertLevel } from "@/lib/weather"
+import { ALERT_RADII_KM, offsetLocation, type AlertLevel, type WeatherPayload } from "@/lib/weather"
+import { computeSiteReadings } from "@/lib/site-readings"
+import { useWeather } from "@/components/weather/weather-provider"
 import { cn } from "@/lib/utils"
 
-const LEVEL_META: Record<AlertLevel, { name: string; dot: string; ring: string; text: string }> = {
-  green: { name: "Green", dot: "bg-alert-green", ring: "border-alert-green/40 hover:bg-alert-green/10", text: "text-alert-green" },
-  yellow: { name: "Yellow", dot: "bg-alert-yellow", ring: "border-alert-yellow/40 hover:bg-alert-yellow/10", text: "text-alert-yellow" },
-  orange: { name: "Orange", dot: "bg-alert-orange", ring: "border-alert-orange/40 hover:bg-alert-orange/10", text: "text-alert-orange" },
-  red: { name: "Red", dot: "bg-alert-red", ring: "border-alert-red/50 hover:bg-alert-red/10", text: "text-alert-red" },
+async function weatherFetcher(url: string): Promise<WeatherPayload> {
+  const response = await fetch(url)
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}))
+    throw new Error(body.error ?? "Reading failed.")
+  }
+  return response.json()
+}
+
+const LEVEL_META: Record<
+  AlertLevel,
+  { name: string; dot: string; ring: string; text: string; ringActive: string; border: string; fill: string }
+> = {
+  green: { name: "Green", dot: "bg-alert-green", ring: "border-alert-green/40 hover:bg-alert-green/10", text: "text-alert-green", ringActive: "ring-alert-green/50", border: "border-alert-green/40", fill: "bg-alert-green/10" },
+  yellow: { name: "Yellow", dot: "bg-alert-yellow", ring: "border-alert-yellow/40 hover:bg-alert-yellow/10", text: "text-alert-yellow", ringActive: "ring-alert-yellow/50", border: "border-alert-yellow/40", fill: "bg-alert-yellow/10" },
+  orange: { name: "Orange", dot: "bg-alert-orange", ring: "border-alert-orange/40 hover:bg-alert-orange/10", text: "text-alert-orange", ringActive: "ring-alert-orange/60", border: "border-alert-orange/50", fill: "bg-alert-orange/15" },
+  red: { name: "Red", dot: "bg-alert-red", ring: "border-alert-red/50 hover:bg-alert-red/10", text: "text-alert-red", ringActive: "ring-alert-red/60", border: "border-alert-red/50", fill: "bg-alert-red/15" },
+}
+
+/**
+ * Representative test readings per tier for the Simulator. Values are chosen to land in each
+ * level's severity band so operators can preview the exact green → yellow → orange → red
+ * cascade the live stations would produce, without waiting for real weather.
+ */
+const SIM_PRESETS: Record<AlertLevel, SiteReadings> = {
+  green: { windMs: 6, gustMs: 9, rainMm: 0, cloudPct: 20 },
+  yellow: { windMs: 15, gustMs: 20, rainMm: 3, cloudPct: 55 },
+  orange: { windMs: 20, gustMs: 26, rainMm: 12, cloudPct: 70 },
+  red: { windMs: 25, gustMs: 32, rainMm: 32, cloudPct: 90 },
 }
 
 let uid = 0
@@ -46,18 +78,72 @@ export function EngineeringConsole({
   initialWindSource,
   initialCloudSource,
   initialTrendSources,
+  initialAiSources,
 }: {
   initialRules: EscalationRule[]
   initialWindMonitor: WindMonitorTier[]
   initialWindSource: WindSourceConfig
   initialCloudSource: CloudSourceConfig
   initialTrendSources: TrendSourceGroup[]
+  initialAiSources: AiPredictionSource[]
 }) {
   const [rules, setRules] = useState<EscalationRule[]>(initialRules)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [testing, setTesting] = useState<AlertLevel | null>(null)
+  // Simulator — when a level is active the At-site / Far-site indicators and the active tier
+  // are driven from these test readings instead of the live stations, so operators can rehearse
+  // the full green → red escalation on demand. null = live data.
+  const [simLevel, setSimLevel] = useState<AlertLevel | null>(null)
+  const [simValues, setSimValues] = useState<SiteReadings>({ ...SIM_PRESETS.green })
+
+  // Live wiring — identical to the warning banner: the on-site station reading plus a
+  // 50 km upwind ("far site") sample, both pushed through the shared computeSiteReadings
+  // helper. Every tier's At-site / Far-site button is evaluated against these numbers with
+  // the exact same evaluateSite() used on the public banner, so a range edited here lights
+  // the same indicator here and on the station.
+  const { payload } = useWeather()
+  const farPoint = useMemo(
+    () =>
+      payload
+        ? offsetLocation(
+            payload.location.latitude,
+            payload.location.longitude,
+            payload.current.windDirection,
+            ALERT_RADII_KM.yellow,
+          )
+        : null,
+    [payload],
+  )
+  const farKey =
+    farPoint && payload
+      ? `/api/weather?lat=${farPoint.lat.toFixed(3)}&lon=${farPoint.lon.toFixed(3)}&units=${payload.units}`
+      : null
+  const { data: farData } = useSWR(farKey, weatherFetcher, {
+    refreshInterval: 60 * 1000,
+    keepPreviousData: true,
+  })
+  const siteReadings = useMemo<Record<SiteKey, SiteReadings>>(
+    () => computeSiteReadings(payload?.units ?? "metric", payload?.current, farData?.current),
+    [payload?.units, payload?.current, farData?.current],
+  )
+  const live = payload != null
+  // When the Simulator is active, the test readings replace the live station numbers for both
+  // sites so every downstream evaluator (evaluateSite + evaluateWindMonitor) lights the same
+  // indicators it would from real data. Otherwise the live readings flow through untouched.
+  const effectiveReadings = useMemo<Record<SiteKey, SiteReadings>>(
+    () => (simLevel ? { atSite: { ...simValues }, farSite: { ...simValues } } : siteReadings),
+    [simLevel, simValues, siteReadings],
+  )
+  const effectiveLive = live || simLevel != null
+  // Wind Event Monitor trigger — evaluated against the effective on-site wind through the
+  // same shared helper the banner uses. Below every alerting threshold it stays green;
+  // once the wind reaches a tier it lights the At-site button red alongside the range check.
+  const windEval = useMemo(
+    () => evaluateWindMonitor(effectiveReadings.atSite.windMs, initialWindMonitor),
+    [effectiveReadings.atSite.windMs, initialWindMonitor],
+  )
 
   function update(level: AlertLevel, field: "label" | "km" | "triggers", value: string) {
     setSaved(false)
@@ -206,6 +292,19 @@ export function EngineeringConsole({
     }
   }
 
+  function simulate(level: AlertLevel) {
+    setSimLevel(level)
+    setSimValues({ ...SIM_PRESETS[level] })
+  }
+
+  function updateSimValue(key: keyof SiteReadings, value: string) {
+    const n = value === "" ? 0 : Number(value)
+    if (!Number.isFinite(n) || n < 0) return
+    // Editing a value implies a simulation is running — default to green if none is active yet.
+    setSimLevel((cur) => cur ?? "green")
+    setSimValues((prev) => ({ ...prev, [key]: n }))
+  }
+
   function test(level: AlertLevel) {
     playBuzzerTest(level)
     setTesting(level)
@@ -276,6 +375,9 @@ export function EngineeringConsole({
       {/* Live Trend + AI Projection reference sources (per panel) */}
       <TrendSourceEditor initialGroups={initialTrendSources} />
 
+      {/* AI prediction multi-source data pool */}
+      <AiSourceEditor initialSources={initialAiSources} />
+
       {/* Editable escalation rules */}
       <section className="rounded-xl border border-border bg-card p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -309,11 +411,103 @@ export function EngineeringConsole({
         </p>
         {error ? <p className="mt-2 text-sm text-alert-red">{error}</p> : null}
 
+        {/* Simulator — drive the At-site / Far-site indicators and the active tier from test readings */}
+        <div className="mt-4 rounded-lg border border-border/70 bg-background/30 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <FlaskConical className="h-4 w-4 text-accent" aria-hidden="true" />
+              <span className="label-caps text-foreground">Simulator</span>
+              <span
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[0.6875rem] font-semibold uppercase tracking-wide",
+                  simLevel
+                    ? "border-accent/60 bg-accent/15 text-accent"
+                    : "border-border bg-background/60 text-muted-foreground",
+                )}
+              >
+                <span
+                  className={cn(
+                    "h-1.5 w-1.5 rounded-full",
+                    simLevel ? "bg-accent tier-blink" : "bg-muted-foreground/50",
+                  )}
+                  aria-hidden="true"
+                />
+                {simLevel ? "ON" : "OFF"}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSimLevel(null)}
+              disabled={simLevel === null}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-background/60 disabled:opacity-50"
+            >
+              <RotateCcw className="h-3 w-3" aria-hidden="true" />
+              Turn off · back to live
+            </button>
+          </div>
+          <p className="mt-1.5 text-xs text-muted-foreground/80">
+            Push test readings through the exact same wiring as the live stations. Pick a level to watch the At-site
+            and Far-site indicators and the active tier switch from green up to red, or type your own values in the row
+            below.
+          </p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-4">
+            {ESCALATION_LEVELS.map((level) => {
+              const meta = LEVEL_META[level]
+              const active = simLevel === level
+              return (
+                <button
+                  key={level}
+                  type="button"
+                  onClick={() => simulate(level)}
+                  aria-pressed={active}
+                  aria-label={`Simulate ${meta.name}`}
+                  className={cn(
+                    "flex items-center gap-2 rounded-lg border bg-background/40 px-3 py-2.5 text-left transition-colors",
+                    meta.ring,
+                    active && cn("ring-2 ring-inset", meta.ringActive),
+                  )}
+                >
+                  <span
+                    className={cn("h-3 w-3 rounded-full", meta.dot, active && level !== "green" && "tier-blink")}
+                    aria-hidden="true"
+                  />
+                  <span className={cn("font-mono text-xs font-bold uppercase tracking-wide", meta.text)}>
+                    {meta.name}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+          <div className="mt-3 flex flex-col gap-1.5">
+            <span className="label-caps text-muted-foreground">Test live values — applied to both sites</span>
+            <div className="grid gap-3 sm:grid-cols-4">
+              <NumberField label="Wind speed" unit="m/s" value={simValues.windMs} onChange={(v) => updateSimValue("windMs", v)} />
+              <NumberField label="Wind gust" unit="m/s" value={simValues.gustMs} onChange={(v) => updateSimValue("gustMs", v)} />
+              <NumberField label="Rainfall" unit="mm" value={simValues.rainMm} onChange={(v) => updateSimValue("rainMm", v)} />
+              <NumberField label="Intensive cloud coverage" unit="%" value={simValues.cloudPct} onChange={(v) => updateSimValue("cloudPct", v)} />
+            </div>
+          </div>
+          {simLevel ? (
+            <p className={cn("mt-2 text-xs font-medium", LEVEL_META[simLevel].text)}>
+              Simulating {LEVEL_META[simLevel].name} — the indicators below reflect these test readings, not the live
+              stations. Press &ldquo;Back to live&rdquo; to resume real data.
+            </p>
+          ) : (
+            <p className="mt-2 text-xs text-muted-foreground/70">Live — indicators reflect real station readings.</p>
+          )}
+        </div>
+
         <div className="mt-4 flex flex-col gap-4">
           {rules.map((rule) => {
             const meta = LEVEL_META[rule.level]
             return (
-              <div key={rule.level} className="rounded-lg border border-border/70 bg-background/30 p-4">
+              <div
+                key={rule.level}
+                className={cn(
+                  "rounded-lg border border-border/70 bg-background/30 p-4 transition-shadow",
+                  simLevel === rule.level && cn("ring-2 ring-inset", meta.ringActive),
+                )}
+              >
                 <div className="flex items-center gap-2">
                   <span className={cn("h-3 w-3 rounded-full", meta.dot)} aria-hidden="true" />
                   <span className={cn("font-mono text-xs font-bold uppercase tracking-wide", meta.text)}>{meta.name}</span>
@@ -328,7 +522,7 @@ export function EngineeringConsole({
                   <span className="label-caps text-muted-foreground">
                     Dead bands · active hysteresis — tier holds until readings drop past these margins
                   </span>
-                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="grid gap-3 sm:grid-cols-3">
                     <NumberField
                       label="Wind speed"
                       unit="m/s"
@@ -342,18 +536,16 @@ export function EngineeringConsole({
                       onChange={(v) => updateDeadband(rule.level, "gustMs", v)}
                     />
                     <NumberField
-                      label="Wind direction"
-                      unit="°"
-                      value={rule.deadbands.directionDeg}
-                      onChange={(v) => updateDeadband(rule.level, "directionDeg", v)}
-                    />
-                    <NumberField
                       label="Rainfall"
                       unit="mm"
                       value={rule.deadbands.rainMm}
                       onChange={(v) => updateDeadband(rule.level, "rainMm", v)}
                     />
                   </div>
+                  <p className="text-xs text-muted-foreground/70">
+                    Wind direction is not set here — it is recorded live and shown on the Wind Direction &amp; Speed
+                    panel, read from whichever site reports the highest wind speed.
+                  </p>
                 </div>
                 {/* At site / Far site detection panels */}
                 <div className="mt-4 flex flex-col gap-2">
@@ -373,6 +565,11 @@ export function EngineeringConsole({
                         siteKey={siteKey}
                         site={rule[siteKey]}
                         accent={meta.text}
+                        readings={effectiveReadings[siteKey]}
+                        live={effectiveLive}
+                        simLevel={simLevel}
+                        windMet={siteKey === "atSite" && windEval.met}
+                        windReason={siteKey === "atSite" ? windEval.reason : null}
                         onKm={(v) => updateSiteKm(rule.level, siteKey, v)}
                         onSource={(patch) => updateSiteSource(rule.level, siteKey, patch)}
                         onRangeChange={(metric, i, patch) => updateRange(rule.level, siteKey, metric, i, patch)}
@@ -1003,10 +1200,188 @@ function TrendSourceEditor({ initialGroups }: { initialGroups: TrendSourceGroup[
   )
 }
 
+function AiSourceEditor({ initialSources }: { initialSources: AiPredictionSource[] }) {
+  const [sources, setSources] = useState<AiPredictionSource[]>(initialSources.map((s) => ({ ...s })))
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const enabledCount = sources.filter((s) => s.enabled).length
+
+  function update(index: number, patch: Partial<AiPredictionSource>) {
+    setSaved(false)
+    setSources((prev) => prev.map((s, i) => (i === index ? { ...s, ...patch } : s)))
+  }
+
+  function add() {
+    setSaved(false)
+    setSources((prev) => [...prev, { label: "", url: "", enabled: true }])
+  }
+
+  function remove(index: number) {
+    setSaved(false)
+    setSources((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  function resetDefaults() {
+    setSaved(false)
+    setError(null)
+    setSources(DEFAULT_AI_SOURCES.map((s) => ({ ...s })))
+  }
+
+  async function save() {
+    setSaving(true)
+    setError(null)
+    try {
+      const res = await fetch("/api/ai-sources", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sources }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error ?? "Save failed")
+      setSources((data.sources as AiPredictionSource[]).map((s) => ({ ...s })))
+      setSaved(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-border bg-card p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Database className="h-4 w-4 text-accent" aria-hidden="true" />
+          <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-foreground">
+            AI prediction data sources
+          </h2>
+          <span className="rounded-md border border-border bg-background/60 px-2 py-0.5 font-mono text-[0.6875rem] text-muted-foreground">
+            {enabledCount}/{sources.length} active
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={resetDefaults}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-background/60"
+          >
+            <RotateCcw className="h-3 w-3" aria-hidden="true" />
+            Reset to defaults
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={saving}
+            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
+          >
+            {saved ? <Check className="h-3 w-3" aria-hidden="true" /> : <Save className="h-3 w-3" aria-hidden="true" />}
+            {saving ? "Saving…" : saved ? "Saved" : "Save sources"}
+          </button>
+        </div>
+      </div>
+      <p className="mt-2 text-sm text-muted-foreground">
+        Register every feed the AI prediction engine should read from — NCM warnings, Ghaith COSMO-UAE, Open-Meteo, a
+        satellite feed or any custom link. Add a source now and toggle it on when you want it in the mix; only sources
+        switched <strong className="text-foreground">on</strong> are blended into the assistant&apos;s live context and cited in its answers.
+      </p>
+      {error ? <p className="mt-2 text-sm text-alert-red">{error}</p> : null}
+
+      <div className="mt-4 flex flex-col gap-2">
+        {sources.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-border bg-background/30 px-3 py-6 text-center text-xs text-muted-foreground/70">
+            No sources yet — add a feed for the AI to read from.
+          </p>
+        ) : (
+          sources.map((src, i) => (
+            <div
+              key={i}
+              className={cn(
+                "flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center",
+                src.enabled ? "border-accent/40 bg-background/40" : "border-border/70 bg-background/20 opacity-70",
+              )}
+            >
+              <button
+                type="button"
+                onClick={() => update(i, { enabled: !src.enabled })}
+                className={cn(
+                  "inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-2 font-mono text-[0.6875rem] uppercase tracking-wider transition-colors",
+                  src.enabled
+                    ? "border-signal/50 bg-signal/15 text-signal"
+                    : "border-border bg-background text-muted-foreground hover:bg-background/60",
+                )}
+                aria-pressed={src.enabled}
+                aria-label={src.enabled ? "Disable source" : "Enable source"}
+              >
+                <Power className="h-3.5 w-3.5" aria-hidden="true" />
+                {src.enabled ? "On" : "Off"}
+              </button>
+              <input
+                type="text"
+                value={src.label}
+                placeholder="Source name"
+                onChange={(e) => update(i, { label: e.target.value })}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent sm:w-1/3"
+              />
+              <span className="relative flex-1">
+                <Link2 className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                <input
+                  type="url"
+                  inputMode="url"
+                  value={src.url}
+                  placeholder="https://link-to-feed"
+                  onChange={(e) => update(i, { url: e.target.value })}
+                  className="w-full rounded-md border border-border bg-background py-2 pl-8 pr-3 text-sm text-foreground outline-none focus:border-accent"
+                />
+              </span>
+              <div className="flex shrink-0 items-center gap-1">
+                {src.url ? (
+                  <a
+                    href={src.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="grid h-9 w-9 place-items-center rounded-md border border-border text-muted-foreground transition-colors hover:border-accent/50 hover:text-accent"
+                    aria-label={`Open ${src.label || "source"} in a new tab`}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                  </a>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => remove(i)}
+                  className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-border text-muted-foreground transition-colors hover:border-alert-red/50 hover:text-alert-red"
+                  aria-label="Remove source"
+                >
+                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <button
+        type="button"
+        onClick={add}
+        className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-background/60"
+      >
+        <Plus className="h-3 w-3" aria-hidden="true" />
+        Add source
+      </button>
+    </section>
+  )
+}
+
 function SitePanel({
   siteKey,
   site,
   accent,
+  readings,
+  live,
+  simLevel,
+  windMet,
+  windReason,
   onKm,
   onSource,
   onRangeChange,
@@ -1016,6 +1391,11 @@ function SitePanel({
   siteKey: SiteKey
   site: SiteConfig
   accent: string
+  readings: SiteReadings
+  live: boolean
+  simLevel: AlertLevel | null
+  windMet: boolean
+  windReason: string | null
   onKm: (v: string) => void
   onSource: (patch: Partial<SourceLink>) => void
   onRangeChange: (metric: SiteMetricKey, index: number, patch: Partial<MetricRange>) => void
@@ -1023,12 +1403,99 @@ function SitePanel({
   onRangeRemove: (metric: SiteMetricKey, index: number) => void
 }) {
   const info = SITE_META[siteKey]
+  // Live status — same wiring as the public banner: green until a configured range is met,
+  // then red. Only reflects a real condition when live station data is present.
+  const ev = live ? evaluateSite(site, readings) : { met: false, reason: null }
+  // On-site button also trips on a met Wind Event Monitor threshold, so the console
+  // reflects the same three-condition wiring (at-site range · far-site range · wind event).
+  const rangeReason = ev.met ? ev.reason : windMet ? windReason : null
+  const met = live && (ev.met || windMet)
+  // Tone drives the indicator colour. Under simulation it follows the chosen tier so the
+  // operator sees the full green → yellow → orange → red cascade; otherwise it stays the
+  // live binary (green until a range trips, then red).
+  const simActive = simLevel != null
+  const simName = simLevel ? LEVEL_META[simLevel].name : ""
+  const tone: AlertLevel | "off" = !live ? "off" : simLevel ?? (met ? "red" : "green")
+  const toneMeta = tone === "off" ? null : LEVEL_META[tone]
+  const blink = tone === "yellow" || tone === "orange" || tone === "red"
+  const containerTone = toneMeta ? cn(toneMeta.border, toneMeta.fill) : "border-border bg-background/60"
+  const statusWord = tone === "off" ? "Awaiting data" : simActive ? `Simulated ${simName}` : met ? "In range" : "Clear"
+  const statusTitle =
+    tone === "off"
+      ? `${info.name}: waiting for live station data`
+      : simActive
+        ? `${info.name}: SIMULATED ${simName}${rangeReason ? ` — ${rangeReason}` : ""}`
+        : met
+          ? `${info.name}: IN RANGE — ${rangeReason}`
+          : `${info.name}: within limits`
+  const statusButton = (
+    <>
+      <span
+        className={cn(
+          "h-4 w-4 shrink-0 rounded-full",
+          toneMeta ? toneMeta.dot : "bg-muted-foreground/40",
+          blink && "tier-blink",
+        )}
+        aria-hidden="true"
+      />
+      <span className="flex min-w-0 flex-col text-left leading-tight">
+        <span
+          className={cn(
+            "font-mono text-sm font-bold uppercase tracking-wide",
+            toneMeta ? toneMeta.text : "text-muted-foreground",
+          )}
+        >
+          {siteKey === "atSite" ? "At site" : "Far site"}
+        </span>
+        <span className="truncate text-[0.6875rem] font-medium text-muted-foreground">{statusWord}</span>
+      </span>
+      {site.source.url ? (
+        <ExternalLink className="ml-auto h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      ) : null}
+    </>
+  )
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border/70 bg-background/40 p-3">
       <div className="flex flex-col gap-0.5">
         <span className={cn("font-mono text-xs font-bold uppercase tracking-wide", accent)}>{info.name}</span>
         <span className="text-[0.6875rem] leading-snug text-muted-foreground/80">{info.hint}</span>
       </div>
+
+      {/* Live status indicator — bigger, roomy tap target that switches green → red */}
+      {site.source.url ? (
+        <a
+          href={site.source.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={statusTitle}
+          aria-label={statusTitle}
+          className={cn(
+            "flex items-center gap-3 rounded-lg border px-4 py-3 transition-colors",
+            met
+              ? "border-alert-red/50 bg-alert-red/15"
+              : live
+                ? "border-alert-green/40 bg-alert-green/10 hover:bg-alert-green/15"
+                : "border-border bg-background/60",
+          )}
+        >
+          {statusButton}
+        </a>
+      ) : (
+        <div
+          title={statusTitle}
+          aria-label={statusTitle}
+          className={cn(
+            "flex items-center gap-3 rounded-lg border px-4 py-3",
+            met
+              ? "border-alert-red/50 bg-alert-red/15"
+              : live
+                ? "border-alert-green/40 bg-alert-green/10"
+                : "border-border bg-background/60",
+          )}
+        >
+          {statusButton}
+        </div>
+      )}
 
       <label className="flex flex-col gap-1">
         <span className="label-caps text-muted-foreground">Detection band (KM range)</span>

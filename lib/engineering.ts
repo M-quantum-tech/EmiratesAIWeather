@@ -1,16 +1,19 @@
 import { db } from "@/lib/db"
 import { sql } from "drizzle-orm"
 import {
+  DEFAULT_AI_SOURCES,
   DEFAULT_CLOUD_SOURCE,
   DEFAULT_RULES,
   DEFAULT_TREND_SOURCES,
   DEFAULT_WIND_MONITOR,
   DEFAULT_WIND_SOURCE,
+  parseAiSources,
   parseCloudSource,
   parseRules,
   parseTrendSources,
   parseWindMonitor,
   parseWindSource,
+  type AiPredictionSource,
   type CloudSourceConfig,
   type EscalationRule,
   type TrendSourceGroup,
@@ -24,6 +27,7 @@ const WIND_MONITOR_KEY = "wind_monitor_tiers"
 const WIND_SOURCE_KEY = "wind_source_config"
 const CLOUD_SOURCE_KEY = "cloud_source_config"
 const TREND_SOURCES_KEY = "live_trend_sources"
+const AI_SOURCES_KEY = "ai_prediction_sources"
 
 /**
  * Idempotently create the key/value settings table used by the Engineering
@@ -189,6 +193,35 @@ export async function saveTrendSources(value: unknown): Promise<TrendSourceGroup
   await db.execute(sql`
     INSERT INTO "app_setting" ("key", "value", "updatedAt")
     VALUES (${TREND_SOURCES_KEY}, ${json}::jsonb, now())
+    ON CONFLICT ("key") DO UPDATE SET "value" = ${json}::jsonb, "updatedAt" = now()
+  `)
+  return clean
+}
+
+/** Effective AI prediction data-source pool — persisted overrides, or defaults. */
+export async function getAiSources(): Promise<AiPredictionSource[]> {
+  try {
+    await ensureSettingsTable()
+    const res = await db.execute(sql`SELECT value FROM "app_setting" WHERE key = ${AI_SOURCES_KEY}`)
+    const row = (res.rows as { value: unknown }[])[0]
+    if (!row) return DEFAULT_AI_SOURCES
+    const parsed = parseAiSources(row.value)
+    return parsed ?? DEFAULT_AI_SOURCES
+  } catch {
+    return DEFAULT_AI_SOURCES
+  }
+}
+
+/** Persist the AI prediction data-source pool — admin only. */
+export async function saveAiSources(value: unknown): Promise<AiPredictionSource[]> {
+  if (!(await isAdmin())) throw new Error("Forbidden")
+  const clean = parseAiSources(value)
+  if (!clean) throw new Error("Invalid AI sources")
+  await ensureSettingsTable()
+  const json = JSON.stringify(clean)
+  await db.execute(sql`
+    INSERT INTO "app_setting" ("key", "value", "updatedAt")
+    VALUES (${AI_SOURCES_KEY}, ${json}::jsonb, now())
     ON CONFLICT ("key") DO UPDATE SET "value" = ${json}::jsonb, "updatedAt" = now()
   `)
   return clean

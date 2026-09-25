@@ -226,6 +226,45 @@ export function parseSiteConfig(value: unknown, fallback: SiteConfig): SiteConfi
   }
 }
 
+/** Live readings for one site, normalised to native SI units, compared against its ranges. */
+export type SiteReadings = {
+  windMs: number
+  gustMs: number
+  rainMm: number
+  cloudPct: number
+}
+
+/** Danger metrics that can trip a site indicator (cloud cover is contextual, not a trigger). */
+const SITE_TRIGGER_METRICS: { key: SiteMetricKey; label: string }[] = [
+  { key: "windMs", label: "Wind" },
+  { key: "gustMs", label: "Gust" },
+  { key: "rainMm", label: "Rain" },
+]
+
+/**
+ * Evaluate a site's configured ranges against a live reading. The site's condition is
+ * "met" once any danger metric climbs into the top (most severe) configured band — this
+ * is exactly what drives each tier's At-site / Near-site indicator from green to a red
+ * blink, so the ladder buttons stay wired to the ranges edited in the Engineering Console.
+ */
+export function evaluateSite(
+  config: SiteConfig,
+  readings: SiteReadings,
+): { met: boolean; reason: string | null } {
+  for (const { key, label } of SITE_TRIGGER_METRICS) {
+    const ranges = config[key]
+    if (!ranges.length) continue
+    const top = ranges[ranges.length - 1]
+    const value = readings[key]
+    if (Number.isFinite(value) && value >= top.min) {
+      const unit = SITE_METRIC_META[key].unit
+      const shown = Number.isInteger(value) ? String(value) : value.toFixed(1)
+      return { met: true, reason: `${label} ${shown} ${unit} · ${top.label}` }
+    }
+  }
+  return { met: false, reason: null }
+}
+
 /**
  * Per-level entry thresholds used to gate hysteresis, mirroring the live banner's
  * severity bands: gust/wind onset at 15 m/s (54 km/h) → yellow, 20 m/s (72 km/h)
@@ -404,6 +443,33 @@ export const DEFAULT_WIND_MONITOR: WindMonitorTier[] = [
   { id: "hh-12", minSpeed: 12, level: "yellow", label: "High · High", note: "Level 2 warning alert" },
 ]
 
+/**
+ * Evaluate the live on-site sustained wind (m/s) against the Wind Event Monitor
+ * ladder. Tiers are scanned strongest-first, so the active event is the highest
+ * threshold the wind currently meets. A green (or absent) active tier means the
+ * wind is below every alerting threshold — i.e. "if speed is less than the
+ * escalation logic, it stays green" — so `met` is only true once the active
+ * event is yellow or above. The live Alert Banner and the Engineering Console
+ * both call this, so the wind trigger fires identically in both places.
+ */
+export function evaluateWindMonitor(
+  windMs: number,
+  tiers: WindMonitorTier[],
+): { level: AlertLevel; met: boolean; tier: WindMonitorTier | null; reason: string | null } {
+  const sorted = [...tiers].sort((a, b) => b.minSpeed - a.minSpeed)
+  const active = Number.isFinite(windMs) ? sorted.find((t) => windMs >= t.minSpeed) ?? null : null
+  const level: AlertLevel = active?.level ?? "green"
+  const met = level !== "green"
+  const shown = Number.isInteger(windMs) ? String(windMs) : windMs.toFixed(1)
+  const reason = met && active ? `Wind ${shown} m/s ≥ ${active.minSpeed} m/s · ${active.note || cap(level)}` : null
+  return { level, met, tier: active, reason }
+}
+
+/** Capitalise an alert level key for display, e.g. "red" → "Red". */
+function cap(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
 /** Validate an unknown value into a clean WindMonitorTier[] (or null if invalid). */
 export function parseWindMonitor(value: unknown): WindMonitorTier[] | null {
   if (!Array.isArray(value)) return null
@@ -532,6 +598,46 @@ export function parseTrendSources(value: unknown): TrendSourceGroup[] | null {
   return TREND_METRIC_KEYS.map(
     (key) => byKey.get(key) ?? { key, label: TREND_METRIC_LABELS[key], links: [] },
   )
+}
+
+/**
+ * A single external data feed the AI prediction engine reads from. Operators
+ * register any number of these in the Engineering Console — each carries a
+ * label, an http(s) link and an on/off toggle so a source can be staged and
+ * enabled later. Every enabled source is passed into the AI context, so the
+ * assistant blends multiple feeds (NCM, Open-Meteo, satellite, custom) instead
+ * of a single hard-coded source.
+ */
+export type AiPredictionSource = {
+  /** Display name shown in the console and cited to the AI. */
+  label: string
+  /** Absolute http(s) link to the feed. */
+  url: string
+  /** When false the source is staged but excluded from AI prediction. */
+  enabled: boolean
+}
+
+/** Default multi-source pool for AI prediction — official UAE + open feeds. */
+export const DEFAULT_AI_SOURCES: AiPredictionSource[] = [
+  { label: "NCM Official Warnings", url: "https://www.ncm.gov.ae/maps-warnings?lang=en", enabled: true },
+  { label: "NCM Ghaith · COSMO-UAE", url: "https://ghaith.ncm.gov.ae/?lang=en", enabled: true },
+  { label: "Open-Meteo Forecast API", url: "https://api.open-meteo.com/v1/forecast", enabled: true },
+]
+
+/** Validate an unknown value into a clean AiPredictionSource[] (max 24). */
+export function parseAiSources(value: unknown): AiPredictionSource[] | null {
+  if (!Array.isArray(value)) return null
+  const out: AiPredictionSource[] = []
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") continue
+    const r = raw as Record<string, unknown>
+    const label = String(r.label ?? "").slice(0, 80).trim()
+    const url = sanitizeSourceUrl(r.url)
+    if (!label && !url) continue
+    out.push({ label: label || url!, url: url ?? "", enabled: r.enabled !== false })
+    if (out.length >= 24) break
+  }
+  return out
 }
 
 /** Shape of one buzzer tone profile. */
