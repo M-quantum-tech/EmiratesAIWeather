@@ -174,6 +174,7 @@ export function NcmSources() {
   const warnLayerRef = useRef<any>(null)
   const geoRef = useRef<any>(null)
   const leafletRef = useRef<any>(null)
+  const warnScrollRef = useRef<HTMLDivElement>(null)
 
   const [maps, setMaps] = useState<Maps | null>(null)
   const [layer, setLayer] = useState<Layer>("warnings")
@@ -242,6 +243,7 @@ export function NcmSources() {
   )
   const top = display[0] ?? null
   const warnTime = warnFrames?.times[safeIdx]
+  const totalWarnCards = (NCM_WARNINGS.length > 0 ? 1 : 0) + display.length
 
   const frameUrl = (f: Frame) => {
     const host = maps?.host ?? "https://tilecache.rainviewer.com"
@@ -762,6 +764,53 @@ export function NcmSources() {
   }, [playing, frames, layer])
 
   const isWarnings = layer === "warnings"
+
+  // Auto-scroll the warnings sidebar so every alert can be read one by one.
+  // Gently steps down the list, pauses at the bottom, then loops back to the top.
+  // Pauses while the user is hovering so they can read at their own pace.
+  useEffect(() => {
+    const el = warnScrollRef.current
+    if (!isWarnings || !el) return
+    let paused = false
+    const onEnter = () => {
+      paused = true
+    }
+    const onLeave = () => {
+      paused = false
+    }
+    el.addEventListener("pointerenter", onEnter)
+    el.addEventListener("pointerleave", onLeave)
+
+    let dir = 1
+    let holdTicks = 0
+    const timer = window.setInterval(() => {
+      if (paused) return
+      const maxScroll = el.scrollHeight - el.clientHeight
+      if (maxScroll <= 4) return // nothing to scroll
+      if (holdTicks > 0) {
+        holdTicks -= 1
+        return
+      }
+      let next = el.scrollTop + dir // 1px per tick
+      if (next >= maxScroll) {
+        next = maxScroll
+        dir = -1
+        holdTicks = 60 // pause ~1.8s at the bottom
+      } else if (next <= 0) {
+        next = 0
+        dir = 1
+        holdTicks = 60 // pause ~1.8s at the top
+      }
+      el.scrollTop = next
+    }, 30)
+
+    return () => {
+      window.clearInterval(timer)
+      el.removeEventListener("pointerenter", onEnter)
+      el.removeEventListener("pointerleave", onLeave)
+    }
+  }, [isWarnings, totalWarnCards, safeIdx])
+
   // Forecast-field layers (wind + total clouds) share one hourly playback control set.
   const isField = layer === "wind" || layer === "clouds"
   const fieldData = layer === "wind" || layer === "clouds" ? windData : null
@@ -940,10 +989,13 @@ export function NcmSources() {
             </div>
 
             {/* Right sidebar warning cards */}
-            <div className="absolute right-3 top-32 z-[500] flex max-h-[58%] w-60 flex-col gap-2 overflow-auto sm:w-64">
+            <div
+              ref={warnScrollRef}
+              className="absolute right-3 top-32 z-[500] flex max-h-[64%] w-60 flex-col gap-2 overflow-y-auto scroll-smooth pr-0.5 sm:w-64"
+            >
               {/* Official NCM bulletin — always visible, mirrored from ncm.gov.ae and combined with Open-Meteo. */}
               {NCM_WARNINGS.length > 0 && (
-                <article className="overflow-hidden rounded-md border border-alert-yellow/60 bg-card shadow">
+                <article className="shrink-0 overflow-hidden rounded-md border border-alert-yellow/60 bg-card shadow">
                   <header className="flex items-center justify-center gap-1.5 border-b border-border bg-primary px-3 py-1.5 font-mono text-[0.625rem] font-bold uppercase tracking-wider text-primary-foreground">
                     <ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" /> NCM Official Warnings
                   </header>
@@ -967,13 +1019,13 @@ export function NcmSources() {
                 </article>
               )}
 
-              <div className="rounded-md border border-white/15 bg-primary/90 px-3 py-2 text-center font-mono text-[0.625rem] uppercase tracking-wider text-primary-foreground shadow">
+              <div className="shrink-0 rounded-md border border-white/15 bg-primary/90 px-3 py-2 text-center font-mono text-[0.625rem] uppercase tracking-wider text-primary-foreground shadow">
                 {display.length
                   ? `${display.length} warning${display.length > 1 ? "s" : ""} this hour`
                   : "No warnings this hour"}
               </div>
               {display.map((w) => (
-                <article key={w.name} className="overflow-hidden rounded-md border border-border bg-card shadow">
+                <article key={w.name} className="shrink-0 overflow-hidden rounded-md border border-border bg-card shadow">
                   <header className={cn("px-3 py-2 text-center text-xs font-bold leading-tight", BANNER_TONE[w.level])}>
                     {w.name}: {w.headline}
                   </header>
@@ -995,7 +1047,7 @@ export function NcmSources() {
                   <p className="px-3 py-2 text-[0.6875rem] leading-relaxed text-foreground">{w.description}</p>
                 </article>
               ))}
-              <p className="rounded-md border border-dashed border-border bg-card/70 px-3 py-2 text-[0.625rem] leading-relaxed text-muted-foreground">
+              <p className="shrink-0 rounded-md border border-dashed border-border bg-card/70 px-3 py-2 text-[0.625rem] leading-relaxed text-muted-foreground">
                 Combined feed: official NCM warnings (mirrored from ncm.gov.ae) plus a real 24-hour timeline derived from
                 live Open-Meteo forecast for the seven emirates, playing one hour every 2 seconds. Refreshes every minute.
               </p>
