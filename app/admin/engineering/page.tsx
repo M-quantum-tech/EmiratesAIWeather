@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation"
 import Link from "next/link"
 import { ArrowLeft, Cpu } from "lucide-react"
-import { getSessionUser } from "@/lib/admin"
+import { requireAdmin } from "@/lib/admin"
 import { getEscalationRules, getTrendSources, getWindMonitor, getWindSource } from "@/lib/engineering"
 import { SiteNav } from "@/components/site-nav"
 import { EngineeringConsole } from "@/components/admin/engineering-console"
@@ -9,9 +9,7 @@ import { EngineeringConsole } from "@/components/admin/engineering-console"
 export const metadata = { title: "Engineering console — EmiratesAIWeather" }
 
 export default async function EngineeringPage() {
-  const sessionUser = await getSessionUser()
-  if (!sessionUser) redirect("/sign-in?redirect=/admin/engineering")
-  if (sessionUser.role !== "admin") redirect("/account")
+  await requireAdmin("/admin/engineering")
 
   const [rules, windMonitor, windSource, trendSources] = await Promise.all([
     getEscalationRules(),

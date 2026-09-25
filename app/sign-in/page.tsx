@@ -4,6 +4,7 @@ import { redirect } from "next/navigation"
 import { headers } from "next/headers"
 import { ShieldCheck } from "lucide-react"
 import { auth } from "@/lib/auth"
+import { ensureAdminsSeeded } from "@/lib/admin"
 import { SiteNav } from "@/components/site-nav"
 import { AuthForm } from "@/components/auth/auth-form"
 
@@ -11,9 +12,31 @@ export const metadata = {
   title: "Sign in — EmiratesAIWeather",
 }
 
-export default async function SignInPage() {
+// Only allow same-site relative redirects (e.g. "/admin"), never absolute or
+// protocol-relative URLs, so the redirect param can't be used for open redirects.
+function safeRedirect(value: string | string[] | undefined): string {
+  const raw = Array.isArray(value) ? value[0] : value
+  if (raw && raw.startsWith("/") && !raw.startsWith("//")) return raw
+  return "/account"
+}
+
+export default async function SignInPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ redirect?: string | string[]; plan?: string | string[] }>
+}) {
+  // Guarantee the designated admin accounts exist on every deployment so the
+  // admin + engineering consoles are always reachable. Never let a seeding
+  // hiccup block the sign-in page from rendering.
+  await ensureAdminsSeeded().catch(() => {})
+
+  const { redirect: redirectParam } = await searchParams
+  const redirectTo = safeRedirect(redirectParam)
+
   const session = await auth.api.getSession({ headers: await headers() })
-  if (session?.user) redirect("/account")
+  // Already signed in: honor the requested destination (e.g. the admin console)
+  // instead of always bouncing to the account page.
+  if (session?.user) redirect(redirectTo)
 
   return (
     <main className="min-h-screen">
