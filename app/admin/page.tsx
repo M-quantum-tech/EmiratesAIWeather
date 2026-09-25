@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation"
 import Link from "next/link"
 import { Building2, Clock, Cpu, Tag, Ticket, TrendingUp, User, UserCheck, Users } from "lucide-react"
-import { computeStats, ensureUserAccessColumns, getAdminMembers, getSessionUser } from "@/lib/admin"
+import { computeStats, ensureUserAccessColumns, getAdminMembers, requireAdmin } from "@/lib/admin"
 import { formatCents } from "@/lib/plans"
 import { getEffectivePlans } from "@/lib/pricing"
 import { SiteNav } from "@/components/site-nav"
@@ -11,9 +11,7 @@ import { PricingEditor, type PriceRow } from "@/components/admin/pricing-editor"
 export const metadata = { title: "Admin dashboard — EmiratesAIWeather" }
 
 export default async function AdminPage() {
-  const sessionUser = await getSessionUser()
-  if (!sessionUser) redirect("/sign-in?redirect=/admin")
-  if (sessionUser.role !== "admin") redirect("/account")
+  const sessionUser = await requireAdmin("/admin")
 
   await ensureUserAccessColumns()
   const members = await getAdminMembers()

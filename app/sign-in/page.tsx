@@ -4,6 +4,7 @@ import { redirect } from "next/navigation"
 import { headers } from "next/headers"
 import { ShieldCheck } from "lucide-react"
 import { auth } from "@/lib/auth"
+import { ensureAdminsSeeded } from "@/lib/admin"
 import { SiteNav } from "@/components/site-nav"
 import { AuthForm } from "@/components/auth/auth-form"
 
@@ -12,6 +13,11 @@ export const metadata = {
 }
 
 export default async function SignInPage() {
+  // Guarantee the designated admin accounts exist on every deployment so the
+  // admin + engineering consoles are always reachable. Never let a seeding
+  // hiccup block the sign-in page from rendering.
+  await ensureAdminsSeeded().catch(() => {})
+
   const session = await auth.api.getSession({ headers: await headers() })
   if (session?.user) redirect("/account")
 

@@ -3,8 +3,64 @@ import { db } from "@/lib/db"
 import { subscription, user } from "@/lib/db/schema"
 import { desc, eq, sql } from "drizzle-orm"
 import { headers } from "next/headers"
+import { redirect } from "next/navigation"
 
 export type AccessStatus = "pending" | "allowed" | "denied"
+
+/**
+ * The designated administrator accounts for EmiratesAIWeather. These accounts
+ * must ALWAYS be able to reach the admin + engineering consoles on every
+ * deployment, regardless of database state. Password is managed by Better Auth
+ * (hashed via its own sign-up flow) and only used for the initial seed.
+ */
+export const ADMIN_ACCOUNTS = [
+  { email: "m-quantum-tech@mquantum.tech", password: "Imax@1993", name: "M-Quantum-Tech" },
+  { email: "m-quantum-tech1@mquantum.tech", password: "Imax@2026", name: "M-Quantum-Tech1" },
+] as const
+
+const ADMIN_EMAILS = new Set(ADMIN_ACCOUNTS.map((a) => a.email.toLowerCase()))
+
+/** True when the email belongs to a designated administrator account. */
+export function isDesignatedAdmin(email: string | null | undefined): boolean {
+  return Boolean(email) && ADMIN_EMAILS.has((email as string).toLowerCase())
+}
+
+/**
+ * Idempotently ensure the designated admin accounts exist and are promoted to
+ * admin/allowed. Cached per server instance (cheap on repeat calls) but retries
+ * after a failure. This is what makes the admin console work on a brand-new
+ * deployment without any manual step: the sign-in page calls it on load, so the
+ * accounts always exist with a known password and the correct role.
+ */
+let adminsSeeded: Promise<void> | null = null
+export function ensureAdminsSeeded(): Promise<void> {
+  if (!adminsSeeded) {
+    adminsSeeded = (async () => {
+      await ensureUserAccessColumns()
+      for (const admin of ADMIN_ACCOUNTS) {
+        const existing = await db.select().from(user).where(eq(user.email, admin.email)).limit(1)
+        if (existing.length === 0) {
+          try {
+            await auth.api.signUpEmail({
+              body: { email: admin.email, password: admin.password, name: admin.name },
+            })
+          } catch {
+            // A concurrent request may have created it; the promotion below is
+            // still safe and idempotent, so swallow and continue.
+          }
+        }
+        await db
+          .update(user)
+          .set({ role: "admin", accessStatus: "allowed", updatedAt: new Date() })
+          .where(eq(user.email, admin.email))
+      }
+    })().catch((err) => {
+      adminsSeeded = null
+      throw err
+    })
+  }
+  return adminsSeeded
+}
 
 /**
  * Idempotently add the admin access-control columns to the user table. Runs on
@@ -42,7 +98,42 @@ export async function getSessionUser(): Promise<SessionUser | null> {
 
 export async function isAdmin() {
   const u = await getSessionUser()
-  return u?.role === "admin"
+  if (!u) return false
+  if (u.role === "admin") return true
+  // Self-heal: a designated admin email is always an admin, even if the DB role
+  // was never set on this deployment.
+  if (isDesignatedAdmin(u.email)) {
+    await promoteToAdmin(u.id)
+    return true
+  }
+  return false
+}
+
+/** Promote a user to admin + allowed access. Idempotent. */
+async function promoteToAdmin(userId: string): Promise<void> {
+  await ensureUserAccessColumns()
+  await db
+    .update(user)
+    .set({ role: "admin", accessStatus: "allowed", updatedAt: new Date() })
+    .where(eq(user.id, userId))
+}
+
+/**
+ * Page guard for the admin + engineering consoles. Redirects to sign-in when
+ * signed out, and to /account for non-admins. A designated admin email is
+ * self-healed to the admin role on the spot, so the console ALWAYS works for
+ * those accounts on every deployment — even against a fresh database where the
+ * role was never persisted. Returns the (admin) session user.
+ */
+export async function requireAdmin(redirectPath: string): Promise<SessionUser> {
+  const sessionUser = await getSessionUser()
+  if (!sessionUser) redirect(`/sign-in?redirect=${encodeURIComponent(redirectPath)}`)
+  if (sessionUser.role === "admin") return sessionUser
+  if (isDesignatedAdmin(sessionUser.email)) {
+    await promoteToAdmin(sessionUser.id)
+    return { ...sessionUser, role: "admin" }
+  }
+  redirect("/account")
 }
 
 export interface AdminMember {
