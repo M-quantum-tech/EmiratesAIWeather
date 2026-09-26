@@ -286,6 +286,40 @@ export type HysteresisReadings = {
 }
 
 /**
+ * Map ONE site's readings to the tier they represent, using the per-tier entry
+ * thresholds (sustained wind and rain). Gust is deliberately excluded: the preset
+ * gust bands overlap the next tier's wind entry, so folding gust in here would
+ * bump a tier up a rung. Returns the highest tier whose wind OR rain entry is met;
+ * anything below yellow's entry resolves to green.
+ *
+ * This is what lets the Simulator distinguish green → yellow → orange → red and
+ * fall back to green the moment values drop below the limits — unlike the coarse
+ * severe-band `evaluateSite` check, which shares identical ranges across tiers and
+ * can therefore only ever read green or the top tier.
+ */
+export function levelFromReadings(readings: { windMs: number; rainMm: number }): AlertLevel {
+  let level: AlertLevel = "green"
+  for (const l of ESCALATION_LEVELS) {
+    if (l === "green") continue
+    const windHit = Number.isFinite(readings.windMs) && readings.windMs >= LEVEL_WIND_ENTRY_MS[l]
+    const rainHit = Number.isFinite(readings.rainMm) && readings.rainMm >= LEVEL_RAIN_ENTRY_MM[l]
+    if (windHit || rainHit) level = l
+  }
+  return level
+}
+
+/**
+ * Highest tier across BOTH sites — the value that drives the Simulator's derived
+ * tier and its buzzer. Either site reaching a tier escalates the whole drill to it,
+ * mirroring how the live ladder escalates on the worst site.
+ */
+export function drillLevelFromSites(sites: { atSite: SiteReadings; farSite: SiteReadings }): AlertLevel {
+  const a = levelFromReadings(sites.atSite)
+  const b = levelFromReadings(sites.farSite)
+  return ESCALATION_LEVELS.indexOf(a) >= ESCALATION_LEVELS.indexOf(b) ? a : b
+}
+
+/**
  * Apply dead-band hysteresis to a freshly-computed alert level.
  *  • Escalation (or no change) takes effect immediately — the alarm never waits to rise.
  *  • De-escalation is suppressed: the previously-held tier stays latched until every

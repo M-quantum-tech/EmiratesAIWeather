@@ -18,6 +18,7 @@ import {
   SITE_METRIC_META,
   evaluateSite,
   evaluateWindMonitor,
+  drillLevelFromSites,
   type AiPredictionSource,
   type CloudSourceConfig,
   type EscalationRule,
@@ -316,16 +317,8 @@ export function EngineeringConsole({
   // (not the pressed preset button), so dropping every value below the limits lands on green.
   const derivedSimTier = useMemo<AlertLevel>(() => {
     if (simLevel == null) return "green"
-    let highest: AlertLevel = "green"
-    for (const level of ESCALATION_LEVELS) {
-      const rule = rules.find((r) => r.level === level)
-      if (!rule) continue
-      const at = evaluateSite(rule.atSite, effectiveReadings.atSite)
-      const far = evaluateSite(rule.farSite, effectiveReadings.farSite)
-      if (at.met || far.met) highest = level
-    }
-    return highest
-  }, [simLevel, rules, effectiveReadings])
+    return drillLevelFromSites(effectiveReadings)
+  }, [simLevel, effectiveReadings])
 
   // Wire the simulator straight into the Buzzer test bench: while Simulator Mode is ON, the
   // alarm follows the derived tier through the exact same tone the live banner sounds. It plays
@@ -346,7 +339,9 @@ export function EngineeringConsole({
       return
     }
     if (lastBuzzerTier.current !== derivedSimTier) {
-      playBuzzerTest(derivedSimTier)
+      // Hold the alarm on continuously (null duration) for the active tier — it keeps
+      // sounding until the tier changes, the values fall back to green, or Stop tone.
+      playBuzzerTest(derivedSimTier, null)
       lastBuzzerTier.current = derivedSimTier
     }
   }, [simLevel, derivedSimTier])
@@ -388,8 +383,8 @@ export function EngineeringConsole({
         {simLevel != null ? (
           <p className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-accent/50 bg-accent/10 px-2.5 py-1 text-xs font-medium text-accent">
             <FlaskConical className="h-3.5 w-3.5" aria-hidden="true" />
-            Simulator Mode ON — the alarm follows the simulated tier ({LEVEL_META[derivedSimTier].name}) and silences
-            when the test values fall back to green.
+            Simulator Mode ON — the alarm holds on the simulated tier ({LEVEL_META[derivedSimTier].name}) and keeps
+            sounding until you lower the test values below the limit or press Stop tone.
           </p>
         ) : null}
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

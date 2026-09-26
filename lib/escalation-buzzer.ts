@@ -23,10 +23,13 @@ export function stopBuzzerTest() {
 }
 
 /**
- * Play the level-tuned alarm as a short test (default ~2.4s) so an operator can
- * preview exactly what each escalation tier sounds like from the console.
+ * Play the level-tuned alarm. By default it runs as a short ~2.4s preview so an
+ * operator can sample a tier from the console. Pass `durationMs = null` to sound
+ * it continuously (looping) until `stopBuzzerTest()` is called — this is how the
+ * Simulator holds the alarm on for the active tier until it is silenced or the
+ * test values fall back below the limit.
  */
-export function playBuzzerTest(level: AlertLevel, durationMs = 2400) {
+export function playBuzzerTest(level: AlertLevel, durationMs: number | null = 2400) {
   stopBuzzerTest()
   const audio = getCtx()
   if (!audio) return
@@ -64,5 +67,7 @@ export function playBuzzerTest(level: AlertLevel, durationMs = 2400) {
   }
   cycle()
   loopTimer = setInterval(cycle, tone.interval)
-  stopTimer = setTimeout(stopBuzzerTest, durationMs)
+  // A null duration means "sound until explicitly stopped" (the Simulator holds
+  // the alarm on); a number caps it as a short preview.
+  if (durationMs != null) stopTimer = setTimeout(stopBuzzerTest, durationMs)
 }

@@ -53,6 +53,7 @@ import {
   DEFAULT_WIND_SOURCE,
   evaluateSite,
   evaluateWindMonitor,
+  drillLevelFromSites,
   type CloudSourceConfig,
   type EscalationRule,
   type SiteKey,
@@ -274,17 +275,11 @@ export function AlertBanner() {
       atSite: { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 },
       farSite: { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 },
     }
-    let highest: AlertLevel = "green"
-    for (const rung of LADDER) {
-      if (rung.level === "green") continue
-      const rule = rules.find((r) => r.level === rung.level)
-      if (!rule) continue
-      const at = evaluateSite(rule.atSite, drillReadings.atSite)
-      const far = evaluateSite(rule.farSite, drillReadings.farSite)
-      if (at.met || far.met) highest = rung.level
-    }
-    return highest
-  }, [simulator.active, simulator.readings, rules])
+    // Map the test readings to a tier via the per-tier entry thresholds so the drill
+    // resolves cleanly to green → yellow → orange → red (and back to green below the
+    // limits), instead of the coarse severe-band check that only reads green or red.
+    return drillLevelFromSites(drillReadings)
+  }, [simulator.active, simulator.readings])
   // The banner reflects the derived drill tier when simulating, otherwise the live held/raw tier.
   const alert = useMemo(
     () =>
