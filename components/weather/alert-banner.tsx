@@ -11,6 +11,7 @@ import {
   CloudRain,
   Droplets,
   ExternalLink,
+  FlaskConical,
   Gauge,
   MapPin,
   Navigation,
@@ -63,6 +64,7 @@ import { computeSiteReadings } from "@/lib/site-readings"
 import { ProximityRings } from "@/components/weather/proximity-rings"
 import { WindDirectionRadar } from "@/components/weather/wind-direction-radar"
 import { useWeather } from "@/components/weather/weather-provider"
+import { useSimulatorMode } from "@/components/weather/use-simulator-mode"
 import { cn } from "@/lib/utils"
 
 /** Header auto-refresh cadence (seconds) surfaced as a live countdown. */
@@ -211,6 +213,8 @@ function useBuzzer(active: boolean, level: AlertLevel) {
 
 export function AlertBanner() {
   const { payload, isValidating, refresh } = useWeather()
+  // Drill signal from the Engineering Console simulator (may be running in another tab).
+  const simulator = useSimulatorMode()
   // Escalation ladder — persisted overrides from the Engineering Console, defaults otherwise.
   const { data: rulesData } = useSWR<{ rules: EscalationRule[] }>("/api/escalation", farFetcher as never, {
     refreshInterval: 60_000,
@@ -490,13 +494,20 @@ export function AlertBanner() {
           </span>
         </span>
         <span className="flex items-center gap-3">
-          <span className="flex items-center gap-1.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
-            <span className={cn("relative flex h-2 w-2", isValidating && "animate-pulse")}>
-              <span className="absolute inline-flex h-full w-full rounded-full bg-alert-green opacity-75" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-alert-green" />
+          {simulator.active ? (
+            <span className="flex items-center gap-1.5 rounded-md border border-accent/60 bg-accent/15 px-2 py-1 font-mono text-[0.625rem] font-semibold uppercase tracking-wider text-accent">
+              <FlaskConical className="h-3 w-3 tier-blink" aria-hidden="true" />
+              Simulator Mode{simulator.level ? ` · ${simulator.level}` : ""}
             </span>
-            Live · updated {formatClock(payload.current.time)}
-          </span>
+          ) : (
+            <span className="flex items-center gap-1.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+              <span className={cn("relative flex h-2 w-2", isValidating && "animate-pulse")}>
+                <span className="absolute inline-flex h-full w-full rounded-full bg-alert-green opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-alert-green" />
+              </span>
+              Live · updated {formatClock(payload.current.time)}
+            </span>
+          )}
           <span className="flex items-center gap-1.5 rounded-md border border-border bg-background/60 px-2 py-1 font-mono text-[0.625rem] uppercase tracking-wider text-foreground tabular-nums">
             <Clock className="h-3 w-3 text-signal" aria-hidden="true" />
             {localClock}

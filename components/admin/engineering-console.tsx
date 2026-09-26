@@ -36,6 +36,7 @@ import { playBuzzerTest, stopBuzzerTest } from "@/lib/escalation-buzzer"
 import { ALERT_RADII_KM, offsetLocation, type AlertLevel, type WeatherPayload } from "@/lib/weather"
 import { computeSiteReadings } from "@/lib/site-readings"
 import { useWeather } from "@/components/weather/weather-provider"
+import { setSimulatorMode } from "@/components/weather/use-simulator-mode"
 import { cn } from "@/lib/utils"
 
 async function weatherFetcher(url: string): Promise<WeatherPayload> {
@@ -292,6 +293,12 @@ export function EngineeringConsole({
     }
   }
 
+  // Broadcast the simulator state so the public safety panel can flag "Simulator Mode"
+  // even though it renders on a different route (and possibly a different tab).
+  useEffect(() => {
+    setSimulatorMode({ active: simLevel != null, level: simLevel })
+  }, [simLevel])
+
   function simulate(level: AlertLevel) {
     setSimLevel(level)
     setSimValues({ ...SIM_PRESETS[level] })
@@ -416,7 +423,7 @@ export function EngineeringConsole({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <FlaskConical className="h-4 w-4 text-accent" aria-hidden="true" />
-              <span className="label-caps text-foreground">Simulator</span>
+              <span className="label-caps text-foreground">Simulator Mode</span>
               <span
                 className={cn(
                   "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[0.6875rem] font-semibold uppercase tracking-wide",
