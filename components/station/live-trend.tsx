@@ -189,10 +189,11 @@ type View = {
    */
   rightAxis?: { label: string; lo: number; hi: number; format: (v: number) => string }
   /**
-   * Optional filled area layer drawn behind everything — NCM Ghaith trajectory
-   * cloud-cover deck rendered as a soft gray/silver fill (0–100%).
+   * Optional gray cloud-cover bar layer (NCM Ghaith #trajectory deck, 0–100%),
+   * drawn behind the lines and sharing the right % axis so it reads clearly.
+   * Rendered as columns rather than a faint area for legibility.
    */
-  cloudArea?: { label: string; color: string; values: number[]; format: (v: number) => string; max: number }
+  cloudBars?: { label: string; color: string; values: number[]; format: (v: number) => string; max: number }
   /** Data-driven event callouts (peak DNI, cloud influx, rain, sunset) drawn over the chart. */
   annotations?: { i: number; label: string; sub: string; tone: MeasureTone; requires?: DniLayerKey }[]
   /** Rotated left/right axis titles rendered at the chart edges. */
@@ -333,7 +334,7 @@ function buildView(
           { label: "AI beam", color: TREND.secondary, values: aiValues, format: wm2, dashed: true, group: "wm2", toggleKey: "dni" },
         ],
         rightAxis: { label: "%", lo: 0, hi: 100, format: (v) => `${Math.round(v)}%` },
-        cloudArea: { label: "Clouds (NCM trajectory)", color: "var(--muted-foreground)", values: cloudCover, format: (v) => `${Math.round(v)}%`, max: 100 },
+        cloudBars: { label: "Clouds (NCM trajectory)", color: "var(--muted-foreground)", values: cloudCover, format: (v) => `${Math.round(v)}%`, max: 100 },
         bars: { label: "Precip (NCM hail)", color: PRECIP_BLUE, values: precip, format: precipFmt, max: precipMax },
         annotations,
         axisTitles: { left: "Solar energy · W/m² & %", right: `Cloud % · rain ${isMetric ? "mm" : "in"}` },
@@ -939,10 +940,10 @@ export function LiveTrend() {
                   {serie.label}
                 </span>
               ))}
-              {view.cloudArea ? (
+              {view.cloudBars ? (
                 <span className="flex items-center gap-1.5">
-                  <span className="inline-block h-2 w-4 rounded-sm" style={{ background: view.cloudArea.color, opacity: 0.35 }} />
-                  {view.cloudArea.label}
+                  <span className="inline-block h-2 w-2 rounded-sm" style={{ background: view.cloudBars.color, opacity: 0.6 }} />
+                  {view.cloudBars.label}
                 </span>
               ) : null}
               {view.bars ? (
@@ -1335,7 +1336,7 @@ function TrendChart({
   onActive: (i: number | null) => void
   layers?: DniLayers
 }) {
-  const { n, series, xLabels, boundary, nowIndex, bars, cloudArea, rightAxis } = view
+  const { n, series, xLabels, boundary, nowIndex, bars, cloudBars, rightAxis } = view
   // Visibility toggles (Solar DNI tab only): scale math still uses every series so
   // axes stay put; only the drawn paths / layers are hidden when a toggle is off.
   const seriesVisible = (serie: Series) => !layers || !serie.toggleKey || layers[serie.toggleKey]
@@ -1471,51 +1472,54 @@ function TrendChart({
           </text>
         ))}
 
-        {/* NCM Ghaith #trajectory cloud deck — soft gray/silver filled area, drawn behind everything */}
-        {cloudArea && cloudVisible
-          ? (() => {
-              // Share the right-hand % axis when present so the cloud deck reads against
-              // the same 0–100% scale as transmittance; otherwise fall back to its own max.
-              const cloudHi = hasRight ? rightAxis!.hi : cloudArea.max
-              const ys = cloudArea.values.map(
-                (v) => H - BOT - (Math.min(Math.max(v, 0), cloudHi) / cloudHi) * (H - TOP - BOT),
-              )
-              if (ys.length < 2) return null
-              const top = ys.map((y, i) => `${i === 0 ? "M" : "L"}${px(i).toFixed(1)} ${y.toFixed(1)}`).join(" ")
-              const area = `${top} L${px(n - 1).toFixed(1)} ${(H - BOT).toFixed(1)} L${px(0).toFixed(1)} ${(H - BOT).toFixed(1)} Z`
+        {/* NCM Ghaith #trajectory cloud deck — gray columns (0–100%), drawn behind the lines.
+            Shares the right % axis when present so the bars read against the same scale as
+            transmittance. When rain bars are also present, clouds sit on the left half of each
+            hour slot and rain on the right so both stay legible. */}
+        {cloudBars && cloudVisible
+          ? cloudBars.values.map((v, i) => {
+              if (!Number.isFinite(v) || v <= 0) return null
+              const cloudHi = hasRight ? rightAxis!.hi : cloudBars.max
+              const ratio = Math.min(Math.max(v, 0), cloudHi) / cloudHi
+              const h = ratio * (H - TOP - BOT)
+              // Give clouds the left portion of the slot when rain bars share the axis.
+              const sharesWithRain = !!bars && rainVisible
+              const w = sharesWithRain ? barHalf * 1.05 : barHalf * 1.7
+              const cx = sharesWithRain ? px(i) - barHalf * 0.55 : px(i)
               return (
-                <>
-                  <path d={area} fill={cloudArea.color} opacity={0.14} />
-                  <path
-                    d={top}
-                    fill="none"
-                    stroke={cloudArea.color}
-                    strokeWidth={1.5}
-                    strokeLinejoin="round"
-                    strokeLinecap="round"
-                    opacity={0.5}
-                    vectorEffect="non-scaling-stroke"
-                  />
-                </>
+                <rect
+                  key={`cloud-${i}`}
+                  x={(cx - w / 2).toFixed(1)}
+                  y={(H - BOT - h).toFixed(1)}
+                  width={w.toFixed(1)}
+                  height={h.toFixed(1)}
+                  rx="1.5"
+                  fill={cloudBars.color}
+                  opacity={0.4 + 0.35 * ratio}
+                />
               )
-            })()
+            })
           : null}
 
-        {/* optional bar layer (e.g. on-site cloud cover %) drawn behind the lines */}
+        {/* precip bars (e.g. NCM #hail) drawn in front of the cloud columns */}
         {bars && rainVisible
           ? bars.values.map((v, i) => {
               if (!Number.isFinite(v) || v <= 0) return null
               const h = (Math.min(v, bars.max) / bars.max) * (H - TOP - BOT)
+              // Right portion of the slot when clouds share the axis; full-width otherwise.
+              const sharesWithClouds = !!cloudBars && cloudVisible
+              const w = sharesWithClouds ? barHalf * 1.05 : barHalf * 2
+              const cx = sharesWithClouds ? px(i) + barHalf * 0.55 : px(i)
               return (
                 <rect
                   key={`bar-${i}`}
-                  x={(px(i) - barHalf).toFixed(1)}
+                  x={(cx - w / 2).toFixed(1)}
                   y={(H - BOT - h).toFixed(1)}
-                  width={(barHalf * 2).toFixed(1)}
+                  width={w.toFixed(1)}
                   height={h.toFixed(1)}
                   rx="1.5"
                   fill={bars.color}
-                  opacity={0.16 + 0.14 * (Math.min(v, bars.max) / bars.max)}
+                  opacity={0.55 + 0.35 * (Math.min(v, bars.max) / bars.max)}
                 />
               )
             })
