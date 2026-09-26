@@ -17,7 +17,7 @@ type NavItem = { id: string; label: string; icon: LucideIcon }
 
 export const NAV_ITEMS: NavItem[] = [
   { id: "forecast", label: "Live Trend + AI", icon: Activity },
-  { id: "hourly", label: "Hourly Breakdown", icon: CalendarDays },
+  { id: "hourly", label: "24-Hour Breakdown", icon: CalendarDays },
   { id: "observations", label: "Air Quality", icon: Gauge },
   { id: "radar", label: "Radar & Satellite", icon: Satellite },
   { id: "map", label: "Weather Map", icon: MapIcon },
