@@ -262,17 +262,34 @@ export function AlertBanner() {
       setHeldLevel(next)
     }
   }, [rawAlert, rules])
-  // When the Engineering Console simulator is running, the whole banner reflects the drill
-  // tier — pushing the operator's test readings through the identical evaluate/buzzer path.
+  // During a drill the tier is DERIVED from the operator's per-site test readings — the
+  // console's tier buttons merely preset those readings. Evaluating every rung against both
+  // sites and taking the highest met tier means lowering a site's values below the limits
+  // de-escalates the banner instead of staying locked to the button that was pressed.
+  const drillLevel = useMemo<AlertLevel | null>(() => {
+    if (!(simulator.active && simulator.readings)) return null
+    const drillReadings = simulator.readings
+    let highest: AlertLevel = "green"
+    for (const rung of LADDER) {
+      if (rung.level === "green") continue
+      const rule = rules.find((r) => r.level === rung.level)
+      if (!rule) continue
+      const at = evaluateSite(rule.atSite, drillReadings.atSite)
+      const far = evaluateSite(rule.farSite, drillReadings.farSite)
+      if (at.met || far.met) highest = rung.level
+    }
+    return highest
+  }, [simulator.active, simulator.readings, rules])
+  // The banner reflects the derived drill tier when simulating, otherwise the live held/raw tier.
   const alert = useMemo(
     () =>
       rawAlert
         ? withAlertLevel(
             rawAlert,
-            simulator.active && simulator.level ? simulator.level : heldLevel ?? rawAlert.level,
+            simulator.active ? drillLevel ?? "green" : heldLevel ?? rawAlert.level,
           )
         : null,
-    [rawAlert, heldLevel, simulator.active, simulator.level],
+    [rawAlert, heldLevel, simulator.active, drillLevel],
   )
   const level = alert?.level ?? null
   const [ncm, setNcm] = useState<EmirateWarning | null>(null)
@@ -520,7 +537,7 @@ export function AlertBanner() {
             )}
           >
             <FlaskConical className={cn("h-3 w-3", simulator.active && "tier-blink")} aria-hidden="true" />
-            Simulator Mode {simulator.active ? `ON${simulator.level ? ` · ${simulator.level}` : ""}` : "OFF"}
+            Simulator Mode {simulator.active ? `ON${drillLevel ? ` · ${drillLevel}` : ""}` : "OFF"}
           </span>
           {!simulator.active ? (
             <span className="flex items-center gap-1.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
