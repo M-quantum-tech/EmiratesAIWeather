@@ -11,6 +11,7 @@ import {
   CloudRain,
   Droplets,
   ExternalLink,
+  FlaskConical,
   Gauge,
   MapPin,
   Navigation,
@@ -52,6 +53,7 @@ import {
   DEFAULT_WIND_SOURCE,
   evaluateSite,
   evaluateWindMonitor,
+  drillLevelFromSites,
   type CloudSourceConfig,
   type EscalationRule,
   type SiteKey,
@@ -63,6 +65,7 @@ import { computeSiteReadings } from "@/lib/site-readings"
 import { ProximityRings } from "@/components/weather/proximity-rings"
 import { WindDirectionRadar } from "@/components/weather/wind-direction-radar"
 import { useWeather } from "@/components/weather/weather-provider"
+import { useSimulatorMode } from "@/components/weather/use-simulator-mode"
 import { cn } from "@/lib/utils"
 
 /** Header auto-refresh cadence (seconds) surfaced as a live countdown. */
@@ -211,6 +214,8 @@ function useBuzzer(active: boolean, level: AlertLevel) {
 
 export function AlertBanner() {
   const { payload, isValidating, refresh } = useWeather()
+  // Drill signal from the Engineering Console simulator (may be running in another tab).
+  const simulator = useSimulatorMode()
   // Escalation ladder — persisted overrides from the Engineering Console, defaults otherwise.
   const { data: rulesData } = useSWR<{ rules: EscalationRule[] }>("/api/escalation", farFetcher as never, {
     refreshInterval: 60_000,
@@ -258,9 +263,33 @@ export function AlertBanner() {
       setHeldLevel(next)
     }
   }, [rawAlert, rules])
+  // During a drill the tier is DERIVED from the operator's per-site test readings — the
+  // console's tier buttons merely preset those readings. Evaluating every rung against both
+  // sites and taking the highest met tier means lowering a site's values below the limits
+  // de-escalates the banner instead of staying locked to the button that was pressed.
+  const drillLevel = useMemo<AlertLevel | null>(() => {
+    if (!simulator.active) return null
+    // A drill reads ONLY the operator's simulator readings — never the live stations.
+    // If no readings have been broadcast yet, treat every metric as zero (green).
+    const drillReadings = simulator.readings ?? {
+      atSite: { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 },
+      farSite: { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 },
+    }
+    // Map the test readings to a tier via the per-tier entry thresholds so the drill
+    // resolves cleanly to green → yellow → orange → red (and back to green below the
+    // limits), instead of the coarse severe-band check that only reads green or red.
+    return drillLevelFromSites(drillReadings)
+  }, [simulator.active, simulator.readings])
+  // The banner reflects the derived drill tier when simulating, otherwise the live held/raw tier.
   const alert = useMemo(
-    () => (rawAlert ? withAlertLevel(rawAlert, heldLevel ?? rawAlert.level) : null),
-    [rawAlert, heldLevel],
+    () =>
+      rawAlert
+        ? withAlertLevel(
+            rawAlert,
+            simulator.active ? drillLevel ?? "green" : heldLevel ?? rawAlert.level,
+          )
+        : null,
+    [rawAlert, heldLevel, simulator.active, drillLevel],
   )
   const level = alert?.level ?? null
   const [ncm, setNcm] = useState<EmirateWarning | null>(null)
@@ -336,9 +365,22 @@ export function AlertBanner() {
   // Per-site live readings, derived through the SAME shared helper the Engineering
   // Console uses, so the At-site / Far-site indicators here and there fire from
   // identical numbers against identical ranges.
-  const siteReadings = useMemo<Record<SiteKey, SiteReadings>>(
+  const liveSiteReadings = useMemo<Record<SiteKey, SiteReadings>>(
     () => computeSiteReadings(payload?.units ?? "metric", payload?.current, farData?.current),
     [payload?.units, payload?.current, farData?.current],
+  )
+  // During a drill the At-site / Far-site indicators and the buzzer evaluate the operator's
+  // per-site test readings instead of the live stations — so only the site whose values
+  // actually meet the tier blinks and sounds, and a site edited back down returns to green.
+  const siteReadings = useMemo<Record<SiteKey, SiteReadings>>(
+    () =>
+      simulator.active
+        ? simulator.readings ?? {
+            atSite: { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 },
+            farSite: { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 },
+          }
+        : liveSiteReadings,
+    [simulator.active, simulator.readings, liveSiteReadings],
   )
   // Evaluate the active tier's ranges. The alarm/blink is driven by three
   // independent conditions — nothing sounds because a tier is merely "active"; it
@@ -490,13 +532,28 @@ export function AlertBanner() {
           </span>
         </span>
         <span className="flex items-center gap-3">
-          <span className="flex items-center gap-1.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
-            <span className={cn("relative flex h-2 w-2", isValidating && "animate-pulse")}>
-              <span className="absolute inline-flex h-full w-full rounded-full bg-alert-green opacity-75" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-alert-green" />
-            </span>
-            Live · updated {formatClock(payload.current.time)}
+          {/* Simulator Mode ON/OFF status — always shown so the safety panel makes it explicit
+              whether the indicators are driven by a drill or by live stations. */}
+          <span
+            className={cn(
+              "flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-[0.625rem] font-semibold uppercase tracking-wider",
+              simulator.active
+                ? "border-accent/60 bg-accent/15 text-accent"
+                : "border-border bg-background/60 text-muted-foreground",
+            )}
+          >
+            <FlaskConical className={cn("h-3 w-3", simulator.active && "tier-blink")} aria-hidden="true" />
+            Simulator Mode {simulator.active ? `ON${drillLevel ? ` · ${drillLevel}` : ""}` : "OFF"}
           </span>
+          {!simulator.active ? (
+            <span className="flex items-center gap-1.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+              <span className={cn("relative flex h-2 w-2", isValidating && "animate-pulse")}>
+                <span className="absolute inline-flex h-full w-full rounded-full bg-alert-green opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-alert-green" />
+              </span>
+              Live · updated {formatClock(payload.current.time)}
+            </span>
+          ) : null}
           <span className="flex items-center gap-1.5 rounded-md border border-border bg-background/60 px-2 py-1 font-mono text-[0.625rem] uppercase tracking-wider text-foreground tabular-nums">
             <Clock className="h-3 w-3 text-signal" aria-hidden="true" />
             {localClock}

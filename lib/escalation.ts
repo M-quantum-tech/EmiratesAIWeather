@@ -125,62 +125,274 @@ export type SiteConfig = {
   source: SourceLink
 }
 
-const DEFAULT_WIND_RANGES: MetricRange[] = [
-  { min: 0, max: 10, label: "Low" },
-  { min: 10, max: 15, label: "Moderate" },
-  { min: 15, max: 20, label: "High" },
-  { min: 20, max: null, label: "Severe" },
-]
-const DEFAULT_GUST_RANGES: MetricRange[] = [
-  { min: 0, max: 14, label: "Low" },
-  { min: 14, max: 20, label: "Moderate" },
-  { min: 20, max: 28, label: "High" },
-  { min: 28, max: null, label: "Severe" },
-]
-const DEFAULT_RAIN_RANGES: MetricRange[] = [
-  { min: 0, max: 1, label: "Trace" },
-  { min: 1, max: 10, label: "Light" },
-  { min: 10, max: 30, label: "Moderate" },
-  { min: 30, max: null, label: "Heavy" },
-]
-const DEFAULT_CLOUD_RANGES: MetricRange[] = [
-  { min: 0, max: 25, label: "Clear" },
-  { min: 25, max: 50, label: "Partly" },
-  { min: 50, max: 75, label: "Cloudy" },
-  { min: 75, max: 100, label: "Overcast" },
-]
+const AT_SITE_SOURCE: SourceLink = {
+  label: "NCM AWS Wind · at site",
+  url: "https://ghaith.ncm.gov.ae/?lang=en#aws-wind",
+}
+const FAR_SITE_SOURCE: SourceLink = {
+  label: "NCM COSMO-UAE Wind · far site",
+  url: "https://ghaith.ncm.gov.ae/?lang=en#cosmo-uae-wind",
+}
 
-function defaultSite(km: string, source: SourceLink): SiteConfig {
+/** Build a SiteConfig from its band arrays, cloning so consumers can mutate freely. */
+function site(
+  km: string,
+  source: SourceLink,
+  windMs: MetricRange[],
+  gustMs: MetricRange[],
+  rainMm: MetricRange[],
+  cloudPct: MetricRange[],
+): SiteConfig {
   return {
     km,
-    windMs: DEFAULT_WIND_RANGES.map((r) => ({ ...r })),
-    gustMs: DEFAULT_GUST_RANGES.map((r) => ({ ...r })),
-    rainMm: DEFAULT_RAIN_RANGES.map((r) => ({ ...r })),
-    cloudPct: DEFAULT_CLOUD_RANGES.map((r) => ({ ...r })),
+    windMs: windMs.map((r) => ({ ...r })),
+    gustMs: gustMs.map((r) => ({ ...r })),
+    rainMm: rainMm.map((r) => ({ ...r })),
+    cloudPct: cloudPct.map((r) => ({ ...r })),
     source: { ...source },
   }
 }
 
-/** Build a fresh At-site / Far-site pair with the default NCM station feeds. */
-function levelSites(): Record<SiteKey, SiteConfig> {
-  return {
-    atSite: defaultSite("0–20 km", {
-      label: "NCM AWS Wind · at site",
-      url: "https://ghaith.ncm.gov.ae/?lang=en#aws-wind",
-    }),
-    farSite: defaultSite("20–80 km", {
-      label: "NCM COSMO-UAE Wind · far site",
-      url: "https://ghaith.ncm.gov.ae/?lang=en#cosmo-uae-wind",
-    }),
-  }
-}
-
-/** Built-in At-site / Far-site config per tier — fully editable in the console. */
+/**
+ * Built-in At-site / Far-site config per tier — the exact operational ranges
+ * commissioned in the Engineering Console (0–60 / 60–100 km detection bands,
+ * NCM AWS + COSMO-UAE feeds). These are the fallback used before any admin
+ * override exists; admin edits persist to the database and take precedence for
+ * every visitor. Everything here stays fully editable in the console.
+ */
 export const DEFAULT_SITE_CONFIG: Record<AlertLevel, Record<SiteKey, SiteConfig>> = {
-  green: levelSites(),
-  yellow: levelSites(),
-  orange: levelSites(),
-  red: levelSites(),
+  green: {
+    atSite: site(
+      "0–60 km",
+      AT_SITE_SOURCE,
+      [
+        { min: 0, max: 7, label: "Low" },
+        { min: 5, max: 9, label: "Moderate" },
+        { min: 7, max: 12, label: "High" },
+        { min: 12, max: 14, label: "Severe" },
+      ],
+      [
+        { min: 0, max: 7, label: "Low" },
+        { min: 7, max: 12, label: "Moderate" },
+        { min: 9, max: 14, label: "High" },
+        { min: 12, max: 15, label: "Severe" },
+      ],
+      [
+        { min: 0, max: 1, label: "Trace" },
+        { min: 1, max: 5, label: "Light" },
+        { min: 5, max: 15, label: "Moderate" },
+        { min: 15, max: 20, label: "Heavy" },
+      ],
+      [
+        { min: 0, max: 25, label: "Clear" },
+        { min: 20, max: 35, label: "Partly" },
+        { min: 25, max: 50, label: "Cloudy" },
+        { min: 50, max: 100, label: "Overcast" },
+      ],
+    ),
+    farSite: site(
+      "60–100 km",
+      FAR_SITE_SOURCE,
+      [
+        { min: 0, max: 7, label: "Low" },
+        { min: 5, max: 9, label: "Moderate" },
+        { min: 7, max: 12, label: "High" },
+        { min: 12, max: 14, label: "Severe" },
+      ],
+      [
+        { min: 0, max: 7, label: "Low" },
+        { min: 7, max: 12, label: "Moderate" },
+        { min: 9, max: 14, label: "High" },
+        { min: 12, max: 15, label: "Severe" },
+      ],
+      [
+        { min: 0, max: 10, label: "Trace" },
+        { min: 10, max: 20, label: "Light" },
+        { min: 20, max: 20, label: "Moderate" },
+        { min: 20, max: 30, label: "Heavy" },
+      ],
+      [
+        { min: 0, max: 25, label: "Clear" },
+        { min: 20, max: 35, label: "Partly" },
+        { min: 25, max: 50, label: "Cloudy" },
+        { min: 50, max: 100, label: "Overcast" },
+      ],
+    ),
+  },
+  yellow: {
+    atSite: site(
+      "0–50 km",
+      AT_SITE_SOURCE,
+      [
+        { min: 7, max: 10, label: "Low" },
+        { min: 9, max: 12, label: "Moderate" },
+        { min: 10, max: 14, label: "High" },
+        { min: 12, max: 14, label: "Severe" },
+      ],
+      [
+        { min: 0, max: 7, label: "Low" },
+        { min: 7, max: 9, label: "Moderate" },
+        { min: 9, max: 12, label: "High" },
+        { min: 12, max: 13, label: "Severe" },
+      ],
+      [
+        { min: 0, max: 1, label: "Trace" },
+        { min: 1, max: 10, label: "Light" },
+        { min: 10, max: 20, label: "Moderate" },
+        { min: 20, max: 25, label: "Heavy" },
+      ],
+      [
+        { min: 0, max: 15, label: "Clear" },
+        { min: 15, max: 20, label: "Partly" },
+        { min: 20, max: 30, label: "Cloudy" },
+        { min: 40, max: 75, label: "Overcast" },
+      ],
+    ),
+    farSite: site(
+      "60–100 km",
+      FAR_SITE_SOURCE,
+      [
+        { min: 0, max: 10, label: "Low" },
+        { min: 10, max: 20, label: "Moderate" },
+        { min: 15, max: 25, label: "High" },
+        { min: 25, max: 100, label: "Severe" },
+      ],
+      [
+        { min: 0, max: 7, label: "Low" },
+        { min: 7, max: 9, label: "Moderate" },
+        { min: 12, max: 12, label: "High" },
+        { min: 13, max: 15, label: "Severe" },
+      ],
+      [
+        { min: 0, max: 1, label: "Trace" },
+        { min: 1, max: 10, label: "Light" },
+        { min: 10, max: 20, label: "Moderate" },
+        { min: 20, max: 25, label: "Heavy" },
+      ],
+      [
+        { min: 0, max: 25, label: "Clear" },
+        { min: 25, max: 50, label: "Partly" },
+        { min: 50, max: 75, label: "Cloudy" },
+        { min: 75, max: 100, label: "Overcast" },
+      ],
+    ),
+  },
+  orange: {
+    atSite: site(
+      "0–30 km",
+      AT_SITE_SOURCE,
+      [
+        { min: 0, max: 9, label: "Low" },
+        { min: 9, max: 11, label: "Moderate" },
+        { min: 11, max: 12, label: "High" },
+        { min: 11, max: 14, label: "Severe" },
+      ],
+      [
+        { min: 0, max: 14, label: "Low" },
+        { min: 14, max: 20, label: "Moderate" },
+        { min: 14, max: 16, label: "High" },
+        { min: 15, max: 100, label: "Severe" },
+      ],
+      [
+        { min: 0, max: 1, label: "Trace" },
+        { min: 1, max: 5, label: "Light" },
+        { min: 5, max: 10, label: "Moderate" },
+        { min: 10, max: 15, label: "Heavy" },
+      ],
+      [
+        { min: 0, max: 25, label: "Clear" },
+        { min: 25, max: 30, label: "Partly" },
+        { min: 30, max: 50, label: "Cloudy" },
+        { min: 40, max: 75, label: "Overcast" },
+      ],
+    ),
+    farSite: site(
+      "60–100 km",
+      FAR_SITE_SOURCE,
+      [
+        { min: 0, max: 9, label: "Low" },
+        { min: 9, max: 11, label: "Moderate" },
+        { min: 11, max: 12, label: "High" },
+        { min: 11, max: 14, label: "Severe" },
+      ],
+      [
+        { min: 0, max: 14, label: "Low" },
+        { min: 14, max: 20, label: "Moderate" },
+        { min: 14, max: 20, label: "High" },
+        { min: 15, max: 100, label: "Severe" },
+      ],
+      [
+        { min: 0, max: 1, label: "Trace" },
+        { min: 1, max: 5, label: "Light" },
+        { min: 5, max: 10, label: "Moderate" },
+        { min: 10, max: 15, label: "Heavy" },
+      ],
+      [
+        { min: 0, max: 25, label: "Clear" },
+        { min: 25, max: 30, label: "Partly" },
+        { min: 30, max: 50, label: "Cloudy" },
+        { min: 40, max: 75, label: "Overcast" },
+      ],
+    ),
+  },
+  red: {
+    atSite: site(
+      "0–20 km",
+      AT_SITE_SOURCE,
+      [
+        { min: 0, max: 9, label: "Low" },
+        { min: 7, max: 10, label: "Moderate" },
+        { min: 11, max: 13, label: "High" },
+        { min: 11, max: 14, label: "Severe" },
+      ],
+      [
+        { min: 0, max: 9, label: "Low" },
+        { min: 9, max: 12, label: "Moderate" },
+        { min: 10, max: 12, label: "High" },
+        { min: 12, max: 14, label: "Severe" },
+      ],
+      [
+        { min: 0, max: 1, label: "Trace" },
+        { min: 1, max: 5, label: "Light" },
+        { min: 7, max: 10, label: "Moderate" },
+        { min: 10, max: 15, label: "Heavy" },
+      ],
+      [
+        { min: 0, max: 25, label: "Clear" },
+        { min: 25, max: 50, label: "Partly" },
+        { min: 50, max: 75, label: "Cloudy" },
+        { min: 75, max: 100, label: "Overcast" },
+      ],
+    ),
+    farSite: site(
+      "60–100 km",
+      FAR_SITE_SOURCE,
+      [
+        { min: 9, max: 11, label: "Low" },
+        { min: 10, max: 12, label: "Moderate" },
+        { min: 12, max: 14, label: "High" },
+        { min: 14, max: 20, label: "Severe" },
+      ],
+      [
+        { min: 9, max: 10, label: "Low" },
+        { min: 10, max: 11, label: "Moderate" },
+        { min: 10, max: 12, label: "High" },
+        { min: 11, max: 13, label: "Severe" },
+      ],
+      [
+        { min: 0, max: 1, label: "Trace" },
+        { min: 1, max: 10, label: "Light" },
+        { min: 10, max: 15, label: "Moderate" },
+        { min: 15, max: 20, label: "Heavy" },
+      ],
+      [
+        { min: 0, max: 25, label: "Clear" },
+        { min: 25, max: 50, label: "Partly" },
+        { min: 50, max: 75, label: "Cloudy" },
+        { min: 75, max: 100, label: "Overcast" },
+      ],
+    ),
+  },
 }
 
 /** Parse an unknown value into a clean MetricRange[] (falling back when empty). */
@@ -283,6 +495,40 @@ export type HysteresisReadings = {
   gustMs: number
   /** Rain accumulation over the next 6 h (mm). */
   rainMm: number
+}
+
+/**
+ * Map ONE site's readings to the tier they represent, using the per-tier entry
+ * thresholds (sustained wind and rain). Gust is deliberately excluded: the preset
+ * gust bands overlap the next tier's wind entry, so folding gust in here would
+ * bump a tier up a rung. Returns the highest tier whose wind OR rain entry is met;
+ * anything below yellow's entry resolves to green.
+ *
+ * This is what lets the Simulator distinguish green → yellow → orange → red and
+ * fall back to green the moment values drop below the limits — unlike the coarse
+ * severe-band `evaluateSite` check, which shares identical ranges across tiers and
+ * can therefore only ever read green or the top tier.
+ */
+export function levelFromReadings(readings: { windMs: number; rainMm: number }): AlertLevel {
+  let level: AlertLevel = "green"
+  for (const l of ESCALATION_LEVELS) {
+    if (l === "green") continue
+    const windHit = Number.isFinite(readings.windMs) && readings.windMs >= LEVEL_WIND_ENTRY_MS[l]
+    const rainHit = Number.isFinite(readings.rainMm) && readings.rainMm >= LEVEL_RAIN_ENTRY_MM[l]
+    if (windHit || rainHit) level = l
+  }
+  return level
+}
+
+/**
+ * Highest tier across BOTH sites — the value that drives the Simulator's derived
+ * tier and its buzzer. Either site reaching a tier escalates the whole drill to it,
+ * mirroring how the live ladder escalates on the worst site.
+ */
+export function drillLevelFromSites(sites: { atSite: SiteReadings; farSite: SiteReadings }): AlertLevel {
+  const a = levelFromReadings(sites.atSite)
+  const b = levelFromReadings(sites.farSite)
+  return ESCALATION_LEVELS.indexOf(a) >= ESCALATION_LEVELS.indexOf(b) ? a : b
 }
 
 /**
