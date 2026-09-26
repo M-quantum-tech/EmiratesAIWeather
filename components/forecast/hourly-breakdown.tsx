@@ -162,8 +162,8 @@ export function HourlyBreakdown() {
           <div className="min-w-[60rem]">
             <div className="flex">
               {/* Legend + left axis (DNI) */}
-              <div className={cn(GUTTER_L, "relative h-64 shrink-0")}>
-                <div className="absolute left-0 top-1 flex flex-col gap-2 font-mono text-[0.5rem] uppercase leading-tight tracking-wide text-muted-foreground">
+              <div className={cn(GUTTER_L, "relative h-80 shrink-0")}>
+                <div className="absolute left-0 top-1 flex flex-col gap-2 font-mono text-[0.625rem] uppercase leading-tight tracking-wide text-muted-foreground">
                   <LegendItem swatch={DNI_COLOR} label="DNI (W/m²)" line />
                   <LegendItem swatch={CLOUD_FILL} label="Clouds (%)" />
                   <LegendItem swatch={RAIN_COLOR} label="Rain" />
@@ -175,7 +175,7 @@ export function HourlyBreakdown() {
                 {dniTicks.map((v, i) => (
                   <span
                     key={v}
-                    className="absolute right-1 -translate-y-1/2 font-mono text-[0.5625rem] tabular-nums"
+                    className="absolute right-1 -translate-y-1/2 font-mono text-[0.6875rem] tabular-nums"
                     style={{ top: `${(gridY[i] / CHART_H) * 100}%`, color: DNI_COLOR }}
                   >
                     {v}
@@ -184,10 +184,10 @@ export function HourlyBreakdown() {
               </div>
 
               {/* Chart body */}
-              <div className="relative h-64 flex-1">
+              <div className="relative h-80 flex-1">
                 <svg
                   viewBox={`0 0 ${CHART_W} ${CHART_H}`}
-                  className="h-64 w-full overflow-visible"
+                  className="h-80 w-full overflow-visible"
                   preserveAspectRatio="none"
                   role="img"
                   aria-label={`Direct normal irradiance peaking at ${dniPeakVal} watts per square metre with ${avgCloud}% average cloud cover`}
@@ -298,11 +298,11 @@ export function HourlyBreakdown() {
               </div>
 
               {/* Right axis — clouds */}
-              <div className={cn(GUTTER_R, "relative h-64 shrink-0")}>
+              <div className={cn(GUTTER_R, "relative h-80 shrink-0")}>
                 {cloudTicks.map((v, i) => (
                   <span
                     key={v}
-                    className="absolute left-1 -translate-y-1/2 font-mono text-[0.5625rem] tabular-nums"
+                    className="absolute left-1 -translate-y-1/2 font-mono text-[0.6875rem] tabular-nums"
                     style={{ top: `${(gridY[i] / CHART_H) * 100}%`, color: CLOUD_LINE }}
                   >
                     {v}
@@ -316,7 +316,7 @@ export function HourlyBreakdown() {
               <TableRow label="" gutterR>
                 {hours.map((h, i) => (
                   <Cell key={h.time} active={i === nowIdx}>
-                    <span className="font-mono text-[0.6875rem] font-bold tabular-nums text-foreground">
+                    <span className="font-mono text-[0.8125rem] font-bold tabular-nums text-foreground">
                       {h.time.slice(11, 13)}
                     </span>
                   </Cell>
@@ -326,7 +326,7 @@ export function HourlyBreakdown() {
               <TableRow label={`Wind Speed ${speedUnit(units)}`} gutterR>
                 {hours.map((h, i) => (
                   <Cell key={h.time} active={i === nowIdx}>
-                    <span className="font-mono text-[0.6875rem] tabular-nums text-foreground">
+                    <span className="font-mono text-[0.8125rem] tabular-nums text-foreground">
                       {toDisplaySpeed(h.windSpeed).toFixed(isMetric ? 1 : 0)}
                     </span>
                   </Cell>
@@ -338,10 +338,10 @@ export function HourlyBreakdown() {
                   <Cell key={h.time} active={i === nowIdx}>
                     <Navigation
                       aria-hidden="true"
-                      className="h-3 w-3 fill-foreground/80 text-foreground/80"
+                      className="h-4 w-4 fill-foreground/80 text-foreground/80"
                       style={{ transform: `rotate(${h.windDirection + 180}deg)` }}
                     />
-                    <span className="font-mono text-[0.5rem] uppercase tracking-wide text-muted-foreground">
+                    <span className="font-mono text-[0.625rem] uppercase tracking-wide text-muted-foreground">
                       {compass(h.windDirection)}
                     </span>
                   </Cell>
@@ -354,7 +354,7 @@ export function HourlyBreakdown() {
                   return (
                     <Cell key={h.time} active={i === nowIdx}>
                       <span
-                        className="font-mono text-[0.6875rem] font-semibold tabular-nums"
+                        className="font-mono text-[0.8125rem] font-semibold tabular-nums"
                         style={{ color: g / maxGust > 0.5 ? GUST_COLOR : "rgba(224,128,58,0.75)" }}
                       >
                         {g.toFixed(isMetric ? 1 : 0)}
@@ -370,15 +370,15 @@ export function HourlyBreakdown() {
                     <span
                       className="w-full max-w-[70%] rounded-t-sm"
                       style={{
-                        height: `${Math.max(2, (h.precipitation / maxPrecip) * 22)}px`,
+                        height: `${Math.max(2, (h.precipitation / maxPrecip) * 28)}px`,
                         background: RAIN_COLOR,
                       }}
                       aria-hidden="true"
                     />
-                    <span className="font-mono text-[0.5rem] tabular-nums text-muted-foreground">
+                    <span className="font-mono text-[0.625rem] tabular-nums text-muted-foreground">
                       {h.precipitation > 0 ? h.precipitation.toFixed(2) : "0.00"}
                     </span>
-                    <WeatherIcon code={h.weatherCode} className="h-3.5 w-3.5 text-[#3b82f6]" />
+                    <WeatherIcon code={h.weatherCode} className="h-4 w-4 text-[#3b82f6]" />
                   </Cell>
                 ))}
               </TableRow>
@@ -408,11 +408,11 @@ function PointLabel({
   return (
     <>
       <span
-        className="absolute h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full"
+        className="absolute h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full"
         style={{ left: `${leftPct}%`, top: `${topPct}%`, background: color }}
       />
       <span
-        className="absolute -translate-x-1/2 font-mono text-[0.5rem] font-semibold tabular-nums"
+        className="absolute -translate-x-1/2 font-mono text-[0.625rem] font-semibold tabular-nums"
         style={{
           left: `${leftPct}%`,
           top: `${topPct}%`,
@@ -454,7 +454,7 @@ function TableRow({
       <span
         className={cn(
           GUTTER_L,
-          "flex shrink-0 items-center border-r border-[rgba(148,163,184,0.2)] pr-1 text-right font-mono text-[0.5rem] uppercase leading-tight tracking-wide text-muted-foreground",
+          "flex shrink-0 items-center border-r border-[rgba(148,163,184,0.2)] pr-1 text-right font-mono text-[0.625rem] uppercase leading-tight tracking-wide text-muted-foreground",
           tall ? "py-1" : "py-1",
         )}
       >
