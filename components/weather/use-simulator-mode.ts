@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import type { AlertLevel } from "@/lib/weather"
+import type { SiteKey, SiteReadings } from "@/lib/escalation"
 
 /**
  * Shared "simulator mode" signal. The Engineering Console runs the simulator on its own
@@ -9,13 +10,18 @@ import type { AlertLevel } from "@/lib/weather"
  * through localStorage: a custom event updates listeners in the same tab and the native
  * `storage` event updates other tabs (operator drives the drill in one tab, the public
  * dashboard shows the banner in another). This carries no user data — only the on/off
- * flag and the tier being rehearsed.
+ * flag, the tier being rehearsed, and the per-site test readings so the safety panel can
+ * run the drill through the exact same At-site / Far-site wiring the live stations use.
  */
-export type SimulatorState = { active: boolean; level: AlertLevel | null }
+export type SimulatorState = {
+  active: boolean
+  level: AlertLevel | null
+  readings: Record<SiteKey, SiteReadings> | null
+}
 
 const KEY = "eaw:simulator-mode"
 const EVENT = "eaw:simulator-mode"
-const OFF: SimulatorState = { active: false, level: null }
+const OFF: SimulatorState = { active: false, level: null, readings: null }
 
 function read(): SimulatorState {
   if (typeof window === "undefined") return OFF
@@ -23,7 +29,14 @@ function read(): SimulatorState {
     const raw = window.localStorage.getItem(KEY)
     if (!raw) return OFF
     const parsed = JSON.parse(raw) as Partial<SimulatorState>
-    return { active: Boolean(parsed.active), level: (parsed.level as AlertLevel | null) ?? null }
+    return {
+      active: Boolean(parsed.active),
+      level: (parsed.level as AlertLevel | null) ?? null,
+      readings:
+        parsed.readings && typeof parsed.readings === "object"
+          ? (parsed.readings as Record<SiteKey, SiteReadings>)
+          : null,
+    }
   } catch {
     return OFF
   }

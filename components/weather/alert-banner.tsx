@@ -262,9 +262,17 @@ export function AlertBanner() {
       setHeldLevel(next)
     }
   }, [rawAlert, rules])
+  // When the Engineering Console simulator is running, the whole banner reflects the drill
+  // tier — pushing the operator's test readings through the identical evaluate/buzzer path.
   const alert = useMemo(
-    () => (rawAlert ? withAlertLevel(rawAlert, heldLevel ?? rawAlert.level) : null),
-    [rawAlert, heldLevel],
+    () =>
+      rawAlert
+        ? withAlertLevel(
+            rawAlert,
+            simulator.active && simulator.level ? simulator.level : heldLevel ?? rawAlert.level,
+          )
+        : null,
+    [rawAlert, heldLevel, simulator.active, simulator.level],
   )
   const level = alert?.level ?? null
   const [ncm, setNcm] = useState<EmirateWarning | null>(null)
@@ -340,9 +348,16 @@ export function AlertBanner() {
   // Per-site live readings, derived through the SAME shared helper the Engineering
   // Console uses, so the At-site / Far-site indicators here and there fire from
   // identical numbers against identical ranges.
-  const siteReadings = useMemo<Record<SiteKey, SiteReadings>>(
+  const liveSiteReadings = useMemo<Record<SiteKey, SiteReadings>>(
     () => computeSiteReadings(payload?.units ?? "metric", payload?.current, farData?.current),
     [payload?.units, payload?.current, farData?.current],
+  )
+  // During a drill the At-site / Far-site indicators and the buzzer evaluate the operator's
+  // per-site test readings instead of the live stations — so only the site whose values
+  // actually meet the tier blinks and sounds, and a site edited back down returns to green.
+  const siteReadings = useMemo<Record<SiteKey, SiteReadings>>(
+    () => (simulator.active && simulator.readings ? simulator.readings : liveSiteReadings),
+    [simulator.active, simulator.readings, liveSiteReadings],
   )
   // Evaluate the active tier's ranges. The alarm/blink is driven by three
   // independent conditions — nothing sounds because a tier is merely "active"; it

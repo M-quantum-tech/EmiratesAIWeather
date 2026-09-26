@@ -301,8 +301,15 @@ export function EngineeringConsole({
   // Broadcast the simulator state so the public safety panel can flag "Simulator Mode"
   // even though it renders on a different route (and possibly a different tab).
   useEffect(() => {
-    setSimulatorMode({ active: simLevel != null, level: simLevel })
-  }, [simLevel])
+    setSimulatorMode({
+      active: simLevel != null,
+      level: simLevel,
+      // Push the per-site test readings too, so the public safety panel runs them through
+      // its own At-site / Far-site evaluation — only the site whose values match the tier
+      // blinks and sounds the buzzer, exactly as if the live stations reported them.
+      readings: simLevel != null ? simValues : null,
+    })
+  }, [simLevel, simValues])
 
   function simulate(level: AlertLevel) {
     setSimLevel(level)
