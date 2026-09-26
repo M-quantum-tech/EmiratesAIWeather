@@ -267,8 +267,13 @@ export function AlertBanner() {
   // sites and taking the highest met tier means lowering a site's values below the limits
   // de-escalates the banner instead of staying locked to the button that was pressed.
   const drillLevel = useMemo<AlertLevel | null>(() => {
-    if (!(simulator.active && simulator.readings)) return null
-    const drillReadings = simulator.readings
+    if (!simulator.active) return null
+    // A drill reads ONLY the operator's simulator readings — never the live stations.
+    // If no readings have been broadcast yet, treat every metric as zero (green).
+    const drillReadings = simulator.readings ?? {
+      atSite: { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 },
+      farSite: { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 },
+    }
     let highest: AlertLevel = "green"
     for (const rung of LADDER) {
       if (rung.level === "green") continue
@@ -373,7 +378,13 @@ export function AlertBanner() {
   // per-site test readings instead of the live stations — so only the site whose values
   // actually meet the tier blinks and sounds, and a site edited back down returns to green.
   const siteReadings = useMemo<Record<SiteKey, SiteReadings>>(
-    () => (simulator.active && simulator.readings ? simulator.readings : liveSiteReadings),
+    () =>
+      simulator.active
+        ? simulator.readings ?? {
+            atSite: { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 },
+            farSite: { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 },
+          }
+        : liveSiteReadings,
     [simulator.active, simulator.readings, liveSiteReadings],
   )
   // Evaluate the active tier's ranges. The alarm/blink is driven by three
