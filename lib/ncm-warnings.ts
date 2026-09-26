@@ -33,17 +33,31 @@ export type NcmWarning = {
   to: string
 }
 
+/** The seven emirate polygon names — must match public/geo/uae-emirates.geojson. */
+export const EMIRATE_NAMES = [
+  "Abu Dhabi",
+  "Dubai",
+  "Sharjah",
+  "Ajman",
+  "Umm al-Quwain",
+  "Ras al-Khaimah",
+  "Fujairah",
+] as const
+
+export const WARN_LEVELS: WarnLevel[] = ["green", "yellow", "orange", "red"]
+
 /**
- * Official NCM warnings copied from https://www.ncm.gov.ae/maps-warnings?lang=en.
+ * Seed NCM warnings, mirrored from https://www.ncm.gov.ae/maps-warnings?lang=en.
  *
  * NCM publishes NO machine-readable feed — every warnings endpoint returns 404
- * and the map data is locked to their own origin — so their current published
- * bulletin is mirrored here and COMBINED with the live Open-Meteo timeline.
- * Whenever NCM issues or updates a warning, edit this list (type, level,
- * affected emirates, description, from/to) and it will immediately play on the
- * map polygons and appear in the sidebar alongside the Open-Meteo warnings.
+ * and the map data is locked to their own origin — so their published bulletin
+ * is mirrored into the database (key `ncm_warnings`) and edited from the admin
+ * Engineering Console. This array is only the fallback seed used before any
+ * admin edit exists. The live list is loaded from /api/ncm-warnings so an admin
+ * update propagates to every open session automatically, then COMBINED with the
+ * live Open-Meteo timeline on the map polygons and the sidebar.
  */
-export const NCM_WARNINGS: NcmWarning[] = [
+export const DEFAULT_NCM_WARNINGS: NcmWarning[] = [
   {
     id: "fog-2026-09-25",
     type: "Fog",
@@ -56,6 +70,40 @@ export const NCM_WARNINGS: NcmWarning[] = [
     to: "2026-09-26T08:30",
   },
 ]
+
+/**
+ * Validate/normalise an untrusted value into a clean NcmWarning[]. Returns null
+ * when the payload is not an array so callers can fall back to the seed. Bad
+ * individual entries are dropped; an empty array is valid (admin cleared all
+ * warnings), so this is distinct from null.
+ */
+export function parseNcmWarnings(value: unknown): NcmWarning[] | null {
+  if (!Array.isArray(value)) return null
+  const valid = new Set<string>(EMIRATE_NAMES)
+  const out: NcmWarning[] = []
+  value.forEach((raw, i) => {
+    if (!raw || typeof raw !== "object") return
+    const r = raw as Record<string, unknown>
+    const level = r.level as WarnLevel
+    if (!WARN_LEVELS.includes(level)) return
+    const emirates = Array.isArray(r.emirates)
+      ? Array.from(new Set(r.emirates.map((e) => String(e)).filter((e) => valid.has(e))))
+      : []
+    const type = String(r.type ?? "").slice(0, 60).trim()
+    if (!type) return
+    out.push({
+      id: String(r.id ?? "").slice(0, 80) || `ncm-${i}-${Date.now()}`,
+      type,
+      level,
+      emirates,
+      headline: String(r.headline ?? "").slice(0, 120).trim() || type,
+      description: String(r.description ?? "").slice(0, 800).trim(),
+      from: String(r.from ?? "").slice(0, 16),
+      to: String(r.to ?? "").slice(0, 16),
+    })
+  })
+  return out
+}
 
 const SEVERITY: Record<WarnLevel, number> = { green: 0, yellow: 1, orange: 2, red: 3 }
 
@@ -188,7 +236,11 @@ export type WarningFrames = {
  * with no hazards simply yields an empty frame. Designed to be played back like
  * the NCM Al Bahar animated warnings map.
  */
-export async function fetchWarningFrames(signal?: AbortSignal, hours = 24): Promise<WarningFrames> {
+export async function fetchWarningFrames(
+  signal?: AbortSignal,
+  hours = 24,
+  ncmWarnings: NcmWarning[] = DEFAULT_NCM_WARNINGS,
+): Promise<WarningFrames> {
   const lat = EMIRATES.map((e) => e.lat).join(",")
   const lon = EMIRATES.map((e) => e.lon).join(",")
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=wind_gusts_10m,wind_speed_10m,precipitation,weather_code,visibility&wind_speed_unit=kmh&timezone=Asia%2FDubai&forecast_days=2`
@@ -237,7 +289,7 @@ export async function fetchWarningFrames(signal?: AbortSignal, hours = 24): Prom
     // Fold in the official NCM warnings active during this hour, combining them
     // with the Open-Meteo warnings so both feeds display on the same map.
     const hourMs = dubaiMs(timeAxis[j])
-    NCM_WARNINGS.forEach((nw) => {
+    ncmWarnings.forEach((nw) => {
       if (hourMs < dubaiMs(nw.from) || hourMs >= dubaiMs(nw.to)) return
       nw.emirates.forEach((name) => {
         const existing = frame.find((f) => f.name === name)

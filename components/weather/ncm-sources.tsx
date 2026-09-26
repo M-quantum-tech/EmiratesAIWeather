@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
+import useSWR from "swr"
 import "leaflet/dist/leaflet.css"
 import {
   AlertTriangle,
@@ -28,12 +29,13 @@ import { createWindLayer } from "@/lib/wind-layer"
 import { createStationLayer, type StationMode } from "@/lib/station-layer"
 import { stationReadings } from "@/lib/stations"
 import {
+  DEFAULT_NCM_WARNINGS,
   fetchWarningFrames,
   fmtNcmTime,
-  NCM_WARNINGS,
   WARN_FILL,
   WARN_LEGEND,
   type EmirateWarning,
+  type NcmWarning,
   type WarningFrames,
   type WarnLevel,
 } from "@/lib/ncm-warnings"
@@ -193,6 +195,14 @@ export function NcmSources() {
   const [cloudIdx, setCloudIdx] = useState(0)
   const [cloudPlaying, setCloudPlaying] = useState(true)
   const [warnFrames, setWarnFrames] = useState<WarningFrames | null>(null)
+  // Live NCM bulletin, mirrored from the DB (key `ncm_warnings`). Admins edit it in the
+  // Engineering Console; this SWR poll pushes those edits to every open map within a minute.
+  const { data: ncmData } = useSWR<{ warnings: NcmWarning[] }>(
+    "/api/ncm-warnings",
+    (url: string) => fetch(url).then((r) => r.json()),
+    { refreshInterval: 60 * 1000, revalidateOnFocus: true },
+  )
+  const ncmWarnings = ncmData?.warnings ?? DEFAULT_NCM_WARNINGS
   const [warnIdx, setWarnIdx] = useState(0)
   const [warnPlaying, setWarnPlaying] = useState(true)
   const [geoReady, setGeoReady] = useState(false)
@@ -243,7 +253,7 @@ export function NcmSources() {
   )
   const top = display[0] ?? null
   const warnTime = warnFrames?.times[safeIdx]
-  const totalWarnCards = (NCM_WARNINGS.length > 0 ? 1 : 0) + display.length
+  const totalWarnCards = (ncmWarnings.length > 0 ? 1 : 0) + display.length
 
   const frameUrl = (f: Frame) => {
     const host = maps?.host ?? "https://tilecache.rainviewer.com"
@@ -318,7 +328,7 @@ export function NcmSources() {
     const controller = new AbortController()
     async function load() {
       try {
-        const data = await fetchWarningFrames(controller.signal, 24)
+        const data = await fetchWarningFrames(controller.signal, 24, ncmWarnings)
         setWarnFrames(data)
         setWarnIdx(0)
       } catch (err) {
@@ -333,7 +343,8 @@ export function NcmSources() {
       controller.abort()
       clearInterval(id)
     }
-  }, [])
+    // Rebuild the timeline whenever the live NCM bulletin changes so admin edits appear at once.
+  }, [ncmWarnings])
 
   // Animate the warning timeline: advance one forecast hour every 2 seconds.
   useEffect(() => {
@@ -994,12 +1005,12 @@ export function NcmSources() {
               className="absolute right-3 top-32 z-[500] flex max-h-[64%] w-60 flex-col gap-2 overflow-y-auto scroll-smooth pr-0.5 sm:w-64"
             >
               {/* Official NCM bulletin — always visible, mirrored from ncm.gov.ae and combined with Open-Meteo. */}
-              {NCM_WARNINGS.length > 0 && (
+              {ncmWarnings.length > 0 && (
                 <article className="shrink-0 overflow-hidden rounded-md border border-alert-yellow/60 bg-card shadow">
                   <header className="flex items-center justify-center gap-1.5 border-b border-border bg-primary px-3 py-1.5 font-mono text-[0.625rem] font-bold uppercase tracking-wider text-primary-foreground">
                     <ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" /> NCM Official Warnings
                   </header>
-                  {NCM_WARNINGS.map((w) => (
+                  {ncmWarnings.map((w) => (
                     <div key={w.id} className="border-b border-border px-3 py-2 last:border-0">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-bold text-foreground">{w.type}</span>

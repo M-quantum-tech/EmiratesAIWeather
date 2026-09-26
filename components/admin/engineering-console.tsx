@@ -38,6 +38,7 @@ import { ALERT_RADII_KM, offsetLocation, type AlertLevel, type WeatherPayload } 
 import { computeSiteReadings } from "@/lib/site-readings"
 import { useWeather } from "@/components/weather/weather-provider"
 import { setSimulatorMode } from "@/components/weather/use-simulator-mode"
+import { NcmWarningsEditor } from "@/components/admin/ncm-warnings-editor"
 import { cn } from "@/lib/utils"
 
 async function weatherFetcher(url: string): Promise<WeatherPayload> {
@@ -441,6 +442,9 @@ export function EngineeringConsole({
 
       {/* AI prediction multi-source data pool */}
       <AiSourceEditor initialSources={initialAiSources} />
+
+      {/* NCM official warnings — DB-backed mirror, edits publish to the live map */}
+      <NcmWarningsEditor />
 
       {/* Editable escalation rules */}
       <section className="rounded-xl border border-border bg-card p-5">
