@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import useSWR from "swr"
-import { ArrowDownRight, ArrowUpRight, CloudRain, Minus, ShieldCheck, Sparkles, Sun, Sunrise, Thermometer, Wind, ZoomIn, ZoomOut } from "lucide-react"
+import { ArrowDownRight, ArrowUpRight, CloudRain, Eye, EyeOff, Minus, ShieldCheck, Sparkles, Sun, Sunrise, Thermometer, Wind, ZoomIn, ZoomOut } from "lucide-react"
 import { Panel } from "@/components/station/panel"
 import { useWeather } from "@/components/weather/weather-provider"
 import {
@@ -88,6 +88,22 @@ const TREND = {
   gust: "oklch(0.8 0.1 30)",
 } as const
 
+/** The four toggleable Solar DNI layers, matching the NCM series drawn on the chart. */
+type DniLayerKey = "dni" | "transmittance" | "clouds" | "rain"
+type DniLayers = Record<DniLayerKey, boolean>
+
+/** Cyan transmittance overlay (dashed) + toggle chip on the Solar DNI tab. */
+const TRANSMITTANCE = "oklch(0.82 0.14 200)"
+/** Blue NCM #hail precipitation bars + toggle chip. */
+const PRECIP_BLUE = "oklch(0.62 0.17 250)"
+
+const DNI_TOGGLES: { key: DniLayerKey; label: string; color: string }[] = [
+  { key: "dni", label: "DNI", color: TREND.primary },
+  { key: "transmittance", label: "Transmittance", color: TRANSMITTANCE },
+  { key: "clouds", label: "Clouds", color: "var(--muted-foreground)" },
+  { key: "rain", label: "Rain", color: PRECIP_BLUE },
+]
+
 const ALERT_DOT: Record<AlertLevel, string> = {
   green: "bg-alert-green",
   yellow: "bg-alert-yellow",
@@ -129,6 +145,8 @@ type Series = {
   group?: string
   /** When "right", the line is scaled to the view's secondary (right-hand) axis instead of its own range. */
   axis?: "left" | "right"
+  /** Ties the line to a visibility toggle so it can be shown/hidden from the Solar DNI panel. */
+  toggleKey?: "dni" | "transmittance"
   }
 
 type Stat = { label: string; value: string; sub: string }
@@ -173,6 +191,10 @@ type View = {
    * cloud-cover deck rendered as a soft gray/silver fill (0–100%).
    */
   cloudArea?: { label: string; color: string; values: number[]; format: (v: number) => string; max: number }
+  /** Data-driven event callouts (peak DNI, cloud influx, rain, sunset) drawn over the chart. */
+  annotations?: { i: number; label: string; sub: string; tone: MeasureTone; requires?: DniLayerKey }[]
+  /** Rotated left/right axis titles rendered at the chart edges. */
+  axisTitles?: { left: string; right: string }
 }
 
 /** Format an Open-Meteo local ISO timestamp (…THH:MM) to a friendly clock label. */
@@ -283,6 +305,19 @@ function buildView(
       if (day.peakDni >= 700) measures.push({ tone: "info", text: `Very high midday UV around ${clockLabel(day.peakHour)} — use eye and skin protection outdoors.` })
       if (day.sunHours >= 11) measures.push({ tone: "good", text: `Long usable window (${day.sunHours} h) — schedule tracker cleaning and inspections at dawn or dusk.` })
       if (measures.length === 0) measures.push({ tone: "info", text: "Moderate irradiance — standard PV operation expected." })
+      // Event callouts read straight from the NCM-mirror hourly feed for this day.
+      const cloudPeak = argExtremes(cloudCover).hi
+      const rainPeak = argExtremes(precip).hi
+      const sunsetHour = day.sunset && day.sunset.length >= 13 ? Number(day.sunset.slice(11, 13)) : -1
+      const annotations: NonNullable<View["annotations"]> = [
+        { i: hi, label: `Peak DNI ${wm2(values[hi])}`, sub: clockLabel(hi), tone: "good", requires: "dni" },
+      ]
+      if (cloudCover[cloudPeak] >= 25)
+        annotations.push({ i: cloudPeak, label: `Cloud influx ${Math.round(cloudCover[cloudPeak])}%`, sub: clockLabel(cloudPeak), tone: "info", requires: "clouds" })
+      if (precip[rainPeak] > 0)
+        annotations.push({ i: rainPeak, label: `Rain ${precipFmt(precip[rainPeak])}`, sub: clockLabel(rainPeak), tone: "warn", requires: "rain" })
+      if (sunsetHour >= 0 && sunsetHour < 24)
+        annotations.push({ i: sunsetHour, label: "Sunset · DNI drop", sub: clockLabel(sunsetHour), tone: "info", requires: "dni" })
       return {
         n,
         boundary,
@@ -291,13 +326,15 @@ function buildView(
         tooltipHead: (i) => `${clockLabel(i)}${i === nowIndex ? " · live" : ""}`,
         projectionNote: nowIndex >= 0 ? "Solid = NCM mirror · dotted = Open-Meteo AI prediction" : "AI-projected day",
         series: [
-          { label: "DNI · model", color: TREND.primary, values, format: wm2, group: "wm2" },
-          { label: "Transmittance", color: TREND.humidity, values: trans, format: (v) => `${Math.round(v)}%`, axis: "right" },
-          { label: "AI beam", color: TREND.secondary, values: aiValues, format: wm2, dashed: true, group: "wm2" },
+          { label: "DNI · model", color: TREND.primary, values, format: wm2, group: "wm2", toggleKey: "dni" },
+          { label: "Transmittance", color: TRANSMITTANCE, values: trans, format: (v) => `${Math.round(v)}%`, axis: "right", dashed: true, toggleKey: "transmittance" },
+          { label: "AI beam", color: TREND.secondary, values: aiValues, format: wm2, dashed: true, group: "wm2", toggleKey: "dni" },
         ],
         rightAxis: { label: "%", lo: 0, hi: 100, format: (v) => `${Math.round(v)}%` },
         cloudArea: { label: "Clouds (NCM trajectory)", color: "var(--muted-foreground)", values: cloudCover, format: (v) => `${Math.round(v)}%`, max: 100 },
-        bars: { label: "Precip (NCM hail)", color: "oklch(0.62 0.17 250)", values: precip, format: precipFmt, max: precipMax },
+        bars: { label: "Precip (NCM hail)", color: PRECIP_BLUE, values: precip, format: precipFmt, max: precipMax },
+        annotations,
+        axisTitles: { left: "Solar energy · W/m² & %", right: `Cloud % · rain ${isMetric ? "mm" : "in"}` },
         sunWindow: { sunrise: day.sunrise, sunset: day.sunset },
         extra: (i) => [
           { label: "GHI (horizontal)", value: wm2(ghiValues[i]) },
@@ -704,6 +741,7 @@ export function LiveTrend() {
   const [horizon, setHorizon] = useState<Horizon>("24h")
   const [metric, setMetric] = useState<MetricKey>("comfort")
   const [active, setActive] = useState<number | null>(null)
+  const [dniLayers, setDniLayers] = useState<DniLayers>({ dni: true, transmittance: true, clouds: true, rain: true })
 
   // Beam-irradiance model powers the Solar DNI tab — fetched once for 14 days,
   // then sliced client-side so it also feeds the 14-day horizon.
@@ -847,8 +885,42 @@ export function LiveTrend() {
             ))}
           </div>
 
+          {/* Visibility toggles — show/hide each Solar DNI layer (matches the four NCM series) */}
+          {metric === "dni" ? (
+            <div className="flex flex-wrap items-center gap-1.5 border-t border-border px-4 pt-3">
+              <span className="mr-auto font-mono text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground">
+                Visibility
+              </span>
+              {DNI_TOGGLES.map((tg) => {
+                const on = dniLayers[tg.key]
+                return (
+                  <button
+                    key={tg.key}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => setDniLayers((s) => ({ ...s, [tg.key]: !s[tg.key] }))}
+                    className={cn(
+                      "flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-[0.625rem] uppercase tracking-wider transition-colors",
+                      on
+                        ? "border-signal/40 bg-card/60 text-foreground"
+                        : "border-border/60 text-muted-foreground/60 hover:text-foreground",
+                    )}
+                  >
+                    <span
+                      className="inline-block h-2 w-2 rounded-sm"
+                      style={{ background: tg.color, opacity: on ? 1 : 0.3 }}
+                      aria-hidden="true"
+                    />
+                    {tg.label}
+                    {on ? <Eye className="h-3 w-3" aria-hidden="true" /> : <EyeOff className="h-3 w-3" aria-hidden="true" />}
+                  </button>
+                )
+              })}
+            </div>
+          ) : null}
+
           {/* Trend chart — bigger, per-series normalised, solid live + dashed AI projection */}
-          <TrendChart view={view} active={active} onActive={setActive} />
+          <TrendChart view={view} active={active} onActive={setActive} layers={metric === "dni" ? dniLayers : undefined} />
 
           {/* Legend + projection note */}
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border px-4 py-2">
@@ -1252,12 +1324,19 @@ function TrendChart({
   view,
   active,
   onActive,
+  layers,
 }: {
   view: View
   active: number | null
   onActive: (i: number | null) => void
+  layers?: DniLayers
 }) {
   const { n, series, xLabels, boundary, nowIndex, bars, cloudArea, rightAxis } = view
+  // Visibility toggles (Solar DNI tab only): scale math still uses every series so
+  // axes stay put; only the drawn paths / layers are hidden when a toggle is off.
+  const seriesVisible = (serie: Series) => !layers || !serie.toggleKey || layers[serie.toggleKey]
+  const cloudVisible = !layers || layers.clouds
+  const rainVisible = !layers || layers.rain
   const hasRight = !!rightAxis && series.some((s) => s.axis === "right")
   // Leave a matching gutter on the right when a secondary axis is shown.
   const plotL = AXIS_PAD
@@ -1332,7 +1411,7 @@ function TrendChart({
       >
         <defs>
           <linearGradient id="live-trend-area" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={TREND.primary} stopOpacity="0.16" />
+            <stop offset="0%" stopColor={TREND.primary} stopOpacity="0.22" />
             <stop offset="100%" stopColor={TREND.primary} stopOpacity="0" />
           </linearGradient>
           {/* soft neon bloom so the bright lines read vividly against the dark chassis */}
@@ -1389,7 +1468,7 @@ function TrendChart({
         ))}
 
         {/* NCM Ghaith #trajectory cloud deck — soft gray/silver filled area, drawn behind everything */}
-        {cloudArea
+        {cloudArea && cloudVisible
           ? (() => {
               // Share the right-hand % axis when present so the cloud deck reads against
               // the same 0–100% scale as transmittance; otherwise fall back to its own max.
@@ -1419,7 +1498,7 @@ function TrendChart({
           : null}
 
         {/* optional bar layer (e.g. on-site cloud cover %) drawn behind the lines */}
-        {bars
+        {bars && rainVisible
           ? bars.values.map((v, i) => {
               if (!Number.isFinite(v) || v <= 0) return null
               const h = (Math.min(v, bars.max) / bars.max) * (H - TOP - BOT)
@@ -1439,7 +1518,7 @@ function TrendChart({
           : null}
 
         {/* soft area under the primary series */}
-        <path d={areaBase} fill="url(#live-trend-area)" />
+        {seriesVisible(series[0]) ? <path d={areaBase} fill="url(#live-trend-area)" /> : null}
 
         {/* projected region shading */}
         {boundary < n - 1 ? (
@@ -1449,6 +1528,7 @@ function TrendChart({
         {/* each series: solid NCM-mirror line, or a fully dotted Open-Meteo AI-prediction line */}
         {normed.map((ys, si) => {
           const serie = series[si]
+          if (!seriesVisible(serie)) return null
           // Live (solid) reading renders bold; the AI-projected segment stays a thin dotted overlay.
           const solidWidth = si === 0 ? 3.5 : 2.5
           const projWidth = si === 0 ? 2 : 1.75
@@ -1526,20 +1606,22 @@ function TrendChart({
               vectorEffect="non-scaling-stroke"
             />
             <circle cx={px(activeIdx)} cy={TOP - 8} r="2.5" fill="var(--foreground)" opacity="0.5" />
-            {normed.map((ys, si) => (
-              <g key={series[si].label}>
-                <circle cx={px(activeIdx)} cy={ys[activeIdx]} r="7" fill={series[si].color} opacity="0.15" />
-                <circle
-                  cx={px(activeIdx)}
-                  cy={ys[activeIdx]}
-                  r="3.5"
-                  fill="var(--background)"
-                  stroke={series[si].color}
-                  strokeWidth="2"
-                  vectorEffect="non-scaling-stroke"
-                />
-              </g>
-            ))}
+            {normed.map((ys, si) =>
+              seriesVisible(series[si]) ? (
+                <g key={series[si].label}>
+                  <circle cx={px(activeIdx)} cy={ys[activeIdx]} r="7" fill={series[si].color} opacity="0.15" />
+                  <circle
+                    cx={px(activeIdx)}
+                    cy={ys[activeIdx]}
+                    r="3.5"
+                    fill="var(--background)"
+                    stroke={series[si].color}
+                    strokeWidth="2"
+                    vectorEffect="non-scaling-stroke"
+                  />
+                </g>
+              ) : null,
+            )}
           </>
         ) : null}
 
@@ -1558,6 +1640,39 @@ function TrendChart({
           />
         ))}
       </svg>
+
+      {/* rotated axis titles at the chart edges */}
+      {view.axisTitles ? (
+        <>
+          <span className="pointer-events-none absolute left-0 top-1/2 z-[5] -translate-y-1/2 -rotate-90 whitespace-nowrap font-mono text-[0.5rem] uppercase tracking-wider text-muted-foreground/70">
+            {view.axisTitles.left}
+          </span>
+          <span className="pointer-events-none absolute right-0 top-1/2 z-[5] -translate-y-1/2 rotate-90 whitespace-nowrap font-mono text-[0.5rem] uppercase tracking-wider text-muted-foreground/70">
+            {view.axisTitles.right}
+          </span>
+        </>
+      ) : null}
+
+      {/* data-driven event callouts (peak DNI, cloud influx, rain, sunset) */}
+      {(view.annotations ?? [])
+        .filter((a) => !layers || !a.requires || layers[a.requires])
+        .map((a, k) => {
+          const leftPct = Math.min(90, Math.max(6, (px(a.i) / W) * 100))
+          return (
+            <div
+              key={`${a.label}-${k}`}
+              className="pointer-events-none absolute z-[6] -translate-x-1/2"
+              style={{ left: `${leftPct}%`, top: `${6 + (k % 3) * 30}px` }}
+            >
+              <div className="rounded-md border border-border bg-popover/90 px-2 py-0.5 text-center shadow-md backdrop-blur">
+                <p className={cn("font-mono text-[0.5625rem] font-semibold uppercase leading-tight tracking-wider", MEASURE_TEXT[a.tone])}>
+                  {a.label}
+                </p>
+                <p className="font-mono text-[0.5rem] uppercase tracking-wider text-muted-foreground">{a.sub}</p>
+              </div>
+            </div>
+          )
+        })}
 
       {/* x-axis labels */}
       <div className="mt-1 flex px-0">
@@ -1601,7 +1716,7 @@ function TrendChart({
                   </span>
                 </div>
                 <div className="mt-1.5 flex flex-col gap-0.5">
-                  {series.map((serie) => (
+                  {series.filter(seriesVisible).map((serie) => (
                     <span
                       key={serie.label}
                       className="flex items-center justify-between gap-3 font-mono text-[0.625rem] tabular-nums"
