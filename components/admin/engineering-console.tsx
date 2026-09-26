@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import useSWR from "swr"
 import { BellRing, Check, Cloud, Database, ExternalLink, FlaskConical, LineChart, Link2, Plus, Power, RotateCcw, Save, Square, Trash2, Volume2, Wind } from "lucide-react"
 import {
