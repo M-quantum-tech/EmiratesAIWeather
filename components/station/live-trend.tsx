@@ -198,6 +198,8 @@ type View = {
   annotations?: { i: number; label: string; sub: string; tone: MeasureTone; requires?: DniLayerKey }[]
   /** Rotated left/right axis titles rendered at the chart edges. */
   axisTitles?: { left: string; right: string }
+  /** Render the rich golden area fill under the primary series (Solar DNI only). */
+  fillPrimary?: boolean
 }
 
 /** Format an Open-Meteo local ISO timestamp (…THH:MM) to a friendly clock label. */
@@ -337,6 +339,7 @@ function buildView(
         cloudBars: { label: "Clouds (NCM trajectory)", color: "var(--muted-foreground)", values: cloudCover, format: (v) => `${Math.round(v)}%`, max: 100 },
         bars: { label: "Precip (NCM hail)", color: PRECIP_BLUE, values: precip, format: precipFmt, max: precipMax },
         annotations,
+        fillPrimary: true,
         axisTitles: { left: "Solar energy · W/m² & %", right: `Cloud % · rain ${isMetric ? "mm" : "in"}` },
         sunWindow: { sunrise: day.sunrise, sunset: day.sunset },
         extra: (i) => [
@@ -453,10 +456,11 @@ function buildView(
         tooltipHead,
         projectionNote: nowIndex >= 0 ? "Solid = NCM mirror · dotted = Open-Meteo AI prediction" : "AI-projected day",
         series: [
-          { label: "Wind", color: TREND.primary, values: wind, format: s },
+          { label: "Wind", color: TREND.primary, values: wind, format: s, kind: "column" },
           { label: "Gusts", color: TREND.gust, values: gust, format: s },
           { label: "AI wind", color: TREND.secondary, values: aiWind, format: s, dashed: true },
         ],
+        axisTitles: { left: `Wind · gusts · ${speedUnit(units)}`, right: "" },
         extra: (i) => [
           { label: "Direction", value: `${compass(hours[i].windDirection)} · ${Math.round(hours[i].windDirection)}°` },
           { label: "AI wind", value: s(aiWind[i]) },
@@ -504,11 +508,13 @@ function buildView(
       tooltipHead,
       projectionNote: nowIndex >= 0 ? "Solid = NCM mirror · dotted = Open-Meteo AI prediction" : "AI-projected day",
       series: [
-        { label: "Rain %", color: TREND.primary, values: prob, format: pct },
-        { label: "Humidity", color: TREND.humidity, values: hum, format: pct },
+        { label: "Cloud cover", color: "var(--muted-foreground)", values: cloud, format: pct },
         { label: "AI rain %", color: TREND.secondary, values: aiRain, format: pct, dashed: true },
       ],
-      bars: { label: "Cloud cover", color: "var(--muted-foreground)", values: cloud, format: pct, max: 100 },
+      rightAxis: { label: "%", lo: 0, hi: 100, format: pct },
+      cloudBars: { label: "Humidity", color: TREND.humidity, values: hum, format: pct, max: 100 },
+      bars: { label: "Rain %", color: PRECIP_BLUE, values: prob, format: pct, max: 100 },
+      axisTitles: { left: "Cloud cover · %", right: "Rain % · humidity %" },
       stats: [
         { label: "Rain chance", value: pct(cur.precipitationProbability), sub: `peak ${pct(Math.max(...prob))}` },
         { label: "Cloud cover", value: pct(cur.cloudCover), sub: cloudWord(cur.cloudCover) },
@@ -1416,7 +1422,8 @@ function TrendChart({
       >
         <defs>
           <linearGradient id="live-trend-area" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={TREND.primary} stopOpacity="0.22" />
+            <stop offset="0%" stopColor={TREND.primary} stopOpacity="0.45" />
+            <stop offset="45%" stopColor={TREND.primary} stopOpacity="0.16" />
             <stop offset="100%" stopColor={TREND.primary} stopOpacity="0" />
           </linearGradient>
           {/* soft neon bloom so the bright lines read vividly against the dark chassis */}
@@ -1525,8 +1532,8 @@ function TrendChart({
             })
           : null}
 
-        {/* soft area under the primary series (skipped when it renders as columns) */}
-        {series[0].kind !== "column" && seriesVisible(series[0]) ? (
+        {/* rich golden area under the primary series — Solar DNI only */}
+        {view.fillPrimary && series[0].kind !== "column" && seriesVisible(series[0]) ? (
           <path d={areaBase} fill="url(#live-trend-area)" />
         ) : null}
 
