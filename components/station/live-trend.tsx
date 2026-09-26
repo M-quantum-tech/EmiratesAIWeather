@@ -1551,9 +1551,9 @@ function TrendChart({
           const solidWidth = si === 0 ? 3.5 : 2.5
           const projWidth = si === 0 ? 2 : 1.75
           if (serie.kind === "column") {
-            // Vertical temperature columns anchored to the axis baseline. NCM-mirror
-            // hours read as solid filled bars; projected hours become hollow outlined
-            // bars so the forecast boundary stays legible at a glance.
+            // Vertical columns anchored to the axis baseline. All hours read as solid
+            // filled bars; projected hours are slightly translucent with a thin dashed
+            // outline so the forecast boundary stays legible without going hollow.
             const baseY = H - BOT
             // When more than one column series shares the chart (e.g. DNI on the left
             // W/m² axis + transmittance on the right % axis), split each hour slot so the
@@ -1581,11 +1581,11 @@ function TrendChart({
                         width={cw.toFixed(1)}
                         height={h.toFixed(1)}
                         rx="2"
-                        fill={projected ? "transparent" : serie.color}
+                        fill={serie.color}
                         stroke={serie.color}
-                        strokeWidth={projected ? 1.25 : 0}
+                        strokeWidth={projected ? 1 : 0}
                         strokeDasharray={projected ? "2 2" : undefined}
-                        opacity={projected ? 0.6 : activeIdx === i ? 1 : 0.82}
+                        opacity={projected ? (activeIdx === i ? 0.9 : 0.62) : activeIdx === i ? 1 : 0.9}
                         vectorEffect="non-scaling-stroke"
                       />
                       {showValues && Number.isFinite(raw) && raw > 0 ? (
