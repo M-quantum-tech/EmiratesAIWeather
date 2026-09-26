@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import useSWR from "swr"
 import { BellRing, Check, Cloud, Database, ExternalLink, FlaskConical, LineChart, Link2, Plus, Power, RotateCcw, Save, Square, Trash2, Volume2, Wind } from "lucide-react"
 import {
@@ -311,6 +311,49 @@ export function EngineeringConsole({
     })
   }, [simLevel, simValues])
 
+  // Derived simulator tier — the highest tier whose At-site OR Far-site ranges are met by the
+  // current test readings, walking the ladder low→high. This is what actually reads the values
+  // (not the pressed preset button), so dropping every value below the limits lands on green.
+  const derivedSimTier = useMemo<AlertLevel>(() => {
+    if (simLevel == null) return "green"
+    let highest: AlertLevel = "green"
+    for (const level of ESCALATION_LEVELS) {
+      const rule = rules.find((r) => r.level === level)
+      if (!rule) continue
+      const at = evaluateSite(rule.atSite, effectiveReadings.atSite)
+      const far = evaluateSite(rule.farSite, effectiveReadings.farSite)
+      if (at.met || far.met) highest = level
+    }
+    return highest
+  }, [simLevel, rules, effectiveReadings])
+
+  // Wire the simulator straight into the Buzzer test bench: while Simulator Mode is ON, the
+  // alarm follows the derived tier through the exact same tone the live banner sounds. It plays
+  // when the readings reach an alerting tier and stops the moment they fall back to green — so
+  // pushing test values below the limit silences it, matching the indicators resetting to green.
+  const lastBuzzerTier = useRef<AlertLevel | null>(null)
+  useEffect(() => {
+    if (simLevel == null) {
+      if (lastBuzzerTier.current !== null) {
+        stopBuzzerTest()
+        lastBuzzerTier.current = null
+      }
+      return
+    }
+    if (derivedSimTier === "green") {
+      if (lastBuzzerTier.current !== null && lastBuzzerTier.current !== "green") stopBuzzerTest()
+      lastBuzzerTier.current = "green"
+      return
+    }
+    if (lastBuzzerTier.current !== derivedSimTier) {
+      playBuzzerTest(derivedSimTier)
+      lastBuzzerTier.current = derivedSimTier
+    }
+  }, [simLevel, derivedSimTier])
+
+  // Stop any simulator-driven tone when the console unmounts.
+  useEffect(() => () => stopBuzzerTest(), [])
+
   function simulate(level: AlertLevel) {
     setSimLevel(level)
     setSimValues({ atSite: { ...SIM_PRESETS[level] }, farSite: { ...SIM_PRESETS[level] } })
@@ -342,10 +385,17 @@ export function EngineeringConsole({
           Preview the level-tuned alarm for each escalation tier. Each button plays the exact tone the live banner
           sounds when it reaches that level.
         </p>
+        {simLevel != null ? (
+          <p className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-accent/50 bg-accent/10 px-2.5 py-1 text-xs font-medium text-accent">
+            <FlaskConical className="h-3.5 w-3.5" aria-hidden="true" />
+            Simulator Mode ON — the alarm follows the simulated tier ({LEVEL_META[derivedSimTier].name}) and silences
+            when the test values fall back to green.
+          </p>
+        ) : null}
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {ESCALATION_LEVELS.map((level) => {
             const meta = LEVEL_META[level]
-            const active = testing === level
+            const active = testing === level || (simLevel != null && derivedSimTier === level && level !== "green")
             return (
               <button
                 key={level}
@@ -602,6 +652,7 @@ export function EngineeringConsole({
                         readings={effectiveReadings[siteKey]}
                         live={effectiveLive}
                         simLevel={simLevel}
+                        tierLevel={rule.level}
                         windMet={siteKey === "atSite" && windEval.met}
                         windReason={siteKey === "atSite" ? windEval.reason : null}
                         onKm={(v) => updateSiteKm(rule.level, siteKey, v)}
@@ -1414,6 +1465,7 @@ function SitePanel({
   readings,
   live,
   simLevel,
+  tierLevel,
   windMet,
   windReason,
   onKm,
@@ -1428,6 +1480,7 @@ function SitePanel({
   readings: SiteReadings
   live: boolean
   simLevel: AlertLevel | null
+  tierLevel: AlertLevel
   windMet: boolean
   windReason: string | null
   onKm: (v: string) => void
@@ -1444,24 +1497,23 @@ function SitePanel({
   // reflects the same three-condition wiring (at-site range · far-site range · wind event).
   const rangeReason = ev.met ? ev.reason : windMet ? windReason : null
   const met = live && (ev.met || windMet)
-  // Tone drives the indicator colour. Under simulation it follows the chosen tier so the
-  // operator sees the full green → yellow → orange → red cascade; otherwise it stays the
-  // live binary (green until a range trips, then red).
+  // Tone drives the indicator colour and is derived from the readings — never forced to the
+  // pressed preset. When the effective readings (simulated or live) meet THIS tier's ranges the
+  // indicator lights this tier's colour; the instant a value drops below the limit it falls back
+  // to green. So editing a site's test values below the limit resets that site here, per tier.
   const simActive = simLevel != null
-  const simName = simLevel ? LEVEL_META[simLevel].name : ""
-  const tone: AlertLevel | "off" = !live ? "off" : simLevel ?? (met ? "red" : "green")
+  const tone: AlertLevel | "off" = !live ? "off" : met ? tierLevel : "green"
   const toneMeta = tone === "off" ? null : LEVEL_META[tone]
-  const blink = tone === "yellow" || tone === "orange" || tone === "red"
+  const blink = met && (tone === "yellow" || tone === "orange" || tone === "red")
   const containerTone = toneMeta ? cn(toneMeta.border, toneMeta.fill) : "border-border bg-background/60"
-  const statusWord = tone === "off" ? "Awaiting data" : simActive ? `Simulated ${simName}` : met ? "In range" : "Clear"
+  const tierName = LEVEL_META[tierLevel].name
+  const statusWord = tone === "off" ? "Awaiting data" : met ? (simActive ? `Simulated ${tierName}` : "In range") : "Clear"
   const statusTitle =
     tone === "off"
       ? `${info.name}: waiting for live station data`
-      : simActive
-        ? `${info.name}: SIMULATED ${simName}${rangeReason ? ` — ${rangeReason}` : ""}`
-        : met
-          ? `${info.name}: IN RANGE — ${rangeReason}`
-          : `${info.name}: within limits`
+      : met
+        ? `${info.name}: ${simActive ? "SIMULATED" : "IN RANGE"} ${tierName}${rangeReason ? ` — ${rangeReason}` : ""}`
+        : `${info.name}: within limits`
   const statusButton = (
     <>
       <span
@@ -1505,11 +1557,8 @@ function SitePanel({
           aria-label={statusTitle}
           className={cn(
             "flex items-center gap-3 rounded-lg border px-4 py-3 transition-colors",
-            met
-              ? "border-alert-red/50 bg-alert-red/15"
-              : live
-                ? "border-alert-green/40 bg-alert-green/10 hover:bg-alert-green/15"
-                : "border-border bg-background/60",
+            containerTone,
+            !met && live && "hover:bg-alert-green/15",
           )}
         >
           {statusButton}
@@ -1518,14 +1567,7 @@ function SitePanel({
         <div
           title={statusTitle}
           aria-label={statusTitle}
-          className={cn(
-            "flex items-center gap-3 rounded-lg border px-4 py-3",
-            met
-              ? "border-alert-red/50 bg-alert-red/15"
-              : live
-                ? "border-alert-green/40 bg-alert-green/10"
-                : "border-border bg-background/60",
-          )}
+          className={cn("flex items-center gap-3 rounded-lg border px-4 py-3", containerTone)}
         >
           {statusButton}
         </div>
