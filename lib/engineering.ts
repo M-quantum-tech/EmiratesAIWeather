@@ -20,9 +20,11 @@ import {
   type WindMonitorTier,
   type WindSourceConfig,
 } from "@/lib/escalation"
+import { DEFAULT_NCM_WARNINGS, parseNcmWarnings, type NcmWarning } from "@/lib/ncm-warnings"
 import { isAdmin } from "@/lib/admin"
 
 const ESCALATION_KEY = "escalation_rules"
+const NCM_WARNINGS_KEY = "ncm_warnings"
 const WIND_MONITOR_KEY = "wind_monitor_tiers"
 const WIND_SOURCE_KEY = "wind_source_config"
 const CLOUD_SOURCE_KEY = "cloud_source_config"
@@ -77,6 +79,37 @@ export async function saveEscalationRules(rules: unknown): Promise<EscalationRul
   await db.execute(sql`
     INSERT INTO "app_setting" ("key", "value", "updatedAt")
     VALUES (${ESCALATION_KEY}, ${json}::jsonb, now())
+    ON CONFLICT ("key") DO UPDATE SET "value" = ${json}::jsonb, "updatedAt" = now()
+  `)
+  return clean
+}
+
+/** Effective NCM warnings bulletin — persisted admin edits, or the built-in seed. */
+export async function getNcmWarnings(): Promise<NcmWarning[]> {
+  try {
+    await ensureSettingsTable()
+    const res = await db.execute(sql`SELECT value FROM "app_setting" WHERE key = ${NCM_WARNINGS_KEY}`)
+    const row = (res.rows as { value: unknown }[])[0]
+    if (!row) return DEFAULT_NCM_WARNINGS
+    const parsed = parseNcmWarnings(row.value)
+    // null → malformed stored value: fall back to the seed. An empty array is a
+    // valid state (admin cleared all warnings) and is returned as-is.
+    return parsed ?? DEFAULT_NCM_WARNINGS
+  } catch {
+    return DEFAULT_NCM_WARNINGS
+  }
+}
+
+/** Persist the NCM warnings bulletin — admin only. */
+export async function saveNcmWarnings(value: unknown): Promise<NcmWarning[]> {
+  if (!(await isAdmin())) throw new Error("Forbidden")
+  const clean = parseNcmWarnings(value)
+  if (!clean) throw new Error("Invalid NCM warnings")
+  await ensureSettingsTable()
+  const json = JSON.stringify(clean)
+  await db.execute(sql`
+    INSERT INTO "app_setting" ("key", "value", "updatedAt")
+    VALUES (${NCM_WARNINGS_KEY}, ${json}::jsonb, now())
     ON CONFLICT ("key") DO UPDATE SET "value" = ${json}::jsonb, "updatedAt" = now()
   `)
   return clean
