@@ -494,12 +494,20 @@ export function AlertBanner() {
           </span>
         </span>
         <span className="flex items-center gap-3">
-          {simulator.active ? (
-            <span className="flex items-center gap-1.5 rounded-md border border-accent/60 bg-accent/15 px-2 py-1 font-mono text-[0.625rem] font-semibold uppercase tracking-wider text-accent">
-              <FlaskConical className="h-3 w-3 tier-blink" aria-hidden="true" />
-              Simulator Mode{simulator.level ? ` · ${simulator.level}` : ""}
-            </span>
-          ) : (
+          {/* Simulator Mode ON/OFF status — always shown so the safety panel makes it explicit
+              whether the indicators are driven by a drill or by live stations. */}
+          <span
+            className={cn(
+              "flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-[0.625rem] font-semibold uppercase tracking-wider",
+              simulator.active
+                ? "border-accent/60 bg-accent/15 text-accent"
+                : "border-border bg-background/60 text-muted-foreground",
+            )}
+          >
+            <FlaskConical className={cn("h-3 w-3", simulator.active && "tier-blink")} aria-hidden="true" />
+            Simulator Mode {simulator.active ? `ON${simulator.level ? ` · ${simulator.level}` : ""}` : "OFF"}
+          </span>
+          {!simulator.active ? (
             <span className="flex items-center gap-1.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
               <span className={cn("relative flex h-2 w-2", isValidating && "animate-pulse")}>
                 <span className="absolute inline-flex h-full w-full rounded-full bg-alert-green opacity-75" />
@@ -507,7 +515,7 @@ export function AlertBanner() {
               </span>
               Live · updated {formatClock(payload.current.time)}
             </span>
-          )}
+          ) : null}
           <span className="flex items-center gap-1.5 rounded-md border border-border bg-background/60 px-2 py-1 font-mono text-[0.625rem] uppercase tracking-wider text-foreground tabular-nums">
             <Clock className="h-3 w-3 text-signal" aria-hidden="true" />
             {localClock}

@@ -97,7 +97,12 @@ export function EngineeringConsole({
   // are driven from these test readings instead of the live stations, so operators can rehearse
   // the full green → red escalation on demand. null = live data.
   const [simLevel, setSimLevel] = useState<AlertLevel | null>(null)
-  const [simValues, setSimValues] = useState<SiteReadings>({ ...SIM_PRESETS.green })
+  // Per-site test readings so operators can rehearse the At-site and Far-site indicators
+  // independently (e.g. a far-site early-warning spike while the on-site stays calm).
+  const [simValues, setSimValues] = useState<Record<SiteKey, SiteReadings>>({
+    atSite: { ...SIM_PRESETS.green },
+    farSite: { ...SIM_PRESETS.green },
+  })
 
   // Live wiring — identical to the warning banner: the on-site station reading plus a
   // 50 km upwind ("far site") sample, both pushed through the shared computeSiteReadings
@@ -134,7 +139,7 @@ export function EngineeringConsole({
   // sites so every downstream evaluator (evaluateSite + evaluateWindMonitor) lights the same
   // indicators it would from real data. Otherwise the live readings flow through untouched.
   const effectiveReadings = useMemo<Record<SiteKey, SiteReadings>>(
-    () => (simLevel ? { atSite: { ...simValues }, farSite: { ...simValues } } : siteReadings),
+    () => (simLevel ? { atSite: { ...simValues.atSite }, farSite: { ...simValues.farSite } } : siteReadings),
     [simLevel, simValues, siteReadings],
   )
   const effectiveLive = live || simLevel != null
@@ -301,15 +306,15 @@ export function EngineeringConsole({
 
   function simulate(level: AlertLevel) {
     setSimLevel(level)
-    setSimValues({ ...SIM_PRESETS[level] })
+    setSimValues({ atSite: { ...SIM_PRESETS[level] }, farSite: { ...SIM_PRESETS[level] } })
   }
 
-  function updateSimValue(key: keyof SiteReadings, value: string) {
+  function updateSimValue(siteKey: SiteKey, key: keyof SiteReadings, value: string) {
     const n = value === "" ? 0 : Number(value)
     if (!Number.isFinite(n) || n < 0) return
     // Editing a value implies a simulation is running — default to green if none is active yet.
     setSimLevel((cur) => cur ?? "green")
-    setSimValues((prev) => ({ ...prev, [key]: n }))
+    setSimValues((prev) => ({ ...prev, [siteKey]: { ...prev[siteKey], [key]: n } }))
   }
 
   function test(level: AlertLevel) {
@@ -453,9 +458,9 @@ export function EngineeringConsole({
             </button>
           </div>
           <p className="mt-1.5 text-xs text-muted-foreground/80">
-            Push test readings through the exact same wiring as the live stations. Pick a level to watch the At-site
-            and Far-site indicators and the active tier switch from green up to red, or type your own values in the row
-            below.
+            Push test readings through the exact same wiring as the live stations. Pick a level to preset both sites
+            and watch the At-site and Far-site indicators and the active tier switch from green up to red, or set your
+            own values per site below to test each site independently.
           </p>
           <div className="mt-3 grid gap-2 sm:grid-cols-4">
             {ESCALATION_LEVELS.map((level) => {
@@ -485,14 +490,29 @@ export function EngineeringConsole({
               )
             })}
           </div>
-          <div className="mt-3 flex flex-col gap-1.5">
-            <span className="label-caps text-muted-foreground">Test live values — applied to both sites</span>
-            <div className="grid gap-3 sm:grid-cols-4">
-              <NumberField label="Wind speed" unit="m/s" value={simValues.windMs} onChange={(v) => updateSimValue("windMs", v)} />
-              <NumberField label="Wind gust" unit="m/s" value={simValues.gustMs} onChange={(v) => updateSimValue("gustMs", v)} />
-              <NumberField label="Rainfall" unit="mm" value={simValues.rainMm} onChange={(v) => updateSimValue("rainMm", v)} />
-              <NumberField label="Intensive cloud coverage" unit="%" value={simValues.cloudPct} onChange={(v) => updateSimValue("cloudPct", v)} />
-            </div>
+          <div className="mt-3 flex flex-col gap-3">
+            <span className="label-caps text-muted-foreground">Test live values — set each site independently</span>
+            {SITE_KEYS.map((siteKey) => (
+              <div
+                key={siteKey}
+                className="flex flex-col gap-1.5 rounded-lg border border-border/60 bg-background/40 p-3"
+              >
+                <span
+                  className={cn(
+                    "label-caps",
+                    siteKey === "atSite" ? "text-foreground" : "text-signal",
+                  )}
+                >
+                  {SITE_META[siteKey].name} · test live values
+                </span>
+                <div className="grid gap-3 sm:grid-cols-4">
+                  <NumberField label="Wind speed" unit="m/s" value={simValues[siteKey].windMs} onChange={(v) => updateSimValue(siteKey, "windMs", v)} />
+                  <NumberField label="Wind gust" unit="m/s" value={simValues[siteKey].gustMs} onChange={(v) => updateSimValue(siteKey, "gustMs", v)} />
+                  <NumberField label="Rainfall" unit="mm" value={simValues[siteKey].rainMm} onChange={(v) => updateSimValue(siteKey, "rainMm", v)} />
+                  <NumberField label="Intensive cloud coverage" unit="%" value={simValues[siteKey].cloudPct} onChange={(v) => updateSimValue(siteKey, "cloudPct", v)} />
+                </div>
+              </div>
+            ))}
           </div>
           {simLevel ? (
             <p className={cn("mt-2 text-xs font-medium", LEVEL_META[simLevel].text)}>
