@@ -141,6 +141,8 @@ type Series = {
   format: (v: number) => string
   /** When true, the line renders fully dotted — the Open-Meteo AI-prediction overlay. */
   dashed?: boolean
+  /** "column" renders the series as vertical bars (scaled to its axis) instead of a line. */
+  kind?: "line" | "column"
   /** Lines sharing a group id share one auto-scaled range, so same-unit series compare truthfully. */
   group?: string
   /** When "right", the line is scaled to the view's secondary (right-hand) axis instead of its own range. */
@@ -399,11 +401,13 @@ function buildView(
         tooltipHead,
         projectionNote: nowIndex >= 0 ? "Solid = NCM mirror · dotted = Open-Meteo AI prediction" : "AI-projected day",
         series: [
-          { label: "Temp", color: TREND.primary, values: temps, format: t },
-          { label: "Dew point", color: TREND.dew, values: dew, format: t },
-          { label: "Humidity", color: TREND.humidity, values: hum, format: pct },
-          { label: "AI temp", color: TREND.secondary, values: aiTemp, format: t, dashed: true },
+          { label: "Temp", color: TREND.primary, values: temps, format: t, kind: "column", group: "temp" },
+          { label: "Dew point", color: TREND.dew, values: dew, format: t, group: "temp" },
+          { label: "AI temp", color: TREND.secondary, values: aiTemp, format: t, dashed: true, group: "temp" },
+          { label: "Humidity", color: TREND.humidity, values: hum, format: pct, axis: "right" },
         ],
+        rightAxis: { label: "%", lo: 0, hi: 100, format: pct },
+        axisTitles: { left: `Temp · dew · AI  ${isMetric ? "°C" : "°F"}`, right: "Humidity · %" },
         extra: (i) => [
           { label: "Feels like", value: t(feels[i]) },
           { label: "Dew point", value: t(dew[i]) },
@@ -1517,8 +1521,10 @@ function TrendChart({
             })
           : null}
 
-        {/* soft area under the primary series */}
-        {seriesVisible(series[0]) ? <path d={areaBase} fill="url(#live-trend-area)" /> : null}
+        {/* soft area under the primary series (skipped when it renders as columns) */}
+        {series[0].kind !== "column" && seriesVisible(series[0]) ? (
+          <path d={areaBase} fill="url(#live-trend-area)" />
+        ) : null}
 
         {/* projected region shading */}
         {boundary < n - 1 ? (
@@ -1532,6 +1538,36 @@ function TrendChart({
           // Live (solid) reading renders bold; the AI-projected segment stays a thin dotted overlay.
           const solidWidth = si === 0 ? 3.5 : 2.5
           const projWidth = si === 0 ? 2 : 1.75
+          if (serie.kind === "column") {
+            // Vertical temperature columns anchored to the axis baseline. NCM-mirror
+            // hours read as solid filled bars; projected hours become hollow outlined
+            // bars so the forecast boundary stays legible at a glance.
+            const baseY = H - BOT
+            return (
+              <g key={serie.label}>
+                {ys.map((y, i) => {
+                  const projected = i > solidTo
+                  const h = Math.max(0, baseY - y)
+                  return (
+                    <rect
+                      key={i}
+                      x={(px(i) - barHalf).toFixed(1)}
+                      y={y.toFixed(1)}
+                      width={(barHalf * 2).toFixed(1)}
+                      height={h.toFixed(1)}
+                      rx="2"
+                      fill={projected ? "transparent" : serie.color}
+                      stroke={serie.color}
+                      strokeWidth={projected ? 1.25 : 0}
+                      strokeDasharray={projected ? "2 2" : undefined}
+                      opacity={projected ? 0.6 : activeIdx === i ? 1 : 0.82}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  )
+                })}
+              </g>
+            )
+          }
           if (serie.dashed) {
             return (
               <g key={serie.label} filter="url(#live-trend-glow)">
