@@ -331,8 +331,8 @@ function buildView(
         tooltipHead: (i) => `${clockLabel(i)}${i === nowIndex ? " · live" : ""}`,
         projectionNote: nowIndex >= 0 ? "Solid = NCM mirror · dotted = Open-Meteo AI prediction" : "AI-projected day",
         series: [
-          { label: "DNI · model", color: TREND.primary, values, format: wm2, group: "wm2", toggleKey: "dni" },
-          { label: "Transmittance", color: TRANSMITTANCE, values: trans, format: (v) => `${Math.round(v)}%`, axis: "right", dashed: true, toggleKey: "transmittance" },
+          { label: "DNI · model", color: TREND.primary, values, format: wm2, group: "wm2", kind: "column", toggleKey: "dni" },
+          { label: "Transmittance", color: TRANSMITTANCE, values: trans, format: (v) => `${Math.round(v)}%`, axis: "right", kind: "column", toggleKey: "transmittance" },
           { label: "AI beam", color: TREND.secondary, values: aiValues, format: wm2, dashed: true, group: "wm2", toggleKey: "dni" },
         ],
         rightAxis: { label: "%", lo: 0, hi: 100, format: (v) => `${Math.round(v)}%` },
@@ -1554,17 +1554,26 @@ function TrendChart({
             // hours read as solid filled bars; projected hours become hollow outlined
             // bars so the forecast boundary stays legible at a glance.
             const baseY = H - BOT
+            // When more than one column series shares the chart (e.g. DNI on the left
+            // W/m² axis + transmittance on the right % axis), split each hour slot so the
+            // paired bars sit side by side instead of overlapping.
+            const colCount = series.filter((s) => s.kind === "column").length
+            const colPos = series.slice(0, si).filter((s) => s.kind === "column").length
+            const multi = colCount > 1
+            const cw = multi ? barHalf * 0.92 : barHalf * 2
+            const colDx = multi ? (colPos - (colCount - 1) / 2) * (cw + 1.5) : 0
             return (
               <g key={serie.label}>
                 {ys.map((y, i) => {
                   const projected = i > solidTo
                   const h = Math.max(0, baseY - y)
+                  const cx = px(i) + colDx
                   return (
                     <rect
                       key={i}
-                      x={(px(i) - barHalf).toFixed(1)}
+                      x={(cx - cw / 2).toFixed(1)}
                       y={y.toFixed(1)}
-                      width={(barHalf * 2).toFixed(1)}
+                      width={cw.toFixed(1)}
                       height={h.toFixed(1)}
                       rx="2"
                       fill={projected ? "transparent" : serie.color}
