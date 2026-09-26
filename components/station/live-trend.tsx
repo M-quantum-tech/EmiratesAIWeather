@@ -294,7 +294,8 @@ function buildView(
       const precip = dniHours.map((h) => (isMetric ? h.precipitation * 25.4 : h.precipitation))
       const precipMax = Math.max(...precip, isMetric ? 1 : 0.04)
       const precipFmt = (v: number) => (isMetric ? `${v.toFixed(1)} mm` : `${v.toFixed(2)} in`)
-      const xLabels = values.map((_, i) => (i % 3 === 0 ? String(i).padStart(2, "0") : ""))
+      // Label every hour 00 → 23 so the day reads as a full hour-by-hour breakdown.
+      const xLabels = values.map((_, i) => String(i).padStart(2, "0"))
       const nowIndex = selectedDay === 0 ? payload.currentHourIndex : -1
       const boundary = nowIndex >= 0 ? nowIndex : n - 1
       const { hi } = argExtremes(values)
@@ -340,7 +341,7 @@ function buildView(
         bars: { label: "Precip (NCM hail)", color: PRECIP_BLUE, values: precip, format: precipFmt, max: precipMax },
         annotations,
         fillPrimary: true,
-        axisTitles: { left: "Solar energy · W/m² & %", right: `Cloud % · rain ${isMetric ? "mm" : "in"}` },
+        axisTitles: { left: "Solar energy �� W/m² & %", right: `Cloud % · rain ${isMetric ? "mm" : "in"}` },
         sunWindow: { sunrise: day.sunrise, sunset: day.sunset },
         extra: (i) => [
           { label: "GHI (horizontal)", value: wm2(ghiValues[i]) },
@@ -1562,27 +1563,46 @@ function TrendChart({
             const multi = colCount > 1
             const cw = multi ? barHalf * 0.92 : barHalf * 2
             const colDx = multi ? (colPos - (colCount - 1) / 2) * (cw + 1.5) : 0
+            // Print the value above each bar (primary column only) so every hour is
+            // readable at a glance, like an hour-by-hour breakdown.
+            const showValues = si === 0
             return (
               <g key={serie.label}>
                 {ys.map((y, i) => {
                   const projected = i > solidTo
                   const h = Math.max(0, baseY - y)
                   const cx = px(i) + colDx
+                  const raw = serie.values[i]
                   return (
-                    <rect
-                      key={i}
-                      x={(cx - cw / 2).toFixed(1)}
-                      y={y.toFixed(1)}
-                      width={cw.toFixed(1)}
-                      height={h.toFixed(1)}
-                      rx="2"
-                      fill={projected ? "transparent" : serie.color}
-                      stroke={serie.color}
-                      strokeWidth={projected ? 1.25 : 0}
-                      strokeDasharray={projected ? "2 2" : undefined}
-                      opacity={projected ? 0.6 : activeIdx === i ? 1 : 0.82}
-                      vectorEffect="non-scaling-stroke"
-                    />
+                    <g key={i}>
+                      <rect
+                        x={(cx - cw / 2).toFixed(1)}
+                        y={y.toFixed(1)}
+                        width={cw.toFixed(1)}
+                        height={h.toFixed(1)}
+                        rx="2"
+                        fill={projected ? "transparent" : serie.color}
+                        stroke={serie.color}
+                        strokeWidth={projected ? 1.25 : 0}
+                        strokeDasharray={projected ? "2 2" : undefined}
+                        opacity={projected ? 0.6 : activeIdx === i ? 1 : 0.82}
+                        vectorEffect="non-scaling-stroke"
+                      />
+                      {showValues && Number.isFinite(raw) && raw > 0 ? (
+                        <text
+                          x={cx.toFixed(1)}
+                          y={(y - 3).toFixed(1)}
+                          textAnchor="middle"
+                          fontSize="8.5"
+                          fontFamily="var(--font-mono, monospace)"
+                          fontWeight={activeIdx === i ? 700 : 500}
+                          fill={serie.color}
+                          opacity={projected ? 0.75 : 1}
+                        >
+                          {Math.round(raw)}
+                        </text>
+                      ) : null}
+                    </g>
                   )
                 })}
               </g>
