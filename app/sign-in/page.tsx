@@ -57,6 +57,12 @@ export default async function SignInPage({
                 Manage members and update plan pricing. Sign in with an admin account to open the console.
               </p>
               <Link
+                href="/iam/login"
+                className="mr-2 mt-3 inline-flex h-9 items-center justify-center rounded-md bg-primary px-3 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+              >
+                Plant control login
+              </Link>
+              <Link
                 href="/admin/login"
                 className="mt-3 inline-flex h-9 items-center justify-center rounded-md border border-accent/60 bg-card px-3 text-sm font-semibold text-accent transition-colors hover:bg-accent hover:text-accent-foreground"
               >
