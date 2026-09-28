@@ -4,6 +4,7 @@ import { redirect } from "next/navigation"
 import { headers } from "next/headers"
 import { Calendar, CreditCard, Crown, ShieldCheck } from "lucide-react"
 import { auth } from "@/lib/auth"
+import { isIamEmail } from "@/lib/iam"
 import { getMySubscription } from "@/app/actions/subscription"
 import { PLANS, formatCents, type PlanId } from "@/lib/plans"
 import { SiteNav } from "@/components/site-nav"
@@ -14,6 +15,8 @@ export const metadata = { title: "Your account — EmiratesAIWeather" }
 export default async function AccountPage() {
   const session = await auth.api.getSession({ headers: await headers() })
   if (!session?.user) redirect("/sign-in?redirect=/account")
+  // Plant IAM logins have no member area — their home is the control dashboard.
+  if (isIamEmail(session.user.email)) redirect("/iam")
 
   const sub = await getMySubscription()
   const plan = sub && sub.plan in PLANS ? PLANS[sub.plan as PlanId] : null

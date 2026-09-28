@@ -85,6 +85,13 @@ export function SiteNav() {
           {isPending ? null : session?.user ? (
             <div className="flex items-center gap-2 pl-1">
               <Link
+                href="/iam"
+                aria-current={pathname.startsWith("/iam") ? "page" : undefined}
+                className="rounded-md px-3 py-2 font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-accent transition-colors hover:bg-secondary/60"
+              >
+                Control
+              </Link>
+              <Link
                 href="/account"
                 className="rounded-md px-3 py-2 font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
               >
@@ -100,6 +107,12 @@ export function SiteNav() {
             </div>
           ) : (
             <div className="flex items-center gap-2 pl-1">
+              <Link
+                href="/iam/login"
+                className="rounded-md px-3 py-2 font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-accent transition-colors hover:bg-secondary/60"
+              >
+                Plant login
+              </Link>
               <Link
                 href="/sign-in"
                 className="rounded-md px-3 py-2 font-mono text-[0.6875rem] uppercase tracking-[0.14em] text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"

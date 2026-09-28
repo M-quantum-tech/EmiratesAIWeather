@@ -12,6 +12,10 @@ export const user = pgTable("user", {
   accessStatus: text("accessStatus").default("pending").notNull(),
   serviceStart: timestamp("serviceStart"),
   serviceEnd: timestamp("serviceEnd"),
+  // Plant IAM: SCADA role code (PGM / OM / Supervisor / CRO) and login username.
+  iamRole: text("iamRole"),
+  iamUsername: text("iamUsername"),
+  iamTitle: text("iamTitle"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 })

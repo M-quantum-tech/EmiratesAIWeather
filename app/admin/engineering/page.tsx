@@ -6,19 +6,22 @@ import { getAiSources, getCloudSource, getEscalationRules, getTrendSources, getW
 import { SiteNav } from "@/components/site-nav"
 import { EngineeringConsole } from "@/components/admin/engineering-console"
 import { WeatherProvider } from "@/components/weather/weather-provider"
+import { IamUsersPanel } from "@/components/admin/iam-users-panel"
+import { listIamUsers } from "@/lib/iam-server"
 
 export const metadata = { title: "Engineering console — EmiratesAIWeather" }
 
 export default async function EngineeringPage() {
   await requireAdmin("/admin/engineering")
 
-  const [rules, windMonitor, windSource, cloudSource, trendSources, aiSources] = await Promise.all([
+  const [rules, windMonitor, windSource, cloudSource, trendSources, aiSources, iamUsers] = await Promise.all([
     getEscalationRules(),
     getWindMonitor(),
     getWindSource(),
     getCloudSource(),
     getTrendSources(),
     getAiSources(),
+    listIamUsers(),
   ])
 
   return (
@@ -42,6 +45,10 @@ export default async function EngineeringPage() {
         <p className="mt-1 text-sm text-muted-foreground">
           Configure the escalation ladder that drives the live warning banner and test the buzzer for each level.
         </p>
+
+        <div className="mt-8">
+          <IamUsersPanel users={iamUsers} />
+        </div>
 
         <div className="mt-8">
           <WeatherProvider>
