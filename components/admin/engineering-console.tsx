@@ -19,6 +19,9 @@ import {
   evaluateSite,
   evaluateWindMonitor,
   drillLevelFromSites,
+  tierThresholds,
+  BUZZER_METRIC_KEYS,
+  type TierThresholds,
   type AiPredictionSource,
   type CloudSourceConfig,
   type EscalationRule,
@@ -70,6 +73,22 @@ const SIM_PRESETS: Record<AlertLevel, SiteReadings> = {
   yellow: { windMs: 15, gustMs: 20, rainMm: 3, cloudPct: 55 },
   orange: { windMs: 20, gustMs: 26, rainMm: 12, cloudPct: 70 },
   red: { windMs: 25, gustMs: 32, rainMm: 32, cloudPct: 90 },
+}
+
+/**
+ * Preset that lands exactly on a tier's configured entry values, so pressing a tier button
+ * reproduces that tier from the live escalation ranges rather than fixed demo numbers.
+ */
+function presetFromThresholds(level: AlertLevel, t: TierThresholds): SiteReadings {
+  const base = SIM_PRESETS[level]
+  if (level === "green") return { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: base.cloudPct }
+  const entry = t[level]
+  return {
+    windMs: entry.windMs ?? 0,
+    gustMs: entry.gustMs ?? 0,
+    rainMm: entry.rainMm ?? 0,
+    cloudPct: base.cloudPct,
+  }
 }
 
 let uid = 0
@@ -316,10 +335,23 @@ export function EngineeringConsole({
   // Derived simulator tier — the highest tier whose At-site OR Far-site ranges are met by the
   // current test readings, walking the ladder low→high. This is what actually reads the values
   // (not the pressed preset button), so dropping every value below the limits lands on green.
-  const derivedSimTier = useMemo<AlertLevel>(() => {
-    if (simLevel == null) return "green"
-    return drillLevelFromSites(effectiveReadings)
-  }, [simLevel, effectiveReadings])
+  // Read against the configured tier ranges with each tier's dead band applied on release.
+  const [derivedSimTier, setDerivedSimTier] = useState<AlertLevel>("green")
+  const simHeldRef = useRef<AlertLevel | null>(null)
+  useEffect(() => {
+    if (simLevel == null) {
+      simHeldRef.current = null
+      setDerivedSimTier("green")
+      return
+    }
+    const next = drillLevelFromSites(effectiveReadings, rules, simHeldRef.current)
+    simHeldRef.current = next
+    setDerivedSimTier(next)
+  }, [simLevel, effectiveReadings, rules])
+  const thresholds = useMemo(
+    () => ({ atSite: tierThresholds(rules, "atSite"), farSite: tierThresholds(rules, "farSite") }),
+    [rules],
+  )
 
   // Wire the simulator straight into the Buzzer test bench: while Simulator Mode is ON, the
   // alarm follows the derived tier through the exact same tone the live banner sounds. It plays
@@ -352,7 +384,11 @@ export function EngineeringConsole({
 
   function simulate(level: AlertLevel) {
     setSimLevel(level)
-    setSimValues({ atSite: { ...SIM_PRESETS[level] }, farSite: { ...SIM_PRESETS[level] } })
+    simHeldRef.current = null
+    setSimValues({
+      atSite: presetFromThresholds(level, thresholds.atSite),
+      farSite: presetFromThresholds(level, thresholds.farSite),
+    })
   }
 
   function updateSimValue(siteKey: SiteKey, key: keyof SiteReadings, value: string) {
@@ -546,6 +582,7 @@ export function EngineeringConsole({
               )
             })}
           </div>
+          <BuzzerThresholdTable thresholds={thresholds} rules={rules} />
           <div className="mt-3 flex flex-col gap-3">
             <span className="label-caps text-muted-foreground">Test live values — set each site independently</span>
             {SITE_KEYS.map((siteKey) => (
@@ -1709,5 +1746,79 @@ function Field({ label, value, onChange }: { label: string; value: string; onCha
         className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent"
       />
     </label>
+  )
+}
+
+const BUZZER_METRIC_SHORT: Record<(typeof BUZZER_METRIC_KEYS)[number], string> = {
+  windMs: "Wind",
+  gustMs: "Gust",
+  rainMm: "Rain",
+}
+
+/**
+ * Live readout of what sounds the auto buzzer: each tier's entry value per metric, derived
+ * from the ranges configured below, and the release point after that tier's dead band.
+ */
+function BuzzerThresholdTable({
+  thresholds,
+  rules,
+}: {
+  thresholds: Record<SiteKey, TierThresholds>
+  rules: EscalationRule[]
+}) {
+  const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1))
+  return (
+    <div className="mt-3 flex flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-3">
+      <span className="label-caps text-muted-foreground">
+        Auto buzzer trigger · from escalation ranges (≥ entry sounds, releases below entry − dead band)
+      </span>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[36rem] border-collapse text-left font-mono text-xs">
+          <thead>
+            <tr className="text-muted-foreground">
+              <th scope="col" className="py-1 pr-3 font-medium">Tier</th>
+              {SITE_KEYS.flatMap((siteKey) =>
+                BUZZER_METRIC_KEYS.map((key) => (
+                  <th key={`${siteKey}-${key}`} scope="col" className="py-1 pr-3 font-medium">
+                    {siteKey === "atSite" ? "At" : "Far"} · {BUZZER_METRIC_SHORT[key]}
+                  </th>
+                )),
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {ESCALATION_LEVELS.filter((l) => l !== "green").map((level) => {
+              const meta = LEVEL_META[level]
+              const db = rules.find((r) => r.level === level)?.deadbands
+              return (
+                <tr key={level} className="border-t border-border/40">
+                  <th scope="row" className={cn("py-1.5 pr-3 font-bold uppercase", meta.text)}>
+                    {meta.name}
+                  </th>
+                  {SITE_KEYS.flatMap((siteKey) =>
+                    BUZZER_METRIC_KEYS.map((key) => {
+                      const t = thresholds[siteKey][level][key]
+                      const band = db?.[key] ?? 0
+                      return (
+                        <td key={`${siteKey}-${key}`} className="py-1.5 pr-3 tabular-nums text-foreground">
+                          {t == null ? (
+                            <span className="text-muted-foreground/60">—</span>
+                          ) : (
+                            <>
+                              ≥ {fmt(t)}
+                              <span className="ml-1 text-muted-foreground">↓{fmt(Math.max(0, t - band))}</span>
+                            </>
+                          )}
+                        </td>
+                      )
+                    }),
+                  )}
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   )
 }
