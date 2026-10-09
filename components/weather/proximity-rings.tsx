@@ -62,47 +62,98 @@ const SITE_LABEL: Record<AlertLevel, string> = {
   red: "border-alert-red/60 text-alert-red",
 }
 
-function SiteMarker({ site, maxRadius }: { site: RadarSite; maxRadius: number }) {
-  const r = (Math.min(site.distanceKm, maxRadius) / maxRadius) * (MAX_PX / 2)
+const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+const compassOf = (deg: number) => COMPASS[Math.round((((deg % 360) + 360) % 360) / 45) % 8]
+
+function siteTitle(site: RadarSite) {
+  return `${site.label} · ${site.distanceKm} km · wind ${site.windMs.toFixed(1)} m/s · gust ${site.gustMs.toFixed(1)} m/s · ${site.level.toUpperCase()}${site.reason ? ` · ${site.reason}` : ""}`
+}
+
+/** Numbered dot on the scope; full readings live in the legend below so nothing overflows. */
+function SiteMarker({ site, index, maxRadius }: { site: RadarSite; index: number; maxRadius: number }) {
+  // Keep the dot inside the scope even when the site sits on the outer ring.
+  const r = (Math.min(site.distanceKm, maxRadius) / maxRadius) * (MAX_PX / 2 - 12)
   const rad = (site.bearingDeg * Math.PI) / 180
   const x = Math.sin(rad) * r
   const y = -Math.cos(rad) * r
   const alerting = site.level !== "green"
   const isCentre = site.distanceKm === 0
-  const title = `${site.label} · ${site.distanceKm} km · wind ${site.windMs.toFixed(1)} m/s · gust ${site.gustMs.toFixed(1)} m/s · ${site.level.toUpperCase()}${site.reason ? ` · ${site.reason}` : ""}`
   return (
     <span
-      className="absolute z-20 flex -translate-x-1/2 flex-col items-center"
+      className="absolute z-20 grid place-items-center"
       style={{
         left: `calc(50% + ${x}px)`,
         top: `calc(50% + ${y}px)`,
-        transform: isCentre ? "translate(-50%, 26px)" : "translate(-50%, -50%)",
+        transform: isCentre ? "translate(14px, -26px)" : "translate(-50%, -50%)",
       }}
-      title={title}
+      title={siteTitle(site)}
     >
-      {!isCentre ? (
-        <span className="relative flex h-3.5 w-3.5">
-          {alerting ? (
-            <span className={cn("absolute inline-flex h-full w-full animate-ping rounded-full opacity-75", SITE_DOT[site.level])} />
-          ) : null}
-          <span className={cn("relative inline-flex h-3.5 w-3.5 rounded-full ring-2 ring-background", SITE_DOT[site.level])} />
-        </span>
+      {alerting ? (
+        <span className={cn("absolute inline-flex h-6 w-6 animate-ping rounded-full opacity-60", SITE_DOT[site.level])} />
       ) : null}
       <span
         className={cn(
-          "mt-1 flex flex-col items-center rounded-md border bg-background/95 px-1.5 py-0.5 font-mono leading-tight shadow-sm",
-          SITE_LABEL[site.level],
-          alerting && "tier-blink",
+          "relative grid h-6 w-6 place-items-center rounded-full font-mono text-xs font-bold text-background ring-2 ring-background",
+          SITE_DOT[site.level],
         )}
       >
-        <span className="text-[0.5625rem] font-bold uppercase tracking-wide">
-          {site.label} · {site.distanceKm} km
-        </span>
-        <span className="text-[0.625rem] font-bold tabular-nums text-foreground">
-          W {site.windMs.toFixed(1)} · G {site.gustMs.toFixed(1)} m/s
-        </span>
+        {index + 1}
       </span>
     </span>
+  )
+}
+
+function SiteLegend({ sites }: { sites: RadarSite[] }) {
+  return (
+    <ul className="flex w-full flex-col gap-2" aria-label="Live measurement spots">
+      {sites.map((s, i) => (
+        <li
+          key={s.key}
+          className={cn(
+            "flex items-center gap-3 rounded-lg border bg-background/60 px-3 py-2",
+            SITE_LABEL[s.level].split(" ")[0],
+            s.level !== "green" && "tier-blink",
+          )}
+          title={siteTitle(s)}
+        >
+          <span
+            className={cn(
+              "grid h-7 w-7 shrink-0 place-items-center rounded-full font-mono text-sm font-bold text-background",
+              SITE_DOT[s.level],
+            )}
+          >
+            {i + 1}
+          </span>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <span className="text-sm font-semibold leading-tight text-foreground">
+              {s.label}
+              <span className="ml-1.5 font-normal text-muted-foreground">
+                {s.distanceKm === 0 ? "· your location" : `· ${s.distanceKm} km ${compassOf(s.bearingDeg)}`}
+              </span>
+            </span>
+            <span className="flex flex-wrap gap-x-3 font-mono text-sm tabular-nums text-foreground">
+              <span className="whitespace-nowrap">
+                Wind <span className="font-bold">{s.windMs.toFixed(1)}</span>
+                <span className="text-xs text-muted-foreground"> m/s</span>
+              </span>
+              <span className="whitespace-nowrap">
+                Gust <span className="font-bold">{s.gustMs.toFixed(1)}</span>
+                <span className="text-xs text-muted-foreground"> m/s</span>
+              </span>
+            </span>
+            {s.reason ? <span className="text-xs leading-snug text-muted-foreground">{s.reason}</span> : null}
+          </div>
+          <span
+            className={cn(
+              "shrink-0 rounded border px-1.5 py-0.5 font-mono text-[0.625rem] font-bold uppercase tracking-wide",
+              SITE_LABEL[s.level],
+            )}
+          >
+            {s.level}
+          </span>
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -191,7 +242,7 @@ export function ProximityRings({
 
         {/* far-site hazard sample on the 50 km (yellow) ring */}
         {sites?.length
-          ? sites.map((s) => <SiteMarker key={s.key} site={s} maxRadius={maxRadius} />)
+          ? sites.map((s, i) => <SiteMarker key={s.key} site={s} index={i} maxRadius={maxRadius} />)
           : null}
         {showFarSite && !sites?.length ? (
           <span
@@ -226,6 +277,8 @@ export function ProximityRings({
       <span className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
         Distance from your location (km)
       </span>
+
+      {sites?.length ? <SiteLegend sites={sites} /> : null}
 
       {/* Live readout — wind in m/s */}
       <div className="grid w-full grid-cols-1 gap-2">

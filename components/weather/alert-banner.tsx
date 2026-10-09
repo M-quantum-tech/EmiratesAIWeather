@@ -72,6 +72,7 @@ import { computeSiteReadings } from "@/lib/site-readings"
 import { ProximityRings, type RadarSite } from "@/components/weather/proximity-rings"
 import type { AlarmSite } from "@/components/weather/alarm-details-panel"
 import { WindDirectionRadar } from "@/components/weather/wind-direction-radar"
+import { ForecastApproachPanel } from "@/components/weather/forecast-approach-panel"
 import { useWeather } from "@/components/weather/weather-provider"
 import { useSimulatorMode } from "@/components/weather/use-simulator-mode"
 import { useGhaithMirror } from "@/components/weather/use-ghaith-mirror"
@@ -695,7 +696,9 @@ export function AlertBanner() {
               <h3 className={cn("mt-1.5 text-balance text-lg font-semibold tracking-tight sm:text-xl", styles.text)}>
                 {alert.headline}
               </h3>
-              <p className="mt-1 text-pretty text-sm text-muted-foreground sm:text-base">{alert.detail}</p>
+              <p className="mt-1.5 max-w-prose text-pretty break-words text-sm leading-relaxed text-muted-foreground sm:text-base">
+                {alert.detail}
+              </p>
             </div>
           </div>
 
@@ -847,6 +850,25 @@ export function AlertBanner() {
   sourceLabel={windSource.label}
   />
         </div>
+      </div>
+
+      {/* Forecast heading to site — hour-by-hour against the at-site escalation ranges */}
+      <div className="border-t border-border/60 p-5 sm:p-7">
+        <ForecastApproachPanel
+          hourly={payload.hourly}
+          startIndex={payload.currentHourIndex}
+          units={payload.units}
+          thresholds={tierThresholds(rules, "atSite")}
+          visibilityM={
+            Number.isFinite(payload.current.visibility)
+              ? payload.units === "metric"
+                ? payload.current.visibility
+                : payload.current.visibility * 0.3048
+              : null
+          }
+          originCompass={originCompass}
+          etaLabel={etaMinutes != null ? formatEta(etaMinutes) : null}
+        />
       </div>
 
       {/* Approach tracker — on-site vs far-site (50 km upwind) gust + distance legend */}
