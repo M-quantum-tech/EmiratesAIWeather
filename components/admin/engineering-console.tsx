@@ -40,6 +40,8 @@ import {
 import { playBuzzerTest, stopBuzzerTest } from "@/lib/escalation-buzzer"
 import { ALERT_RADII_KM, offsetLocation, type AlertLevel, type WeatherPayload } from "@/lib/weather"
 import { computeSiteReadings } from "@/lib/site-readings"
+import { useGhaithMirror } from "@/components/weather/use-ghaith-mirror"
+import { GhaithMirrorPanel } from "@/components/admin/ghaith-mirror-panel"
 import { useWeather } from "@/components/weather/weather-provider"
 import { setSimulatorMode } from "@/components/weather/use-simulator-mode"
 import { NcmWarningsEditor } from "@/components/admin/ncm-warnings-editor"
@@ -152,10 +154,12 @@ export function EngineeringConsole({
     refreshInterval: 60 * 1000,
     keepPreviousData: true,
   })
-  const siteReadings = useMemo<Record<SiteKey, SiteReadings>>(
+  const gridSiteReadings = useMemo<Record<SiteKey, SiteReadings>>(
     () => computeSiteReadings(payload?.units ?? "metric", payload?.current, farData?.current),
     [payload?.units, payload?.current, farData?.current],
   )
+  const ghaith = useGhaithMirror(gridSiteReadings)
+  const siteReadings = ghaith.readings
   const live = payload != null
   // When the Simulator is active, the test readings replace the live station numbers for both
   // sites so every downstream evaluator (evaluateSite + evaluateWindMonitor) lights the same
@@ -499,6 +503,12 @@ export function EngineeringConsole({
       </section>
 
       {/* Wind Event Monitor thresholds */}
+      <GhaithMirrorPanel
+        mirror={ghaith.mirror}
+        source={ghaith.source}
+        relayEnabled={ghaith.relayEnabled}
+        onPushed={(m) => ghaith.mutate((prev) => ({ relayEnabled: prev?.relayEnabled ?? false, mirror: m }), false)}
+      />
       <WindMonitorEditor initialTiers={initialWindMonitor} />
 
       {/* Wind speed & gust source link (NCM COSMO-UAE wind) */}

@@ -70,6 +70,7 @@ import { ProximityRings } from "@/components/weather/proximity-rings"
 import { WindDirectionRadar } from "@/components/weather/wind-direction-radar"
 import { useWeather } from "@/components/weather/weather-provider"
 import { useSimulatorMode } from "@/components/weather/use-simulator-mode"
+import { useGhaithMirror } from "@/components/weather/use-ghaith-mirror"
 import { cn } from "@/lib/utils"
 
 /** Header auto-refresh cadence (seconds) surfaced as a live countdown. */
@@ -365,10 +366,13 @@ export function AlertBanner() {
   // Per-site live readings, derived through the SAME shared helper the Engineering
   // Console uses, so the At-site / Far-site indicators here and there fire from
   // identical numbers against identical ranges.
-  const liveSiteReadings = useMemo<Record<SiteKey, SiteReadings>>(
+  const gridSiteReadings = useMemo<Record<SiteKey, SiteReadings>>(
     () => computeSiteReadings(payload?.units ?? "metric", payload?.current, farData?.current),
     [payload?.units, payload?.current, farData?.current],
   )
+  // Ghaith mirror is the primary source: fresh #aws-wind (at site) / #cosmo-uae-wind
+  // (far site) readings override the model grid; stale sites fall back to the grid.
+  const { readings: liveSiteReadings, source: siteSource } = useGhaithMirror(gridSiteReadings)
   // During a drill the At-site / Far-site indicators and the buzzer evaluate the operator's
   // per-site test readings instead of the live stations — so only the site whose values
   // actually meet the tier blinks and sounds, and a site edited back down returns to green.
@@ -524,12 +528,15 @@ export function AlertBanner() {
 
   // Live evaluation of the escalation rules against real signals (Open-Meteo current
   // reading, the 50 km upwind sample, and the NCM Al Bahar warning) for the prediction table.
-  const gustKmh = payload.units === "metric" ? onGust : onGust * 1.609
+  // When the Ghaith mirror is fresh for a site, its values drive these readouts too.
+  const atMirror = siteSource.atSite === "ghaith" ? liveSiteReadings.atSite : null
+  const farMirror = siteSource.farSite === "ghaith" ? liveSiteReadings.farSite : null
+  const gustKmh = atMirror ? atMirror.gustMs * 3.6 : payload.units === "metric" ? onGust : onGust * 1.609
   const gustMs = gustKmh / 3.6
   // On-site wind speed and the 50 km upwind gust, both normalised to m/s for the radar readout.
   const toMs = (v: number) => (payload.units === "metric" ? v : v * 1.609) / 3.6
-  const windMs = toMs(payload.current.windSpeed)
-  const farGustMs = farGust != null ? toMs(farGust) : null
+  const windMs = atMirror ? atMirror.windMs : toMs(payload.current.windSpeed)
+  const farGustMs = farMirror ? farMirror.gustMs : farGust != null ? toMs(farGust) : null
   // Per-site readings (`siteReadings`) and their evaluation (`siteEval`) are computed
   // above via the shared helper so the ladder indicators, the buzzer and the console
   // all stay wired to the same numbers and the same Engineering Console ranges.
@@ -839,6 +846,17 @@ export function AlertBanner() {
           </span>
           <WindSourceLink source={atSiteFeed} />
           <WindSourceLink source={farSiteFeed} />
+          {(["atSite", "farSite"] as const).map((k) => (
+            <span
+              key={k}
+              className={cn(
+                "rounded px-1.5 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider",
+                siteSource[k] === "ghaith" ? "bg-alert-green/15 text-alert-green" : "bg-alert-orange/15 text-alert-orange",
+              )}
+            >
+              {k === "atSite" ? "At" : "Far"} · {siteSource[k] === "ghaith" ? "Ghaith mirror" : "Grid fallback"}
+            </span>
+          ))}
         </div>
 
         <div className="mt-3 grid items-stretch gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
