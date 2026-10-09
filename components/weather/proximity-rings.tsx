@@ -30,6 +30,80 @@ type ProximityProps = {
   etaLabel?: string | null
   /** Wind direction in degrees (arrow points where wind is heading). */
   windDirection?: number
+  /**
+   * Live measurement spots placed at their true bearing + distance, labelled with the
+   * wind/gust the Safety Model is reading there and tinted to the tier they reached.
+   */
+  sites?: RadarSite[]
+}
+
+export type RadarSite = {
+  key: string
+  label: string
+  distanceKm: number
+  /** Bearing from the user to the spot, degrees clockwise from north. */
+  bearingDeg: number
+  windMs: number
+  gustMs: number
+  level: AlertLevel
+  reason: string | null
+}
+
+const SITE_DOT: Record<AlertLevel, string> = {
+  green: "bg-alert-green",
+  yellow: "bg-alert-yellow",
+  orange: "bg-alert-orange",
+  red: "bg-alert-red",
+}
+const SITE_LABEL: Record<AlertLevel, string> = {
+  green: "border-alert-green/50 text-alert-green",
+  yellow: "border-alert-yellow/60 text-alert-yellow",
+  orange: "border-alert-orange/60 text-alert-orange",
+  red: "border-alert-red/60 text-alert-red",
+}
+
+function SiteMarker({ site, maxRadius }: { site: RadarSite; maxRadius: number }) {
+  const r = (Math.min(site.distanceKm, maxRadius) / maxRadius) * (MAX_PX / 2)
+  const rad = (site.bearingDeg * Math.PI) / 180
+  const x = Math.sin(rad) * r
+  const y = -Math.cos(rad) * r
+  const alerting = site.level !== "green"
+  const isCentre = site.distanceKm === 0
+  const title = `${site.label} · ${site.distanceKm} km · wind ${site.windMs.toFixed(1)} m/s · gust ${site.gustMs.toFixed(1)} m/s · ${site.level.toUpperCase()}${site.reason ? ` · ${site.reason}` : ""}`
+  return (
+    <span
+      className="absolute z-20 flex -translate-x-1/2 flex-col items-center"
+      style={{
+        left: `calc(50% + ${x}px)`,
+        top: `calc(50% + ${y}px)`,
+        transform: isCentre ? "translate(-50%, 26px)" : "translate(-50%, -50%)",
+      }}
+      title={title}
+    >
+      {!isCentre ? (
+        <span className="relative flex h-3.5 w-3.5">
+          {alerting ? (
+            <span className={cn("absolute inline-flex h-full w-full animate-ping rounded-full opacity-75", SITE_DOT[site.level])} />
+          ) : null}
+          <span className={cn("relative inline-flex h-3.5 w-3.5 rounded-full ring-2 ring-background", SITE_DOT[site.level])} />
+        </span>
+      ) : null}
+      <span
+        className={cn(
+          "mt-1 flex flex-col items-center rounded-md border bg-background/95 px-1.5 py-0.5 font-mono leading-tight shadow-sm",
+          SITE_LABEL[site.level],
+          alerting && "tier-blink",
+        )}
+      >
+        <span className="text-[0.5625rem] font-bold uppercase tracking-wide">
+          {site.label} · {site.distanceKm} km
+        </span>
+        <span className="text-[0.625rem] font-bold tabular-nums text-foreground">
+          W {site.windMs.toFixed(1)} · G {site.gustMs.toFixed(1)} m/s
+        </span>
+      </span>
+    </span>
+  )
 }
 
 /**
@@ -48,6 +122,7 @@ export function ProximityRings({
   approaching = false,
   etaLabel = null,
   windDirection = 0,
+  sites,
 }: ProximityProps) {
   const maxRadius = ALERT_RADII_KM.green
   const yellowSize = (ALERT_RADII_KM.yellow / maxRadius) * MAX_PX
@@ -115,7 +190,10 @@ export function ProximityRings({
         })}
 
         {/* far-site hazard sample on the 50 km (yellow) ring */}
-        {showFarSite ? (
+        {sites?.length
+          ? sites.map((s) => <SiteMarker key={s.key} site={s} maxRadius={maxRadius} />)
+          : null}
+        {showFarSite && !sites?.length ? (
           <span
             className="absolute z-10 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center"
             style={{ top: "50%", left: `calc(50% + ${yellowSize / 2}px)` }}

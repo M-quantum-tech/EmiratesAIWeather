@@ -611,6 +611,41 @@ export function siteTierWithDeadband(
   return current
 }
 
+export type AlertingLevel = Exclude<AlertLevel, "green">
+
+/** One driving metric at one site, read against every tier's entry value. */
+export type MetricBreakdownRow = {
+  key: BuzzerMetricKey
+  label: string
+  unit: string
+  value: number
+  entries: Record<AlertingLevel, number | null>
+  /** Highest tier whose entry this reading meets (green = below every entry). */
+  reached: AlertLevel
+}
+
+const BREAKDOWN_LABELS: Record<BuzzerMetricKey, string> = {
+  windMs: "Wind speed",
+  gustMs: "Wind gust",
+  rainMm: "Rainfall",
+  cloudPct: "Cloud cover",
+}
+
+/** Per-metric view of why a site sits at its tier — the data behind the Alarm Details table. */
+export function metricBreakdown(readings: SiteReadings, thresholds: TierThresholds): MetricBreakdownRow[] {
+  return BUZZER_METRIC_KEYS.map((key) => {
+    const value = readings[key]
+    let reached: AlertLevel = "green"
+    const entries = { yellow: null, orange: null, red: null } as Record<AlertingLevel, number | null>
+    for (const level of ["yellow", "orange", "red"] as const) {
+      const t = thresholds[level][key]
+      entries[level] = t
+      if (t != null && Number.isFinite(value) && value >= t) reached = level
+    }
+    return { key, label: BREAKDOWN_LABELS[key], unit: SITE_METRIC_META[key].unit, value, entries, reached }
+  })
+}
+
 /** Short human reason for the metric that put a site into `level`, e.g. "Wind 12 m/s ≥ 11". */
 export function tierReason(readings: SiteReadings, thresholds: TierThresholds, level: AlertLevel): string | null {
   if (level === "green") return null
