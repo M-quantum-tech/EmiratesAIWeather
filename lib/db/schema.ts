@@ -16,6 +16,8 @@ export const user = pgTable("user", {
   iamRole: text("iamRole"),
   iamUsername: text("iamUsername"),
   iamTitle: text("iamTitle"),
+  // Plant IAM: whether this login may download trend CSV exports from the station.
+  iamCsvExport: boolean("iamCsvExport").default(true).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 })

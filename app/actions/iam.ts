@@ -47,6 +47,14 @@ export async function setIamUserAccess(userId: string, accessStatus: "allowed" |
   revalidatePath("/iam")
 }
 
+export async function setIamUserCsvExport(userId: string, allowed: boolean) {
+  await guard()
+  if (typeof allowed !== "boolean") throw new Error("Invalid CSV export value.")
+  await updateIamUser(userId, { csvExport: allowed })
+  revalidatePath("/admin/engineering")
+  revalidatePath("/iam")
+}
+
 export async function setIamUserPassword(userId: string, password: string) {
   await guard()
   validPassword(password)

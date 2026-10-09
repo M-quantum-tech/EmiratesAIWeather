@@ -5,6 +5,7 @@ export interface IamCsvRow {
   title: string
   role: IamRoleCode
   accessStatus: string
+  csvExport: boolean
   lastSignIn: Date | string | null
 }
 
@@ -14,7 +15,7 @@ function cell(value: string) {
 }
 
 export function iamUsersToCsv(users: IamCsvRow[]) {
-  const header = ["Username", "Position title", "Role code", "Role title", "Deep trends", "Status", "Last sign in"]
+  const header = ["Username", "Position title", "Role code", "Role title", "Deep trends", "Status", "CSV export", "Last sign in"]
   const lines = users.map((u) =>
     [
       u.username,
@@ -23,6 +24,7 @@ export function iamUsersToCsv(users: IamCsvRow[]) {
       IAM_ROLES[u.role].title,
       iamCan(u.role, "deepTrends") ? "Granted" : "No access",
       u.accessStatus === "denied" ? "Disabled" : "Enabled",
+      u.csvExport ? "Allowed" : "Not allowed",
       u.lastSignIn ? new Date(u.lastSignIn).toISOString() : "Never",
     ]
       .map((v) => cell(String(v)))

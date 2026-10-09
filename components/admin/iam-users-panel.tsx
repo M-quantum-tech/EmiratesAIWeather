@@ -8,6 +8,7 @@ import {
   editIamUser,
   removeIamUser,
   setIamUserAccess,
+  setIamUserCsvExport,
   setIamUserPassword,
   setIamUserRole,
 } from "@/app/actions/iam"
@@ -34,6 +35,7 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
   const [stagedRoles, setStagedRoles] = useState<Record<string, IamRoleCode>>({})
   const [stagedAccess, setStagedAccess] = useState<Record<string, AccessStatus>>({})
   const [stagedDeletes, setStagedDeletes] = useState<string[]>([])
+  const [stagedCsv, setStagedCsv] = useState<Record<string, boolean>>({})
 
   const byId = new Map(users.map((u) => [u.id, u]))
   const roleChanges = Object.entries(stagedRoles).filter(
@@ -43,18 +45,23 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
     const u = byId.get(id)
     return u && (u.accessStatus === "denied" ? "denied" : "allowed") !== status && !stagedDeletes.includes(id)
   })
+  const csvChanges = Object.entries(stagedCsv).filter(
+    ([id, allowed]) => byId.has(id) && byId.get(id)!.csvExport !== allowed && !stagedDeletes.includes(id),
+  )
   const deletes = stagedDeletes.filter((id) => byId.has(id))
-  const changeCount = roleChanges.length + accessChanges.length + deletes.length
+  const changeCount = roleChanges.length + accessChanges.length + csvChanges.length + deletes.length
 
   const effective = users.map((u) => ({
     ...u,
     role: stagedRoles[u.id] ?? u.role,
     accessStatus: stagedAccess[u.id] ?? u.accessStatus,
+    csvExport: stagedCsv[u.id] ?? u.csvExport,
   }))
 
   function discard() {
     setStagedRoles({})
     setStagedAccess({})
+    setStagedCsv({})
     setStagedDeletes([])
   }
 
@@ -74,6 +81,7 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
     const summary = [
       roleChanges.length ? `${roleChanges.length} role change${roleChanges.length > 1 ? "s" : ""}` : "",
       accessChanges.length ? `${accessChanges.length} status change${accessChanges.length > 1 ? "s" : ""}` : "",
+      csvChanges.length ? `${csvChanges.length} CSV permission change${csvChanges.length > 1 ? "s" : ""}` : "",
       deletes.length ? `${deletes.length} deletion${deletes.length > 1 ? "s" : ""}` : "",
     ]
       .filter(Boolean)
@@ -81,6 +89,7 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
     run(async () => {
       for (const [id, role] of roleChanges) await setIamUserRole(id, role)
       for (const [id, status] of accessChanges) await setIamUserAccess(id, status as AccessStatus)
+      for (const [id, allowed] of csvChanges) await setIamUserCsvExport(id, allowed)
       for (const id of deletes) await removeIamUser(id)
       discard()
     }, `Saved: ${summary}.`)
@@ -106,7 +115,7 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
             Control room logins & roles
           </h2>
           <p className="text-sm leading-relaxed text-muted-foreground">
-            Role, status and delete changes are staged — press Save changes to apply. Saved changes sign that user out immediately.
+            Role, status, CSV export and delete changes are staged — press Save changes to apply. Saved changes sign that user out immediately.
           </p>
         </div>
         <Button type="button" size="sm" variant="outline" className="w-fit" onClick={() => downloadIamCsv(users)}>
@@ -137,6 +146,7 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
               <th scope="col" className="label-caps px-3 py-2 font-normal">Role code</th>
               <th scope="col" className="label-caps px-3 py-2 font-normal">Deep trends</th>
               <th scope="col" className="label-caps px-3 py-2 font-normal">Status</th>
+              <th scope="col" className="label-caps px-3 py-2 font-normal">CSV export</th>
               <th scope="col" className="label-caps px-3 py-2 font-normal">Last sign in</th>
               <th scope="col" className="label-caps px-3 py-2 text-right font-normal">Actions</th>
             </tr>
@@ -148,10 +158,15 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
               const markedDelete = stagedDeletes.includes(u.id)
               const roleDirty = u.role !== original.role
               const accessDirty = (u.accessStatus === "denied") !== (original.accessStatus === "denied")
+              const csvDirty = u.csvExport !== original.csvExport
               return (
                 <tr
                   key={u.id}
-                  className={cn("align-middle", markedDelete && "bg-destructive/10", !markedDelete && (roleDirty || accessDirty) && "bg-primary/5")}
+                  className={cn(
+                    "align-middle",
+                    markedDelete && "bg-destructive/10",
+                    !markedDelete && (roleDirty || accessDirty || csvDirty) && "bg-primary/5",
+                  )}
                 >
                   <td className="sticky left-0 z-10 bg-card px-3 py-2">
                     {editFor === u.id ? (
@@ -225,6 +240,22 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
                       )}
                     >
                       {enabled ? "Enabled" : "Disabled"}
+                    </button>
+                  </td>
+                  <td className="px-3 py-2">
+                    <button
+                      type="button"
+                      disabled={pending || markedDelete}
+                      aria-pressed={u.csvExport}
+                      aria-label={`CSV export for ${u.username}: ${u.csvExport ? "allowed" : "not allowed"}`}
+                      onClick={() => setStagedCsv({ ...stagedCsv, [u.id]: !u.csvExport })}
+                      className={cn(
+                        "rounded-md border px-2 py-1 font-mono text-xs uppercase tracking-[0.1em]",
+                        u.csvExport ? "border-alert-green/50 text-alert-green" : "border-destructive/50 text-destructive",
+                        csvDirty && "ring-1 ring-primary",
+                      )}
+                    >
+                      {u.csvExport ? "Allowed" : "Not allowed"}
                     </button>
                   </td>
                   <td className="px-3 py-2 font-mono text-xs text-muted-foreground">

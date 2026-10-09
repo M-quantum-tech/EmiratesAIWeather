@@ -29,6 +29,7 @@ export function ensureIamColumns(): Promise<void> {
       await db.execute(sql`ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "iamRole" text`)
       await db.execute(sql`ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "iamUsername" text`)
       await db.execute(sql`ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "iamTitle" text`)
+      await db.execute(sql`ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "iamCsvExport" boolean NOT NULL DEFAULT true`)
     })().catch((err) => {
       iamColumnsReady = null
       throw err
@@ -148,7 +149,31 @@ export interface IamUserRow {
   title: string
   role: IamRoleCode
   accessStatus: AccessStatus
+  csvExport: boolean
   lastSignIn: Date | null
+}
+
+export interface CsvPermission {
+  signedIn: boolean
+  allowed: boolean
+}
+
+/**
+ * Trend CSV export is a signed-in, IAM-managed privilege: admins always may,
+ * enabled plant logins may when their CSV export flag is on, everyone else may not.
+ */
+export async function getCsvPermission(): Promise<CsvPermission> {
+  const sessionUser = await getSessionUser()
+  if (!sessionUser) return { signedIn: false, allowed: false }
+  if (sessionUser.role === "admin" || isDesignatedAdmin(sessionUser.email)) return { signedIn: true, allowed: true }
+  await ensureIamColumns()
+  const [row] = await db
+    .select({ iamRole: user.iamRole, accessStatus: user.accessStatus, iamCsvExport: user.iamCsvExport })
+    .from(user)
+    .where(eq(user.id, sessionUser.id))
+    .limit(1)
+  const allowed = Boolean(row && isIamRoleCode(row.iamRole) && row.accessStatus !== "denied" && row.iamCsvExport)
+  return { signedIn: true, allowed }
 }
 
 export async function listIamUsers(): Promise<IamUserRow[]> {
@@ -161,6 +186,7 @@ export async function listIamUsers(): Promise<IamUserRow[]> {
       iamTitle: user.iamTitle,
       iamRole: user.iamRole,
       accessStatus: user.accessStatus,
+      iamCsvExport: user.iamCsvExport,
       lastSignIn: sql<Date | null>`(select max(s."createdAt") from "session" s where s."userId" = ${user.id})`,
     })
     .from(user)
@@ -175,6 +201,7 @@ export async function listIamUsers(): Promise<IamUserRow[]> {
       title: r.iamTitle ?? "",
       role: r.iamRole as IamRoleCode,
       accessStatus: (r.accessStatus ?? "allowed") as AccessStatus,
+      csvExport: r.iamCsvExport !== false,
       lastSignIn: r.lastSignIn ? new Date(r.lastSignIn) : null,
     }))
 }
@@ -190,7 +217,13 @@ async function assertIamUser(userId: string) {
 
 export async function updateIamUser(
   userId: string,
-  patch: { role?: IamRoleCode; title?: string; accessStatus?: "allowed" | "denied"; username?: string },
+  patch: {
+    role?: IamRoleCode
+    title?: string
+    accessStatus?: "allowed" | "denied"
+    username?: string
+    csvExport?: boolean
+  },
 ) {
   await ensureIamColumns()
   await assertIamUser(userId)
@@ -211,6 +244,7 @@ export async function updateIamUser(
       ...(patch.role ? { iamRole: patch.role } : {}),
       ...(patch.title !== undefined ? { iamTitle: patch.title } : {}),
       ...(patch.accessStatus ? { accessStatus: patch.accessStatus } : {}),
+      ...(patch.csvExport !== undefined ? { iamCsvExport: patch.csvExport } : {}),
       updatedAt: new Date(),
     })
     .where(eq(user.id, userId))

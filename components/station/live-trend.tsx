@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import useSWR from "swr"
-import { ArrowDownRight, ArrowUpRight, CloudRain, Download, Eye, EyeOff, Minus, ShieldCheck, Sparkles, Sun, Sunrise, Thermometer, Wind, ZoomIn, ZoomOut } from "lucide-react"
+import { ArrowDownRight, ArrowUpRight, CloudRain, Download, Eye, EyeOff, Lock, Minus, ShieldCheck, Sparkles, Sun, Sunrise, Thermometer, Wind, ZoomIn, ZoomOut } from "lucide-react"
 import { Panel } from "@/components/station/panel"
 import { useWeather } from "@/components/weather/weather-provider"
 import {
@@ -799,6 +799,12 @@ export function LiveTrend() {
     keepPreviousData: true,
   })
 
+  const { data: csvPermission } = useSWR<{ signedIn: boolean; allowed: boolean }>(
+    "/api/iam/csv-permission",
+    (url: string) => fetch(url, { cache: "no-store" }).then((r) => r.json()),
+    { refreshInterval: 60 * 1000, revalidateOnFocus: true },
+  )
+
   const view = useMemo(
     () => (payload ? buildView(payload, units, horizon, metric, selectedDay, solar) : null),
     [payload, units, horizon, metric, selectedDay, solar],
@@ -849,7 +855,7 @@ export function LiveTrend() {
         </div>
 
         <div className="flex items-center gap-2">
-        {view ? (
+        {view && csvPermission?.allowed ? (
           <button
             type="button"
             onClick={() => downloadViewCsv(view, metric, horizon, location?.name ?? "location")}
@@ -859,6 +865,23 @@ export function LiveTrend() {
             <Download className="h-3.5 w-3.5" aria-hidden="true" />
             CSV
           </button>
+        ) : view && csvPermission && !csvPermission.signedIn ? (
+          <a
+            href="/iam/login?redirect=%2F"
+            title="Sign in with a plant IAM login to download CSV"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-border px-3 py-1.5 font-mono text-xs font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:border-signal/60 hover:text-foreground"
+          >
+            <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+            CSV · Sign in
+          </a>
+        ) : view && csvPermission ? (
+          <span
+            title="CSV export is not allowed for your login — ask an administrator to enable it in Plant IAM"
+            className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-lg border border-dashed border-border px-3 py-1.5 font-mono text-xs font-semibold uppercase tracking-wider text-muted-foreground opacity-60"
+          >
+            <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+            CSV · Not allowed
+          </span>
         ) : null}
         {/* Horizon toggle — the optional extended predictive view */}
         <div
