@@ -22,6 +22,7 @@ import {
 } from "@/lib/escalation"
 import { DEFAULT_NCM_WARNINGS, parseNcmWarnings, type NcmWarning } from "@/lib/ncm-warnings"
 import { isAdmin } from "@/lib/admin"
+import { EMPTY_MIRROR, parseMirror, parseMirrorSite, type GhaithMirror } from "@/lib/ghaith-mirror"
 
 const ESCALATION_KEY = "escalation_rules"
 const NCM_WARNINGS_KEY = "ncm_warnings"
@@ -142,6 +143,45 @@ export async function saveWindMonitor(tiers: unknown): Promise<WindMonitorTier[]
     ON CONFLICT ("key") DO UPDATE SET "value" = ${json}::jsonb, "updatedAt" = now()
   `)
   return clean
+}
+
+const GHAITH_MIRROR_KEY = "ghaith_mirror"
+
+/** Latest mirrored Ghaith readings (at site = #aws-wind, far site = #cosmo-uae-wind). */
+export async function getGhaithMirror(): Promise<GhaithMirror> {
+  try {
+    await ensureSettingsTable()
+    const res = await db.execute(sql`SELECT value FROM "app_setting" WHERE key = ${GHAITH_MIRROR_KEY}`)
+    const row = (res.rows as { value: unknown }[])[0]
+    return row ? parseMirror(row.value) : { ...EMPTY_MIRROR }
+  } catch {
+    return { ...EMPTY_MIRROR }
+  }
+}
+
+/**
+ * Merge pushed readings into the mirror. Authorised by an admin session (console)
+ * or by the GHAITH_MIRROR_TOKEN shared secret (automated UAE-side relay).
+ */
+export async function pushGhaithMirror(
+  body: unknown,
+  via: "console" | "relay",
+): Promise<GhaithMirror> {
+  if (via === "console" && !(await isAdmin())) throw new Error("Forbidden")
+  const r = (body && typeof body === "object" ? body : {}) as Record<string, unknown>
+  const current = await getGhaithMirror()
+  const atSite = r.atSite === null ? null : r.atSite !== undefined ? parseMirrorSite({ ...(r.atSite as object), via }, via) : current.atSite
+  const farSite = r.farSite === null ? null : r.farSite !== undefined ? parseMirrorSite({ ...(r.farSite as object), via }, via) : current.farSite
+  if (r.atSite && !atSite) throw new Error("Invalid at-site readings")
+  if (r.farSite && !farSite) throw new Error("Invalid far-site readings")
+  const next = parseMirror({ ttlMin: r.ttlMin ?? current.ttlMin, atSite, farSite })
+  const json = JSON.stringify(next)
+  await db.execute(sql`
+    INSERT INTO "app_setting" ("key", "value", "updatedAt")
+    VALUES (${GHAITH_MIRROR_KEY}, ${json}::jsonb, now())
+    ON CONFLICT ("key") DO UPDATE SET "value" = ${json}::jsonb, "updatedAt" = now()
+  `)
+  return next
 }
 
 /** Effective wind speed & gust source link — persisted override, or the NCM default. */

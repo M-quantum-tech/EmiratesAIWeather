@@ -6,14 +6,12 @@ import {
   Activity,
   BellRing,
   Check,
-  Clock,
   Cloud,
   CloudRain,
   Droplets,
   ExternalLink,
   FlaskConical,
   Gauge,
-  MapPin,
   Navigation,
   Radar,
   Radio,
@@ -45,27 +43,37 @@ import {
 } from "@/lib/weather"
 import { fetchWarningFrames, type EmirateWarning } from "@/lib/ncm-warnings"
 import {
-  applyLevelHysteresis,
+  AT_SITE_SOURCE,
+  FAR_SITE_SOURCE,
   BUZZER_TONE,
   DEFAULT_CLOUD_SOURCE,
   DEFAULT_RULES,
   DEFAULT_WIND_MONITOR,
   DEFAULT_WIND_SOURCE,
+  ESCALATION_LEVELS,
   evaluateSite,
   evaluateWindMonitor,
   drillLevelFromSites,
+  levelFromReadings,
+  metricBreakdown,
+  tierReason,
+  tierThresholds,
   type CloudSourceConfig,
   type EscalationRule,
   type SiteKey,
   type SiteReadings,
+  type SourceLink,
   type WindMonitorTier,
   type WindSourceConfig,
 } from "@/lib/escalation"
 import { computeSiteReadings } from "@/lib/site-readings"
-import { ProximityRings } from "@/components/weather/proximity-rings"
+import { ProximityRings, type RadarSite } from "@/components/weather/proximity-rings"
+import type { AlarmSite } from "@/components/weather/alarm-details-panel"
 import { WindDirectionRadar } from "@/components/weather/wind-direction-radar"
+import { ForecastApproachPanel } from "@/components/weather/forecast-approach-panel"
 import { useWeather } from "@/components/weather/weather-provider"
 import { useSimulatorMode } from "@/components/weather/use-simulator-mode"
+import { useGhaithMirror } from "@/components/weather/use-ghaith-mirror"
 import { cn } from "@/lib/utils"
 
 /** Header auto-refresh cadence (seconds) surfaced as a live countdown. */
@@ -112,10 +120,10 @@ const LEVEL_STYLES: Record<
 }
 
 const LADDER: { level: AlertLevel; label: string; solid: string }[] = [
-  { level: "green", label: "GREEN", solid: "bg-alert-green" },
-  { level: "yellow", label: "YELLOW", solid: "bg-alert-yellow" },
-  { level: "orange", label: "ORANGE", solid: "bg-alert-orange" },
-  { level: "red", label: "RED", solid: "bg-alert-red" },
+  { level: "green", label: "GREEN · TIER 1", solid: "bg-alert-green" },
+  { level: "yellow", label: "YELLOW · TIER 2", solid: "bg-alert-yellow" },
+  { level: "orange", label: "ORANGE · TIER 3", solid: "bg-alert-orange" },
+  { level: "red", label: "RED · TIER 4", solid: "bg-alert-red" },
 ]
 
 /** The two detection sites shown under every tier button, wired to each rule's ranges. */
@@ -236,6 +244,11 @@ export function AlertBanner() {
     { refreshInterval: 300_000, revalidateOnFocus: false },
   )
   const windSource = windSourceData?.source ?? DEFAULT_WIND_SOURCE
+  // Escalation panel + Wind Event Monitor share one pair of feeds: the at-site rule's
+  // source (Ghaith #aws-wind) and the far-site rule's source (Ghaith #cosmo-uae-wind).
+  const feedRule = rules.find((r) => r.atSite?.source?.url || r.farSite?.source?.url)
+  const atSiteFeed = feedLink(feedRule?.atSite?.source, AT_SITE_SOURCE)
+  const farSiteFeed = feedLink(feedRule?.farSite?.source, FAR_SITE_SOURCE)
   // NCM cloud / satellite source — tracks intensifying convection, editable in the Engineering Console.
   const { data: cloudSourceData } = useSWR<{ source: CloudSourceConfig }>(
     "/api/cloud-source",
@@ -244,54 +257,16 @@ export function AlertBanner() {
   )
   const cloudSource = cloudSourceData?.source ?? DEFAULT_CLOUD_SOURCE
   const rawAlert = useMemo(() => (payload ? buildAlert(payload) : null), [payload])
-  // Dead-band hysteresis: the displayed tier escalates immediately but only de-escalates
-  // once every driving metric has fallen below the held tier's entry threshold minus its
-  // configured dead band — so noisy readings can't flap the alarm between tiers.
-  const [heldLevel, setHeldLevel] = useState<AlertLevel | null>(null)
-  const heldRef = useRef<AlertLevel | null>(null)
-  useEffect(() => {
-    if (!rawAlert) return
-    const raw = Object.fromEntries(rawAlert.hazards.map((h) => [h.key, h.raw])) as Record<string, number>
-    const readings = {
-      windMs: (raw.wind ?? 0) / 3.6,
-      gustMs: (raw.gust ?? 0) / 3.6,
-      rainMm: raw.rain ?? 0,
-    }
-    const next = applyLevelHysteresis(rawAlert.level, heldRef.current, readings, rules)
-    if (next !== heldRef.current) {
-      heldRef.current = next
-      setHeldLevel(next)
-    }
-  }, [rawAlert, rules])
   // During a drill the tier is DERIVED from the operator's per-site test readings — the
   // console's tier buttons merely preset those readings. Evaluating every rung against both
   // sites and taking the highest met tier means lowering a site's values below the limits
   // de-escalates the banner instead of staying locked to the button that was pressed.
-  const drillLevel = useMemo<AlertLevel | null>(() => {
-    if (!simulator.active) return null
-    // A drill reads ONLY the operator's simulator readings — never the live stations.
-    // If no readings have been broadcast yet, treat every metric as zero (green).
-    const drillReadings = simulator.readings ?? {
-      atSite: { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 },
-      farSite: { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 },
-    }
-    // Map the test readings to a tier via the per-tier entry thresholds so the drill
-    // resolves cleanly to green → yellow → orange → red (and back to green below the
-    // limits), instead of the coarse severe-band check that only reads green or red.
-    return drillLevelFromSites(drillReadings)
-  }, [simulator.active, simulator.readings])
-  // The banner reflects the derived drill tier when simulating, otherwise the live held/raw tier.
-  const alert = useMemo(
-    () =>
-      rawAlert
-        ? withAlertLevel(
-            rawAlert,
-            simulator.active ? drillLevel ?? "green" : heldLevel ?? rawAlert.level,
-          )
-        : null,
-    [rawAlert, heldLevel, simulator.active, drillLevel],
-  )
-  const level = alert?.level ?? null
+  // Range tier: the At-site / Far-site readings (live, or the drill values when simulating)
+  // read against the Green / Yellow / Orange / Red ranges configured in the Engineering
+  // Console, with each tier's dead band applied on release. Computed further down once the
+  // site readings exist; this is what arms the auto buzzer.
+  const [rangeTier, setRangeTier] = useState<AlertLevel>("green")
+  const rangeHeldRef = useRef<AlertLevel | null>(null)
   const [ncm, setNcm] = useState<EmirateWarning | null>(null)
 
   // Live NCM Al Bahar warning for the current hour — matched to the user's emirate
@@ -321,24 +296,6 @@ export function AlertBanner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locationId])
 
-  // Live 60-second auto-refresh counter + a wall clock synced to real time, both
-  // driven by a single 1-second tick so the header stays in step with the network clock.
-  const [countdown, setCountdown] = useState(REFRESH_SECONDS)
-  const [now, setNow] = useState(() => new Date())
-  useEffect(() => {
-    const id = setInterval(() => {
-      setNow(new Date())
-      setCountdown((c) => {
-        if (c <= 1) {
-          refresh()
-          return REFRESH_SECONDS
-        }
-        return c - 1
-      })
-    }, 1000)
-    return () => clearInterval(id)
-  }, [refresh])
-
   // Far site: sample weather 50 km upwind (toward the wind's origin) so the model
   // previews approaching gusts before they reach the user's on-site location.
   const farPoint = useMemo(
@@ -357,18 +314,45 @@ export function AlertBanner() {
     farPoint && payload
       ? `/api/weather?lat=${farPoint.lat.toFixed(3)}&lon=${farPoint.lon.toFixed(3)}&units=${payload.units}`
       : null
-  const { data: farData } = useSWR(farKey, farFetcher, {
-    refreshInterval: 60 * 1000,
+  const { data: farData, mutate: refreshFar } = useSWR(farKey, farFetcher, {
     keepPreviousData: true,
   })
+
+  // One 1-second tick drives the NCM clock and the refresh countdown. Data refreshes on
+  // every NCM minute boundary (hh:mm:00), so the countdown hits 0:00 exactly as the NCM
+  // clock rolls over and the "Updated" stamp lands on that same minute.
+  const [now, setNow] = useState(() => new Date())
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
+  const lastMinuteRef = useRef(Math.floor(Date.now() / 60_000))
+  useEffect(() => {
+    if (payload) setUpdatedAt((prev) => prev ?? new Date())
+  }, [payload])
+  useEffect(() => {
+    const id = setInterval(() => {
+      const d = new Date()
+      setNow(d)
+      const minute = Math.floor(d.getTime() / 60_000)
+      if (minute !== lastMinuteRef.current) {
+        lastMinuteRef.current = minute
+        Promise.all([Promise.resolve(refresh()), refreshFar()])
+          .then(() => setUpdatedAt(new Date(minute * 60_000)))
+          .catch((err) => console.log("[v0] minute refresh failed:", err instanceof Error ? err.message : err))
+      }
+    }, 1000)
+    return () => clearInterval(id)
+  }, [refresh, refreshFar])
+  const countdown = REFRESH_SECONDS - now.getSeconds()
 
   // Per-site live readings, derived through the SAME shared helper the Engineering
   // Console uses, so the At-site / Far-site indicators here and there fire from
   // identical numbers against identical ranges.
-  const liveSiteReadings = useMemo<Record<SiteKey, SiteReadings>>(
+  const gridSiteReadings = useMemo<Record<SiteKey, SiteReadings>>(
     () => computeSiteReadings(payload?.units ?? "metric", payload?.current, farData?.current),
     [payload?.units, payload?.current, farData?.current],
   )
+  // Ghaith mirror is the primary source: fresh #aws-wind (at site) / #cosmo-uae-wind
+  // (far site) readings override the model grid; stale sites fall back to the grid.
+  const { readings: liveSiteReadings, source: siteSource } = useGhaithMirror(gridSiteReadings)
   // During a drill the At-site / Far-site indicators and the buzzer evaluate the operator's
   // per-site test readings instead of the live stations — so only the site whose values
   // actually meet the tier blinks and sounds, and a site edited back down returns to green.
@@ -382,6 +366,15 @@ export function AlertBanner() {
         : liveSiteReadings,
     [simulator.active, simulator.readings, liveSiteReadings],
   )
+  // Reset the dead-band latch when switching between drill and live data.
+  useEffect(() => {
+    rangeHeldRef.current = null
+  }, [simulator.active])
+  useEffect(() => {
+    const next = drillLevelFromSites(siteReadings, rules, rangeHeldRef.current)
+    rangeHeldRef.current = next
+    setRangeTier(next)
+  }, [siteReadings, rules])
   // Evaluate the active tier's ranges. The alarm/blink is driven by three
   // independent conditions — nothing sounds because a tier is merely "active"; it
   // sounds when (1) an at-site reading meets the tier's range, (2) a far-site
@@ -391,6 +384,13 @@ export function AlertBanner() {
     () => evaluateWindMonitor(siteReadings.atSite.windMs, windTiers),
     [siteReadings.atSite.windMs, windTiers],
   )
+  // Safety Model tier = Live Wind Monitor tier (Tier 1 Green … Tier 4 Red). The escalation
+  // ranges for that tier are then checked below as confirmation. A drill uses the range tier.
+  const alert = useMemo(() => {
+    if (!rawAlert) return null
+    return withAlertLevel(rawAlert, simulator.active ? rangeTier : windEval.level)
+  }, [rawAlert, simulator.active, rangeTier, windEval.level])
+  const level = alert?.level ?? null
   const siteEval = useMemo(() => {
     const rule = rules.find((r) => r.level === level) ?? null
     const at = rule ? evaluateSite(rule.atSite, siteReadings.atSite) : { met: false, reason: null }
@@ -398,18 +398,29 @@ export function AlertBanner() {
     return { at, far, anyMet: at.met || far.met }
   }, [rules, level, siteReadings])
   // Any of the three wired conditions arms the alarm and blink.
-  const siteAlarm = siteEval.anyMet || windEval.met
+  // A reading beyond a configured Yellow / Orange / Red band also arms it automatically.
+  // Live, the buzzer follows the displayed tier, so it never sounds while the display is Green.
+  const siteAlarm = simulator.active ? rangeTier !== "green" || siteEval.anyMet : windEval.met
   // Acknowledgment latch: the buzzer sounds while a site condition is met and un-acked.
-  // Clearing the condition (all sites back to green) re-arms it for the next trip.
+  // Clearing the condition (all sites back to green) re-arms it for the next trip, and
+  // escalating to a higher range tier re-sounds it even if the lower tier was silenced.
   const [acked, setAcked] = useState(false)
   useEffect(() => {
     if (!siteAlarm) setAcked(false)
   }, [siteAlarm])
+  const prevRangeTierRef = useRef<AlertLevel>("green")
+  useEffect(() => {
+    const rank = (l: AlertLevel) => ESCALATION_LEVELS.indexOf(l)
+    const current = level ?? "green"
+    if (rank(current) > rank(prevRangeTierRef.current)) setAcked(false)
+    prevRangeTierRef.current = current
+  }, [level])
   const alarmActive = siteAlarm && !acked
   const acknowledge = () => setAcked(true)
-  // Auto-silence after 15 s while the condition persists, unless reset sooner.
+  // Auto-silence after 15 s while the condition persists, unless reset sooner. A simulator
+  // drill holds the buzzer on continuously until the values drop or it is acknowledged.
   useEffect(() => {
-    if (!alarmActive) return
+    if (!alarmActive || simulator.active) return
     const timer = window.setTimeout(() => setAcked(true), 15_000)
     return () => window.clearTimeout(timer)
   }, [alarmActive])
@@ -429,14 +440,6 @@ export function AlertBanner() {
   const farGust = farData?.current.windGusts ?? null
   const gustDelta = farGust != null ? farGust - onGust : null
   const approaching = gustDelta != null && gustDelta > 3
-  const easing = gustDelta != null && gustDelta < -3
-  const deltaTone = approaching ? "text-alert-orange" : easing ? "text-alert-green" : "text-muted-foreground"
-  const deltaBorder = approaching
-    ? "border-alert-orange/40 bg-alert-orange/10"
-    : easing
-      ? "border-alert-green/40 bg-alert-green/10"
-      : "border-border bg-background/50"
-  const deltaWord = gustDelta == null ? "Sampling" : approaching ? "Intensifying" : easing ? "Easing" : "Steady"
   const mm = Math.floor(countdown / 60)
   const ss = countdown % 60
 
@@ -453,7 +456,22 @@ export function AlertBanner() {
       return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
     }
   }
-  const localClock = safeTime(now, true)
+  const ncmTimezone = payload.timezone || "Asia/Dubai"
+  const formatNcm = (d: Date) => {
+    try {
+      return new Intl.DateTimeFormat("en-GB", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+        timeZone: ncmTimezone,
+      }).format(d)
+    } catch {
+      return safeTime(d, true)
+    }
+  }
+  const ncmClock = formatNcm(now)
+  const ncmUpdated = updatedAt ? formatNcm(updatedAt) : "—"
 
   // AI advection nowcast: blend the on-site reading with the 50 km upwind sample to
   // predict when the wind, rain and cloud fields reach the site — replacing the old
@@ -507,15 +525,50 @@ export function AlertBanner() {
 
   // Live evaluation of the escalation rules against real signals (Open-Meteo current
   // reading, the 50 km upwind sample, and the NCM Al Bahar warning) for the prediction table.
-  const gustKmh = payload.units === "metric" ? onGust : onGust * 1.609
+  // When the Ghaith mirror is fresh for a site, its values drive these readouts too.
+  const atMirror = siteSource.atSite === "ghaith" ? liveSiteReadings.atSite : null
+  const farMirror = siteSource.farSite === "ghaith" ? liveSiteReadings.farSite : null
+  const gustKmh = atMirror ? atMirror.gustMs * 3.6 : payload.units === "metric" ? onGust : onGust * 1.609
   const gustMs = gustKmh / 3.6
   // On-site wind speed and the 50 km upwind gust, both normalised to m/s for the radar readout.
   const toMs = (v: number) => (payload.units === "metric" ? v : v * 1.609) / 3.6
-  const windMs = toMs(payload.current.windSpeed)
-  const farGustMs = farGust != null ? toMs(farGust) : null
+  const windMs = atMirror ? atMirror.windMs : toMs(payload.current.windSpeed)
+  const farGustMs = farMirror ? farMirror.gustMs : farGust != null ? toMs(farGust) : null
   // Per-site readings (`siteReadings`) and their evaluation (`siteEval`) are computed
   // above via the shared helper so the ladder indicators, the buzzer and the console
   // all stay wired to the same numbers and the same Engineering Console ranges.
+
+  // Alarm Details + radar spots: per-site, per-metric view of what put the model at its tier.
+  const sourceLabelFor = (k: SiteKey) =>
+    simulator.active ? "Simulator values" : siteSource[k] === "ghaith" ? "Ghaith mirror" : "Model grid (fallback)"
+  const detailSites: AlarmSite[] = (["atSite", "farSite"] as const).map((k) => {
+    const thresholds = tierThresholds(rules, k)
+    return {
+      key: k,
+      name: k === "atSite" ? "At site" : "Far site",
+      distanceKm: k === "atSite" ? 0 : ALERT_RADII_KM.yellow,
+      compass: k === "atSite" ? null : originCompass,
+      sourceLabel: sourceLabelFor(k),
+      tier: levelFromReadings(siteReadings[k], thresholds),
+      rows: metricBreakdown(siteReadings[k], thresholds),
+    }
+  })
+  const siteReasonFor = (s: AlarmSite) =>
+    tierReason(siteReadings[s.key as SiteKey], tierThresholds(rules, s.key as SiteKey), s.tier)
+  const radarSites: RadarSite[] = detailSites.map((s) => ({
+    key: s.key,
+    label: s.name,
+    distanceKm: s.distanceKm,
+    bearingDeg: payload.current.windDirection,
+    directionDeg:
+      s.key === "farSite"
+        ? farData?.current.windDirection ?? payload.current.windDirection
+        : payload.current.windDirection,
+    windMs: siteReadings[s.key as SiteKey].windMs,
+    gustMs: siteReadings[s.key as SiteKey].gustMs,
+    level: s.tier,
+    reason: siteReasonFor(s),
+  }))
   return (
     <section aria-label="Advance AI safety model" className={cn("station-rise rounded-xl border", styles.bar)}>
       {/* Header ribbon */}
@@ -543,7 +596,7 @@ export function AlertBanner() {
             )}
           >
             <FlaskConical className={cn("h-3 w-3", simulator.active && "tier-blink")} aria-hidden="true" />
-            Simulator Mode {simulator.active ? `ON${drillLevel ? ` · ${drillLevel}` : ""}` : "OFF"}
+            Simulator Mode {simulator.active ? `ON · ${rangeTier}` : "OFF"}
           </span>
           {!simulator.active ? (
             <span className="flex items-center gap-1.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
@@ -551,12 +604,17 @@ export function AlertBanner() {
                 <span className="absolute inline-flex h-full w-full rounded-full bg-alert-green opacity-75" />
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-alert-green" />
               </span>
-              Live · updated {formatClock(payload.current.time)}
+              <span title={`Model reading time ${formatClock(payload.current.time)}`}>
+                Live · updated NCM {ncmUpdated}
+              </span>
             </span>
           ) : null}
-          <span className="flex items-center gap-1.5 rounded-md border border-border bg-background/60 px-2 py-1 font-mono text-[0.625rem] uppercase tracking-wider text-foreground tabular-nums">
-            <Clock className="h-3 w-3 text-signal" aria-hidden="true" />
-            {localClock}
+          <span
+            className="flex items-center gap-1.5 rounded-md border border-border bg-background/60 px-2 py-1 font-mono text-[0.625rem] uppercase tracking-wider text-foreground tabular-nums"
+            title={`NCM-synced station time (${ncmTimezone})`}
+          >
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-signal" aria-hidden="true" />
+            NCM {ncmClock}
           </span>
           <span className="flex items-center gap-1.5 rounded-md border border-signal/40 bg-signal/10 px-2 py-1 font-mono text-[0.625rem] uppercase tracking-wider text-signal">
             <Timer className={cn("h-3 w-3", isValidating && "animate-spin")} aria-hidden="true" />
@@ -659,7 +717,9 @@ export function AlertBanner() {
               <h3 className={cn("mt-1.5 text-balance text-lg font-semibold tracking-tight sm:text-xl", styles.text)}>
                 {alert.headline}
               </h3>
-              <p className="mt-1 text-pretty text-sm text-muted-foreground sm:text-base">{alert.detail}</p>
+              <p className="mt-1.5 max-w-prose text-pretty break-words text-sm leading-relaxed text-muted-foreground sm:text-base">
+                {alert.detail}
+              </p>
             </div>
           </div>
 
@@ -799,6 +859,7 @@ export function AlertBanner() {
             approaching={approaching}
             etaLabel={etaMinutes != null ? formatEta(etaMinutes) : null}
             windDirection={payload.current.windDirection}
+            sites={radarSites}
           />
 <WindDirectionRadar
   windMs={windMs}
@@ -812,57 +873,46 @@ export function AlertBanner() {
         </div>
       </div>
 
+      {/* Forecast heading to site — hour-by-hour against the at-site escalation ranges */}
+      <div className="border-t border-border/60 p-5 sm:p-7">
+        <ForecastApproachPanel
+          hourly={payload.hourly}
+          startIndex={payload.currentHourIndex}
+          units={payload.units}
+          thresholds={tierThresholds(rules, "atSite")}
+          visibilityM={
+            Number.isFinite(payload.current.visibility)
+              ? payload.units === "metric"
+                ? payload.current.visibility
+                : payload.current.visibility * 0.3048
+              : null
+          }
+          originCompass={originCompass}
+          etaLabel={etaMinutes != null ? formatEta(etaMinutes) : null}
+        />
+      </div>
+
       {/* Approach tracker — on-site vs far-site (50 km upwind) gust + distance legend */}
       <div className="border-t border-border/60 p-5 sm:p-7">
         {/* Live Wind Event Monitor — active tier driven by on-site sustained wind */}
         <WindEventMonitor windMs={windMs} tiers={windTiers} />
-
-        <div className="mt-3 grid items-stretch gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
-          {/* ON SITE (near) */}
-          <div className="rounded-xl border border-signal/40 bg-signal/5 p-4">
-            <span className="flex items-center gap-1.5 font-mono text-[0.625rem] uppercase tracking-widest text-signal">
-              <MapPin className="h-3 w-3" aria-hidden="true" /> On site · near
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+            Data source · NCM Ghaith
+          </span>
+          <WindSourceLink source={atSiteFeed} />
+          <WindSourceLink source={farSiteFeed} />
+          {(["atSite", "farSite"] as const).map((k) => (
+            <span
+              key={k}
+              className={cn(
+                "rounded px-1.5 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider",
+                siteSource[k] === "ghaith" ? "bg-alert-green/15 text-alert-green" : "bg-alert-orange/15 text-alert-orange",
+              )}
+            >
+              {k === "atSite" ? "At" : "Far"} · {siteSource[k] === "ghaith" ? "Ghaith mirror" : "Grid fallback"}
             </span>
-            <div className="mt-1.5 flex items-baseline gap-1.5">
-              <span className="text-4xl font-black tabular-nums text-foreground">{Math.round(gustKmh)}</span>
-              <span className="text-sm text-muted-foreground">km/h gust</span>
-            </div>
-            <span className="mt-0.5 block font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
-              {(gustKmh / MS_TO_KMH).toFixed(1)} m/s · {compass(payload.current.windDirection)} wind
-            </span>
-            <WindSourceLink source={windSource} />
-          </div>
-
-          {/* delta */}
-          <div className="flex flex-row items-center justify-center gap-2 sm:flex-col">
-            <span className={cn("grid h-11 w-11 place-items-center rounded-full border", deltaBorder)}>
-              <Wind className={cn("h-5 w-5", deltaTone)} aria-hidden="true" />
-            </span>
-            <div className="flex flex-col items-center leading-tight">
-              <span className={cn("font-mono text-sm font-bold tabular-nums", deltaTone)}>
-                {gustDelta == null ? "—" : `${gustDelta > 0 ? "+" : ""}${Math.round(gustDelta)}`}
-              </span>
-              <span className={cn("font-mono text-[0.5625rem] uppercase tracking-wider", deltaTone)}>{deltaWord}</span>
-            </div>
-          </div>
-
-          {/* FAR SITE (50 km) */}
-          <div className={cn("rounded-xl border p-4", deltaBorder)}>
-            <span className={cn("flex items-center gap-1.5 font-mono text-[0.625rem] uppercase tracking-widest", deltaTone)}>
-              <Navigation className="h-3 w-3" aria-hidden="true" /> Far site · 50 km away
-            </span>
-            <div className="mt-1.5 flex items-baseline gap-1.5">
-              <span className="text-4xl font-black tabular-nums text-foreground">
-                {farGustMs == null ? "—" : Math.round(farGustMs * 3.6)}
-              </span>
-              <span className="text-sm text-muted-foreground">km/h gust</span>
-            </div>
-            <span className="mt-0.5 block font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
-              {farGustMs == null ? "Sampling · " : `${farGustMs.toFixed(1)} m/s · `}
-              {compass(payload.current.windDirection)} origin
-            </span>
-            <WindSourceLink source={windSource} />
-          </div>
+          ))}
         </div>
 
         {/* Escalation rules table — the fixed NCM-style ladder, active tier highlighted */}
@@ -1042,6 +1092,12 @@ const STATION_LEVELS: { level: keyof typeof WIND_TIER_STYLES; label: string; sub
   { level: "orange", label: "Orange", sub: "Alert" },
   { level: "red", label: "Red", sub: "Severe" },
 ]
+
+/** Resolve a site's feed to a linkable chip, falling back to its default NCM Ghaith wind feed. */
+function feedLink(source: SourceLink | undefined, fallback: SourceLink): WindSourceConfig {
+  const resolved = source?.url ? source : fallback
+  return { label: resolved.label || fallback.label, url: resolved.url ?? fallback.url ?? "" }
+}
 
 /** Small "connected source" chip that links wind speed & gust readouts to the configured NCM feed. */
 function WindSourceLink({ source }: { source: WindSourceConfig }) {

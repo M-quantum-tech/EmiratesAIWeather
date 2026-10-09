@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import useSWR from "swr"
-import { ArrowDownRight, ArrowUpRight, CloudRain, Eye, EyeOff, Minus, ShieldCheck, Sparkles, Sun, Sunrise, Thermometer, Wind, ZoomIn, ZoomOut } from "lucide-react"
+import { ArrowDownRight, ArrowUpRight, CloudRain, Download, Eye, EyeOff, Minus, ShieldCheck, Sparkles, Sun, Sunrise, Thermometer, Wind, ZoomIn, ZoomOut } from "lucide-react"
 import { Panel } from "@/components/station/panel"
 import { useWeather } from "@/components/weather/weather-provider"
 import {
@@ -200,6 +200,41 @@ type View = {
   axisTitles?: { left: string; right: string }
   /** Render the rich golden area fill under the primary series (Solar DNI only). */
   fillPrimary?: boolean
+}
+
+function csvCell(v: string | number) {
+  const s = typeof v === "number" ? (Number.isFinite(v) ? String(Math.round(v * 100) / 100) : "") : v
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+}
+
+/**
+ * Export the chart exactly as plotted: one row per step, flagged Live vs AI projection
+ * (the dashed segment), with every series plus the cloud / rain layers as numeric columns.
+ */
+function downloadViewCsv(view: View, metric: MetricKey, horizon: Horizon, place: string) {
+  const layers: { label: string; values: number[] }[] = [
+    ...view.series.map((s) => ({ label: s.label, values: s.values })),
+    ...(view.cloudBars ? [{ label: view.cloudBars.label, values: view.cloudBars.values }] : []),
+    ...(view.bars ? [{ label: view.bars.label, values: view.bars.values }] : []),
+  ]
+  const header = ["Step", "Time", "Segment", ...layers.map((l) => l.label)]
+  const rows = Array.from({ length: view.n }, (_, i) => [
+    i,
+    view.tooltipHead(i),
+    i === view.nowIndex ? "Live (now)" : i >= view.boundary ? "AI projection" : "Live",
+    ...layers.map((l) => l.values[i] ?? Number.NaN),
+  ])
+  const csv = [header, ...rows].map((r) => r.map(csvCell).join(",")).join("\n")
+  const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")
+  a.href = url
+  a.download = `${place.replace(/\W+/g, "-").toLowerCase()}-${metric}-${horizon}-${stamp}.csv`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
 }
 
 /** Format an Open-Meteo local ISO timestamp (…THH:MM) to a friendly clock label. */
@@ -813,6 +848,18 @@ export function LiveTrend() {
           <NcmClock timezone={payload?.timezone} />
         </div>
 
+        <div className="flex items-center gap-2">
+        {view ? (
+          <button
+            type="button"
+            onClick={() => downloadViewCsv(view, metric, horizon, location?.name ?? "location")}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card/60 px-3 py-1.5 font-mono text-xs font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:border-signal/60 hover:text-foreground"
+            aria-label={`Download ${metric === "dni" ? "Solar DNI" : "trend"} live values and AI projection as CSV`}
+          >
+            <Download className="h-3.5 w-3.5" aria-hidden="true" />
+            CSV
+          </button>
+        ) : null}
         {/* Horizon toggle — the optional extended predictive view */}
         <div
           role="tablist"
@@ -840,6 +887,7 @@ export function LiveTrend() {
               </button>
             )
           })}
+        </div>
         </div>
       </header>
 

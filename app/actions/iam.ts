@@ -28,6 +28,14 @@ export async function setIamUserTitle(userId: string, title: string) {
   revalidatePath("/admin/engineering")
 }
 
+export async function editIamUser(userId: string, username: string, title: string) {
+  await guard()
+  const name = String(username).trim().slice(0, 40)
+  if (!iamUsernameKey(name)) throw new Error("Username is required.")
+  await updateIamUser(userId, { username: name, title: String(title).trim().slice(0, 80) })
+  revalidatePath("/admin/engineering")
+}
+
 export async function setIamUserAccess(userId: string, accessStatus: "allowed" | "denied") {
   await guard()
   if (accessStatus !== "allowed" && accessStatus !== "denied") throw new Error("Invalid status.")

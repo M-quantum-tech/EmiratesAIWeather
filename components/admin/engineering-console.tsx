@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { Fragment, useEffect, useMemo, useRef, useState } from "react"
 import useSWR from "swr"
 import { BellRing, Check, Cloud, Database, ExternalLink, FlaskConical, LineChart, Link2, Plus, Power, RotateCcw, Save, Square, Trash2, Volume2, Wind } from "lucide-react"
 import {
@@ -19,6 +19,12 @@ import {
   evaluateSite,
   evaluateWindMonitor,
   drillLevelFromSites,
+  tierThresholds,
+  tierPreset,
+  tierOverlaps,
+  BUZZER_METRIC_KEYS,
+  type BuzzerMetricKey,
+  type TierThresholds,
   type AiPredictionSource,
   type CloudSourceConfig,
   type EscalationRule,
@@ -36,6 +42,8 @@ import {
 import { playBuzzerTest, stopBuzzerTest } from "@/lib/escalation-buzzer"
 import { ALERT_RADII_KM, offsetLocation, type AlertLevel, type WeatherPayload } from "@/lib/weather"
 import { computeSiteReadings } from "@/lib/site-readings"
+import { useGhaithMirror } from "@/components/weather/use-ghaith-mirror"
+import { GhaithMirrorPanel } from "@/components/admin/ghaith-mirror-panel"
 import { useWeather } from "@/components/weather/weather-provider"
 import { setSimulatorMode } from "@/components/weather/use-simulator-mode"
 import { NcmWarningsEditor } from "@/components/admin/ncm-warnings-editor"
@@ -70,6 +78,11 @@ const SIM_PRESETS: Record<AlertLevel, SiteReadings> = {
   yellow: { windMs: 15, gustMs: 20, rainMm: 3, cloudPct: 55 },
   orange: { windMs: 20, gustMs: 26, rainMm: 12, cloudPct: 70 },
   red: { windMs: 25, gustMs: 32, rainMm: 32, cloudPct: 90 },
+}
+
+/** Preset that lands on exactly this tier (never a higher one) from the escalation ranges. */
+function presetFromThresholds(level: AlertLevel, t: TierThresholds): SiteReadings {
+  return tierPreset(level, t)
 }
 
 let uid = 0
@@ -132,10 +145,12 @@ export function EngineeringConsole({
     refreshInterval: 60 * 1000,
     keepPreviousData: true,
   })
-  const siteReadings = useMemo<Record<SiteKey, SiteReadings>>(
+  const gridSiteReadings = useMemo<Record<SiteKey, SiteReadings>>(
     () => computeSiteReadings(payload?.units ?? "metric", payload?.current, farData?.current),
     [payload?.units, payload?.current, farData?.current],
   )
+  const ghaith = useGhaithMirror(gridSiteReadings)
+  const siteReadings = ghaith.readings
   const live = payload != null
   // When the Simulator is active, the test readings replace the live station numbers for both
   // sites so every downstream evaluator (evaluateSite + evaluateWindMonitor) lights the same
@@ -316,10 +331,23 @@ export function EngineeringConsole({
   // Derived simulator tier — the highest tier whose At-site OR Far-site ranges are met by the
   // current test readings, walking the ladder low→high. This is what actually reads the values
   // (not the pressed preset button), so dropping every value below the limits lands on green.
-  const derivedSimTier = useMemo<AlertLevel>(() => {
-    if (simLevel == null) return "green"
-    return drillLevelFromSites(effectiveReadings)
-  }, [simLevel, effectiveReadings])
+  // Read against the configured tier ranges with each tier's dead band applied on release.
+  const [derivedSimTier, setDerivedSimTier] = useState<AlertLevel>("green")
+  const simHeldRef = useRef<AlertLevel | null>(null)
+  useEffect(() => {
+    if (simLevel == null) {
+      simHeldRef.current = null
+      setDerivedSimTier("green")
+      return
+    }
+    const next = drillLevelFromSites(effectiveReadings, rules, simHeldRef.current)
+    simHeldRef.current = next
+    setDerivedSimTier(next)
+  }, [simLevel, effectiveReadings, rules])
+  const thresholds = useMemo(
+    () => ({ atSite: tierThresholds(rules, "atSite"), farSite: tierThresholds(rules, "farSite") }),
+    [rules],
+  )
 
   // Wire the simulator straight into the Buzzer test bench: while Simulator Mode is ON, the
   // alarm follows the derived tier through the exact same tone the live banner sounds. It plays
@@ -352,7 +380,11 @@ export function EngineeringConsole({
 
   function simulate(level: AlertLevel) {
     setSimLevel(level)
-    setSimValues({ atSite: { ...SIM_PRESETS[level] }, farSite: { ...SIM_PRESETS[level] } })
+    simHeldRef.current = null
+    setSimValues({
+      atSite: presetFromThresholds(level, thresholds.atSite),
+      farSite: presetFromThresholds(level, thresholds.farSite),
+    })
   }
 
   function updateSimValue(siteKey: SiteKey, key: keyof SiteReadings, value: string) {
@@ -429,6 +461,12 @@ export function EngineeringConsole({
       </section>
 
       {/* Wind Event Monitor thresholds */}
+      <GhaithMirrorPanel
+        mirror={ghaith.mirror}
+        source={ghaith.source}
+        relayEnabled={ghaith.relayEnabled}
+        onPushed={(m) => ghaith.mutate((prev) => ({ relayEnabled: prev?.relayEnabled ?? false, mirror: m }), false)}
+      />
       <WindMonitorEditor initialTiers={initialWindMonitor} />
 
       {/* Wind speed & gust source link (NCM COSMO-UAE wind) */}
@@ -546,6 +584,7 @@ export function EngineeringConsole({
               )
             })}
           </div>
+          <BuzzerThresholdTable thresholds={thresholds} rules={rules} />
           <div className="mt-3 flex flex-col gap-3">
             <span className="label-caps text-muted-foreground">Test live values — set each site independently</span>
             {SITE_KEYS.map((siteKey) => (
@@ -605,7 +644,7 @@ export function EngineeringConsole({
                   <span className="label-caps text-muted-foreground">
                     Dead bands · active hysteresis — tier holds until readings drop past these margins
                   </span>
-                  <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                     <NumberField
                       label="Wind speed"
                       unit="m/s"
@@ -623,6 +662,12 @@ export function EngineeringConsole({
                       unit="mm"
                       value={rule.deadbands.rainMm}
                       onChange={(v) => updateDeadband(rule.level, "rainMm", v)}
+                    />
+                    <NumberField
+                      label="Intensive cloud cover"
+                      unit="%"
+                      value={rule.deadbands.cloudPct}
+                      onChange={(v) => updateDeadband(rule.level, "cloudPct", v)}
                     />
                   </div>
                   <p className="text-xs text-muted-foreground/70">
@@ -1709,5 +1754,174 @@ function Field({ label, value, onChange }: { label: string; value: string; onCha
         className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-accent"
       />
     </label>
+  )
+}
+
+const BUZZER_METRIC_INFO: Record<BuzzerMetricKey, { name: string; unit: string }> = {
+  windMs: { name: "Wind speed", unit: "m/s" },
+  gustMs: { name: "Wind gust", unit: "m/s" },
+  rainMm: { name: "Rainfall", unit: "mm" },
+  cloudPct: { name: "Cloud cover", unit: "%" },
+}
+
+const fmtNum = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1))
+
+/**
+ * Read-only view of what sounds the auto buzzer, derived from the Escalation rules. The
+ * simulator only tests against these values — it never writes back to the ranges.
+ */
+function BuzzerThresholdTable({
+  thresholds,
+  rules,
+}: {
+  thresholds: Record<SiteKey, TierThresholds>
+  rules: EscalationRule[]
+}) {
+  const overlaps = tierOverlaps(rules)
+
+  return (
+    <div className="mt-3 flex flex-col overflow-hidden rounded-lg border border-border/60 bg-background/40">
+      <div className="flex flex-col gap-1 border-b border-border/60 px-3 py-2.5 md:flex-row md:items-center md:justify-between">
+        <span className="label-caps text-foreground">Auto buzzer trigger table · read only</span>
+        <span className="text-xs leading-relaxed text-muted-foreground">
+          Mirrors the Escalation rules below — edit ranges there · any one value ≥ entry buzzes (OR) · releases below
+          entry − dead band
+        </span>
+      </div>
+      {overlaps.length > 0 ? (
+        <div role="alert" className="flex flex-col gap-1 border-b border-alert-orange/40 bg-alert-orange/10 px-3 py-2.5">
+          <span className="font-mono text-xs font-bold uppercase tracking-wide text-alert-orange">
+            Range conflict — lower tier starts at or above a higher tier
+          </span>
+          <ul className="flex flex-col gap-0.5 text-xs leading-relaxed text-foreground">
+            {overlaps.map((o) => (
+              <li key={`${o.siteKey}-${o.metric}-${o.lower}-${o.higher}`}>
+                {o.siteKey === "atSite" ? "At site" : "Far site"} · {BUZZER_METRIC_INFO[o.metric].name}:{" "}
+                {LEVEL_META[o.lower].name} {fmtNum(o.lowerEntry)} ≥ {LEVEL_META[o.higher].name} {fmtNum(o.higherEntry)}{" "}
+                <span className="text-muted-foreground">— this reading escalates straight to {LEVEL_META[o.higher].name}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[60rem] border-collapse text-left text-xs">
+          <thead>
+            <tr className="bg-muted/40">
+              <th
+                scope="col"
+                rowSpan={2}
+                className="sticky left-0 z-10 border-r border-border/60 bg-muted px-3 py-2 font-mono font-medium uppercase tracking-wide text-muted-foreground"
+              >
+                Tier
+              </th>
+              {BUZZER_METRIC_KEYS.map((key) => (
+                <th
+                  key={key}
+                  scope="colgroup"
+                  colSpan={3}
+                  className="border-r border-border/60 px-3 pt-2 pb-1 text-center font-mono font-semibold uppercase tracking-wide text-foreground last:border-r-0"
+                >
+                  {BUZZER_METRIC_INFO[key].name}
+                  <span className="ml-1 font-normal normal-case text-muted-foreground">
+                    ({BUZZER_METRIC_INFO[key].unit})
+                  </span>
+                </th>
+              ))}
+            </tr>
+            <tr className="border-b border-border/60 bg-muted/40 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
+              {BUZZER_METRIC_KEYS.map((key) => (
+                <Fragment key={key}>
+                  <th scope="col" className="px-2 pb-2 text-center font-medium">At site</th>
+                  <th scope="col" className="px-2 pb-2 text-center font-medium">Far site</th>
+                  <th scope="col" className="border-r border-border/60 px-2 pb-2 text-center font-medium last:border-r-0">
+                    Dead band
+                  </th>
+                </Fragment>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {ESCALATION_LEVELS.map((level) => {
+              const meta = LEVEL_META[level]
+              const isGreen = level === "green"
+              const db = rules.find((r) => r.level === level)?.deadbands
+              const yellowDb = rules.find((r) => r.level === "yellow")?.deadbands
+              return (
+                <tr key={level} className={cn("border-b border-border/40 last:border-b-0", meta.fill)}>
+                  <th
+                    scope="row"
+                    className="sticky left-0 z-10 border-r border-border/60 bg-card px-3 py-2.5 align-middle"
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", meta.dot)} aria-hidden="true" />
+                      <span className={cn("font-mono text-xs font-bold uppercase tracking-wide", meta.text)}>
+                        {meta.name}
+                      </span>
+                    </span>
+                    <span className="mt-0.5 block text-[11px] font-normal text-muted-foreground">
+                      {isGreen ? "All clear · buzzer silent" : "Buzzer sounds"}
+                    </span>
+                  </th>
+                  {BUZZER_METRIC_KEYS.map((key) => {
+                    const band = db?.[key] ?? 0
+                    return (
+                      <Fragment key={key}>
+                        {SITE_KEYS.map((siteKey) => {
+                          if (isGreen) {
+                            const yEntry = thresholds[siteKey].yellow[key]
+                            const clears = yEntry == null ? null : Math.max(0, yEntry - (yellowDb?.[key] ?? 0))
+                            return (
+                              <td key={siteKey} className="px-2 py-2.5 text-center align-middle font-mono tabular-nums">
+                                {yEntry == null ? (
+                                  <span className="text-muted-foreground/60">—</span>
+                                ) : (
+                                  <span className="flex flex-col items-center leading-tight">
+                                    <span className="text-foreground">{"< "}{fmtNum(yEntry)}</span>
+                                    <span className="text-[10px] text-muted-foreground">clears ≤ {fmtNum(clears!)}</span>
+                                  </span>
+                                )}
+                              </td>
+                            )
+                          }
+                          const t = thresholds[siteKey][level][key]
+                          return (
+                            <td key={siteKey} className="px-2 py-2 text-center align-middle">
+                              <span className="flex flex-col items-center gap-0.5">
+                                <span
+                                  className={cn(
+                                    "font-mono text-sm font-semibold tabular-nums",
+                                    t == null ? "text-muted-foreground/60" : "text-foreground",
+                                  )}
+                                >
+                                  {t == null ? "off" : `≥ ${fmtNum(t)}`}
+                                </span>
+                                <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+                                  {t == null ? "not driving" : `rel < ${fmtNum(Math.max(0, t - band))}`}
+                                </span>
+                              </span>
+                            </td>
+                          )
+                        })}
+                        <td className="border-r border-border/60 px-2 py-2 text-center align-middle last:border-r-0">
+                          {isGreen ? (
+                            <span className="font-mono text-muted-foreground/60">—</span>
+                          ) : (
+                            <span className="flex flex-col items-center gap-0.5">
+                              <span className="font-mono text-sm tabular-nums text-foreground">{fmtNum(band)}</span>
+                              <span className="font-mono text-[10px] text-muted-foreground">± both sites</span>
+                            </span>
+                          )}
+                        </td>
+                      </Fragment>
+                    )
+                  })}
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   )
 }

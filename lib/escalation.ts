@@ -25,6 +25,8 @@ export type TierDeadbands = {
   directionDeg: number
   /** Rainfall dead band (mm). */
   rainMm: number
+  /** Intensive cloud cover dead band (%). */
+  cloudPct: number
 }
 
 /** One tier of the NCM-style escalation ladder. */
@@ -50,10 +52,10 @@ export type EscalationRule = {
 
 /** Built-in dead bands per tier — widen as severity climbs to avoid flapping. */
 export const DEFAULT_DEADBANDS: Record<AlertLevel, TierDeadbands> = {
-  green: { windMs: 1, gustMs: 2, directionDeg: 20, rainMm: 0.5 },
-  yellow: { windMs: 1.5, gustMs: 2.5, directionDeg: 15, rainMm: 1 },
-  orange: { windMs: 2, gustMs: 3, directionDeg: 10, rainMm: 2 },
-  red: { windMs: 2.5, gustMs: 4, directionDeg: 8, rainMm: 3 },
+  green: { windMs: 1, gustMs: 2, directionDeg: 20, rainMm: 0.5, cloudPct: 5 },
+  yellow: { windMs: 1.5, gustMs: 2.5, directionDeg: 15, rainMm: 1, cloudPct: 5 },
+  orange: { windMs: 2, gustMs: 3, directionDeg: 10, rainMm: 2, cloudPct: 5 },
+  red: { windMs: 2.5, gustMs: 4, directionDeg: 8, rainMm: 3, cloudPct: 5 },
 }
 
 /** Parse an unknown value into a clean TierDeadbands, falling back per level. */
@@ -69,6 +71,7 @@ export function parseDeadbands(value: unknown, level: AlertLevel): TierDeadbands
     gustMs: num(r.gustMs, d.gustMs, 80),
     directionDeg: num(r.directionDeg, d.directionDeg, 180),
     rainMm: num(r.rainMm, d.rainMm, 200),
+    cloudPct: num(r.cloudPct, d.cloudPct, 50),
   }
 }
 
@@ -125,11 +128,11 @@ export type SiteConfig = {
   source: SourceLink
 }
 
-const AT_SITE_SOURCE: SourceLink = {
+export const AT_SITE_SOURCE: SourceLink = {
   label: "NCM AWS Wind · at site",
   url: "https://ghaith.ncm.gov.ae/?lang=en#aws-wind",
 }
-const FAR_SITE_SOURCE: SourceLink = {
+export const FAR_SITE_SOURCE: SourceLink = {
   label: "NCM COSMO-UAE Wind · far site",
   url: "https://ghaith.ncm.gov.ae/?lang=en#cosmo-uae-wind",
 }
@@ -415,14 +418,18 @@ export function parseMetricRanges(value: unknown, fallback: MetricRange[], max: 
   return out.length ? out : fallback.map((r) => ({ ...r }))
 }
 
-/** Parse a per-site data source, allowing an intentionally empty (unassigned) feed. */
-function parseSiteSource(value: unknown): SourceLink {
-  if (!value || typeof value !== "object") return { label: "" }
+/**
+ * Parse a per-site data source. A saved source with no usable URL falls back to the
+ * site's NCM Ghaith feed (#aws-wind at site, #cosmo-uae-wind far site), so the
+ * escalation panel never loses its upstream link.
+ */
+function parseSiteSource(value: unknown, fallback: SourceLink): SourceLink {
+  if (!value || typeof value !== "object") return { ...fallback }
   const r = value as Record<string, unknown>
   const label = String(r.label ?? "").slice(0, 80).trim()
   const url = sanitizeSourceUrl(r.url)
-  if (!label && !url) return { label: "" }
-  return { label: label || url!, ...(url ? { url } : {}) }
+  if (!url) return { ...fallback }
+  return { label: label || url, url }
 }
 
 /** Parse an unknown value into a clean SiteConfig, falling back per field. */
@@ -434,7 +441,7 @@ export function parseSiteConfig(value: unknown, fallback: SiteConfig): SiteConfi
     gustMs: parseMetricRanges(r.gustMs, fallback.gustMs, SITE_METRIC_META.gustMs.max),
     rainMm: parseMetricRanges(r.rainMm, fallback.rainMm, SITE_METRIC_META.rainMm.max),
     cloudPct: parseMetricRanges(r.cloudPct, fallback.cloudPct, SITE_METRIC_META.cloudPct.max),
-    source: r.source === undefined ? { ...fallback.source } : parseSiteSource(r.source),
+    source: parseSiteSource(r.source, fallback.source),
   }
 }
 
@@ -451,6 +458,7 @@ const SITE_TRIGGER_METRICS: { key: SiteMetricKey; label: string }[] = [
   { key: "windMs", label: "Wind" },
   { key: "gustMs", label: "Gust" },
   { key: "rainMm", label: "Rain" },
+  { key: "cloudPct", label: "Cloud" },
 ]
 
 /**
@@ -464,11 +472,11 @@ export function evaluateSite(
   readings: SiteReadings,
 ): { met: boolean; reason: string | null } {
   for (const { key, label } of SITE_TRIGGER_METRICS) {
-    const ranges = config[key]
-    if (!ranges.length) continue
-    const top = ranges[ranges.length - 1]
+    const floor = topBandFloor(config[key])
+    if (floor == null) continue
+    const top = config[key].find((r) => r.min === floor)!
     const value = readings[key]
-    if (Number.isFinite(value) && value >= top.min) {
+    if (Number.isFinite(value) && value >= floor) {
       const unit = SITE_METRIC_META[key].unit
       const shown = Number.isInteger(value) ? String(value) : value.toFixed(1)
       return { met: true, reason: `${label} ${shown} ${unit} · ${top.label}` }
@@ -495,6 +503,8 @@ export type HysteresisReadings = {
   gustMs: number
   /** Rain accumulation over the next 6 h (mm). */
   rainMm: number
+  /** Intensive cloud cover (%). */
+  cloudPct?: number
 }
 
 /**
@@ -509,10 +519,17 @@ export type HysteresisReadings = {
  * severe-band `evaluateSite` check, which shares identical ranges across tiers and
  * can therefore only ever read green or the top tier.
  */
-export function levelFromReadings(readings: { windMs: number; rainMm: number }): AlertLevel {
+export function levelFromReadings(
+  readings: { windMs: number; gustMs?: number; rainMm: number; cloudPct?: number },
+  thresholds?: TierThresholds,
+): AlertLevel {
   let level: AlertLevel = "green"
   for (const l of ESCALATION_LEVELS) {
     if (l === "green") continue
+    if (thresholds) {
+      if (metricsAtOrAbove(readings, thresholds[l], 0)) level = l
+      continue
+    }
     const windHit = Number.isFinite(readings.windMs) && readings.windMs >= LEVEL_WIND_ENTRY_MS[l]
     const rainHit = Number.isFinite(readings.rainMm) && readings.rainMm >= LEVEL_RAIN_ENTRY_MM[l]
     if (windHit || rainHit) level = l
@@ -520,14 +537,194 @@ export function levelFromReadings(readings: { windMs: number; rainMm: number }):
   return level
 }
 
+/** Metrics that drive the buzzer — wind, gust, rainfall and intensive cloud cover. */
+export const BUZZER_METRIC_KEYS = ["windMs", "gustMs", "rainMm", "cloudPct"] as const
+export type BuzzerMetricKey = (typeof BUZZER_METRIC_KEYS)[number]
+
+/** Entry value per driving metric for one tier. `null` = that metric doesn't drive this tier. */
+export type TierEntry = Record<BuzzerMetricKey, number | null>
+export type TierThresholds = Record<AlertLevel, TierEntry>
+
 /**
- * Highest tier across BOTH sites — the value that drives the Simulator's derived
- * tier and its buzzer. Either site reaching a tier escalates the whole drill to it,
- * mirroring how the live ladder escalates on the worst site.
+ * Derive each tier's buzzer entry values straight from the Tier 2–4 (Yellow / Orange / Red)
+ * escalation ranges. For every metric and site, a tier engages at the floor of its most
+ * severe configured band — the same check the station's At-site / Far-site indicators use —
+ * so the trigger table always mirrors the escalation rules. Any one metric (wind, gust,
+ * rainfall or cloud cover) reaching an entry trips that tier; the highest tier wins.
  */
-export function drillLevelFromSites(sites: { atSite: SiteReadings; farSite: SiteReadings }): AlertLevel {
-  const a = levelFromReadings(sites.atSite)
-  const b = levelFromReadings(sites.farSite)
+export function tierThresholds(rules: EscalationRule[], siteKey: SiteKey): TierThresholds {
+  const out = {} as TierThresholds
+  for (const level of ESCALATION_LEVELS) {
+    const site = rules.find((r) => r.level === level)?.[siteKey] ?? DEFAULT_SITE_CONFIG[level][siteKey]
+    const entry = { windMs: null, gustMs: null, rainMm: null, cloudPct: null } as TierEntry
+    if (level !== "green") {
+      for (const key of BUZZER_METRIC_KEYS) entry[key] = topBandFloor(site[key])
+    }
+    out[level] = entry
+  }
+  return out
+}
+
+const HIGHER_TIERS: Record<AlertLevel, AlertingLevel[]> = {
+  green: ["yellow", "orange", "red"],
+  yellow: ["orange", "red"],
+  orange: ["red"],
+  red: [],
+}
+
+/**
+ * Test readings that land on `level` and nothing higher. A metric's entry is only used when it
+ * sits below every higher tier's entry for that metric, otherwise the OR rule would trip the
+ * higher tier. Falls back to every entry (and therefore a higher tier) only when the ranges
+ * leave no metric unique to this tier — `tierOverlaps` reports those conflicts.
+ */
+export function tierPreset(level: AlertLevel, t: TierThresholds): SiteReadings {
+  const zero: SiteReadings = { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 }
+  if (level === "green") return zero
+  const exclusive = { ...zero }
+  const all = { ...zero }
+  let any = false
+  for (const key of BUZZER_METRIC_KEYS) {
+    const e = t[level][key]
+    if (e == null) continue
+    all[key] = e
+    if (HIGHER_TIERS[level].every((h) => t[h][key] == null || e < t[h][key]!)) {
+      exclusive[key] = e
+      any = true
+    }
+  }
+  return any ? exclusive : all
+}
+
+export type TierOverlap = { siteKey: SiteKey; metric: BuzzerMetricKey; lower: AlertingLevel; lowerEntry: number; higher: AlertingLevel; higherEntry: number }
+
+/** Entries where a lower tier starts at or above a higher tier — that lower tier escalates straight past itself. */
+export function tierOverlaps(rules: EscalationRule[]): TierOverlap[] {
+  const out: TierOverlap[] = []
+  for (const siteKey of SITE_KEYS) {
+    const t = tierThresholds(rules, siteKey)
+    for (const lower of ["yellow", "orange"] as const) {
+      for (const metric of BUZZER_METRIC_KEYS) {
+        const le = t[lower][metric]
+        if (le == null) continue
+        for (const higher of HIGHER_TIERS[lower]) {
+          const he = t[higher][metric]
+          if (he != null && le >= he) out.push({ siteKey, metric, lower, lowerEntry: le, higher, higherEntry: he })
+        }
+      }
+    }
+  }
+  return out
+}
+
+/** Floor of the most severe (highest) configured band, or null when no band starts above 0. */
+export function topBandFloor(ranges: MetricRange[]): number | null {
+  const floors = ranges.map((r) => r.min).filter((m) => Number.isFinite(m) && m > 0)
+  return floors.length ? Math.max(...floors) : null
+}
+
+/** True when any driving metric is at/above its entry, offset by `margin` (negative = release side). */
+function metricsAtOrAbove(
+  readings: { windMs: number; gustMs?: number; rainMm: number; cloudPct?: number },
+  entry: TierEntry,
+  margin: number | TierDeadbands,
+): boolean {
+  return BUZZER_METRIC_KEYS.some((key) => {
+    const t = entry[key]
+    const v = readings[key]
+    if (t == null || v == null || !Number.isFinite(v)) return false
+    const m = typeof margin === "number" ? margin : -margin[key]
+    return m < 0 ? v > t + m : v >= t + m
+  })
+}
+
+/**
+ * Tier for one site's readings with dead-band hysteresis against the configured ranges.
+ * Escalates the moment a reading crosses a tier's entry; once latched, a tier only
+ * releases when every driving metric falls below its entry minus that tier's dead band.
+ */
+export function siteTierWithDeadband(
+  readings: SiteReadings,
+  thresholds: TierThresholds,
+  held: AlertLevel | null,
+  rules: EscalationRule[],
+): AlertLevel {
+  const raw = levelFromReadings(readings, thresholds)
+  const rank = (l: AlertLevel) => ESCALATION_LEVELS.indexOf(l)
+  if (held == null || rank(raw) >= rank(held)) return raw
+  let current = held
+  while (rank(raw) < rank(current)) {
+    const db = rules.find((r) => r.level === current)?.deadbands ?? DEFAULT_DEADBANDS[current]
+    if (metricsAtOrAbove(readings, thresholds[current], db)) return current
+    current = ESCALATION_LEVELS[rank(current) - 1]
+  }
+  return current
+}
+
+export type AlertingLevel = Exclude<AlertLevel, "green">
+
+/** One driving metric at one site, read against every tier's entry value. */
+export type MetricBreakdownRow = {
+  key: BuzzerMetricKey
+  label: string
+  unit: string
+  value: number
+  entries: Record<AlertingLevel, number | null>
+  /** Highest tier whose entry this reading meets (green = below every entry). */
+  reached: AlertLevel
+}
+
+const BREAKDOWN_LABELS: Record<BuzzerMetricKey, string> = {
+  windMs: "Wind speed",
+  gustMs: "Wind gust",
+  rainMm: "Rainfall",
+  cloudPct: "Cloud cover",
+}
+
+/** Per-metric view of why a site sits at its tier — the data behind the Alarm Details table. */
+export function metricBreakdown(readings: SiteReadings, thresholds: TierThresholds): MetricBreakdownRow[] {
+  return BUZZER_METRIC_KEYS.map((key) => {
+    const value = readings[key]
+    let reached: AlertLevel = "green"
+    const entries = { yellow: null, orange: null, red: null } as Record<AlertingLevel, number | null>
+    for (const level of ["yellow", "orange", "red"] as const) {
+      const t = thresholds[level][key]
+      entries[level] = t
+      if (t != null && Number.isFinite(value) && value >= t) reached = level
+    }
+    return { key, label: BREAKDOWN_LABELS[key], unit: SITE_METRIC_META[key].unit, value, entries, reached }
+  })
+}
+
+/** Short human reason for the metric that put a site into `level`, e.g. "Wind 12 m/s ≥ 11". */
+export function tierReason(readings: SiteReadings, thresholds: TierThresholds, level: AlertLevel): string | null {
+  if (level === "green") return null
+  const entry = thresholds[level]
+  const names: Record<BuzzerMetricKey, string> = { windMs: "Wind", gustMs: "Gust", rainMm: "Rain", cloudPct: "Cloud" }
+  for (const key of BUZZER_METRIC_KEYS) {
+    const t = entry[key]
+    const v = readings[key]
+    if (t != null && Number.isFinite(v) && v >= t) {
+      const shown = Number.isInteger(v) ? String(v) : v.toFixed(1)
+      return `${names[key]} ${shown} ${SITE_METRIC_META[key].unit} ≥ ${t}`
+    }
+  }
+  return null
+}
+
+/**
+ * Highest tier across BOTH sites, read against the configured escalation ranges — the
+ * value that drives the derived tier and the auto buzzer. Either site reaching a tier
+ * escalates to it, mirroring how the live ladder escalates on the worst site. Pass the
+ * previously held tier to apply dead-band hysteresis on the way down.
+ */
+export function drillLevelFromSites(
+  sites: { atSite: SiteReadings; farSite: SiteReadings },
+  rules: EscalationRule[] = DEFAULT_RULES,
+  held: AlertLevel | null = null,
+): AlertLevel {
+  const a = siteTierWithDeadband(sites.atSite, tierThresholds(rules, "atSite"), held, rules)
+  const b = siteTierWithDeadband(sites.farSite, tierThresholds(rules, "farSite"), held, rules)
   return ESCALATION_LEVELS.indexOf(a) >= ESCALATION_LEVELS.indexOf(b) ? a : b
 }
 
@@ -549,14 +746,23 @@ export function applyLevelHysteresis(
   if (held == null) return raw
   const rank = (l: AlertLevel) => ESCALATION_LEVELS.indexOf(l)
   if (rank(raw) >= rank(held)) return raw
+  const thresholds = tierThresholds(rules, "atSite")
   let current = held
   while (rank(raw) < rank(current)) {
     const db = rules.find((r) => r.level === current)?.deadbands ?? DEFAULT_DEADBANDS[current]
-    const windRelease = LEVEL_WIND_ENTRY_MS[current] - db.windMs
-    const gustRelease = LEVEL_WIND_ENTRY_MS[current] - db.gustMs
-    const rainRelease = LEVEL_RAIN_ENTRY_MM[current] - db.rainMm
+    const entry = thresholds[current]
+    const windRelease = (entry.windMs ?? LEVEL_WIND_ENTRY_MS[current]) - db.windMs
+    const gustRelease = (entry.gustMs ?? LEVEL_WIND_ENTRY_MS[current]) - db.gustMs
+    const rainRelease = (entry.rainMm ?? LEVEL_RAIN_ENTRY_MM[current]) - db.rainMm
+    const cloudHeld =
+      entry.cloudPct != null &&
+      readings.cloudPct != null &&
+      readings.cloudPct > entry.cloudPct - db.cloudPct
     const stillHeld =
-      readings.windMs > windRelease || readings.gustMs > gustRelease || readings.rainMm > rainRelease
+      readings.windMs > windRelease ||
+      readings.gustMs > gustRelease ||
+      readings.rainMm > rainRelease ||
+      cloudHeld
     if (stillHeld) return current
     current = ESCALATION_LEVELS[rank(current) - 1]
   }
