@@ -1,15 +1,15 @@
 "use client"
 
 import { MapPin, Navigation2, Wind } from "lucide-react"
-import { ALERT_RADII_KM, type AlertLevel } from "@/lib/weather"
+import { FAR_SITE_KM, LEVEL_NAME, SAFE_RADIUS_KM, type AlertLevel } from "@/lib/weather"
 import { cn } from "@/lib/utils"
 
 /** Outer → inner. Green is the widest ring (farthest), red the tightest (closest). */
 const TIERS: { level: AlertLevel; label: string; ring: string; dot: string; text: string; glow: string }[] = [
-  { level: "green", label: "GREEN", ring: "border-alert-green/55", dot: "bg-alert-green", text: "text-alert-green", glow: "var(--alert-green)" },
-  { level: "yellow", label: "YELLOW", ring: "border-alert-yellow/55", dot: "bg-alert-yellow", text: "text-alert-yellow", glow: "var(--alert-yellow)" },
-  { level: "orange", label: "ORANGE", ring: "border-alert-orange/60", dot: "bg-alert-orange", text: "text-alert-orange", glow: "var(--alert-orange)" },
-  { level: "red", label: "RED", ring: "border-alert-red/70", dot: "bg-alert-red", text: "text-alert-red", glow: "var(--alert-red)" },
+  { level: "green", label: "LEVEL 1", ring: "border-alert-green/55", dot: "bg-alert-green", text: "text-alert-green", glow: "var(--alert-green)" },
+  { level: "yellow", label: "LEVEL 2", ring: "border-alert-yellow/55", dot: "bg-alert-yellow", text: "text-alert-yellow", glow: "var(--alert-yellow)" },
+  { level: "orange", label: "LEVEL 3", ring: "border-alert-orange/60", dot: "bg-alert-orange", text: "text-alert-orange", glow: "var(--alert-orange)" },
+  { level: "red", label: "LEVEL 4", ring: "border-alert-red/70", dot: "bg-alert-red", text: "text-alert-red", glow: "var(--alert-red)" },
 ]
 
 const MAX_PX = 288 // diameter of the outermost (green) ring
@@ -69,7 +69,7 @@ function SiteMarker({ site, maxRadius }: { site: RadarSite; maxRadius: number })
   const y = -Math.cos(rad) * r
   const alerting = site.level !== "green"
   const isCentre = site.distanceKm === 0
-  const title = `${site.label} · ${site.distanceKm} km · wind ${site.windMs.toFixed(1)} m/s · gust ${site.gustMs.toFixed(1)} m/s · ${site.level.toUpperCase()}${site.reason ? ` · ${site.reason}` : ""}`
+  const title = `${site.label} · ${site.distanceKm} km · wind ${site.windMs.toFixed(1)} m/s · gust ${site.gustMs.toFixed(1)} m/s · ${LEVEL_NAME[site.level]}${site.reason ? ` · ${site.reason}` : ""}`
   return (
     <span
       className="absolute z-20 flex -translate-x-1/2 flex-col items-center"
@@ -124,8 +124,8 @@ export function ProximityRings({
   windDirection = 0,
   sites,
 }: ProximityProps) {
-  const maxRadius = ALERT_RADII_KM.green
-  const yellowSize = (ALERT_RADII_KM.yellow / maxRadius) * MAX_PX
+  const maxRadius = SAFE_RADIUS_KM.red
+  const yellowSize = (FAR_SITE_KM / maxRadius) * MAX_PX
   const activeTier = TIERS.find((t) => t.level === active) ?? TIERS[0]
 
   return (
@@ -152,8 +152,8 @@ export function ProximityRings({
 
         {TIERS.map((tier) => {
           const isActive = tier.level === active
-          const isInsideActive = RANK[tier.level] >= RANK[active]
-          const size = (ALERT_RADII_KM[tier.level] / maxRadius) * MAX_PX
+          const isInsideActive = RANK[tier.level] <= RANK[active]
+          const size = (SAFE_RADIUS_KM[tier.level] / maxRadius) * MAX_PX
           return (
             <div
               key={tier.level}
@@ -176,7 +176,7 @@ export function ProximityRings({
                   isActive ? tier.text : "text-muted-foreground/70",
                 )}
               >
-                {ALERT_RADII_KM[tier.level]}
+                {SAFE_RADIUS_KM[tier.level]}
                 <span className="text-[0.5rem] font-medium opacity-70">km</span>
               </span>
               {isActive ? (

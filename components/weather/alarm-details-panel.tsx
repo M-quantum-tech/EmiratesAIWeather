@@ -2,7 +2,7 @@
 
 import { Fragment } from "react"
 import { CloudLightning, MapPin, Siren, Wind } from "lucide-react"
-import { ALERT_RADII_KM, type AlertLevel, type Hazard } from "@/lib/weather"
+import { LEVEL_NAME, SAFE_RADIUS_KM, type AlertLevel, type Hazard } from "@/lib/weather"
 import type { AlertingLevel, MetricBreakdownRow } from "@/lib/escalation"
 import { cn } from "@/lib/utils"
 
@@ -14,44 +14,41 @@ const LEVEL_BG: Record<AlertLevel, string> = {
   red: "bg-alert-red",
 }
 const MEANING: Record<AlertLevel, { action: string; safe: string; hazard: string }> = {
-  green: { action: "Safe", safe: `Safe up to ${ALERT_RADII_KM.green} km`, hazard: `No hazard within ${ALERT_RADII_KM.green} km` },
-  yellow: { action: "Watch", safe: `Safe up to ${ALERT_RADII_KM.yellow} km`, hazard: `Hazard about ${ALERT_RADII_KM.yellow} km away` },
-  orange: { action: "Prepare", safe: `Safe up to ${ALERT_RADII_KM.orange} km`, hazard: `Hazard about ${ALERT_RADII_KM.orange} km away` },
-  red: { action: "Take shelter", safe: `Safe up to ${ALERT_RADII_KM.red} km`, hazard: `Hazard within ${ALERT_RADII_KM.red} km` },
+  green: { action: "Normal", safe: `Safe for ${SAFE_RADIUS_KM.green} km`, hazard: "All on-site readings below Level 2 limits" },
+  yellow: { action: "Watch", safe: `Safe for ${SAFE_RADIUS_KM.yellow} km`, hazard: "An on-site reading reached a Level 2 limit" },
+  orange: { action: "Prepare", safe: `Safe for ${SAFE_RADIUS_KM.orange} km`, hazard: "An on-site reading reached a Level 3 limit" },
+  red: { action: "Take shelter", safe: `Safe for ${SAFE_RADIUS_KM.red} km`, hazard: "An on-site reading reached a Level 4 limit" },
 }
-const SCALE_MAX_KM = ALERT_RADII_KM.green + 10
+const SCALE_MAX_KM = SAFE_RADIUS_KM.red
 const pct = (km: number) => `${(Math.min(km, SCALE_MAX_KM) / SCALE_MAX_KM) * 100}%`
 
-/** 0 km (you) → 70 km bar: each band is coloured by the tier a hazard at that distance sets. */
+/** 0 km (site) → 60 km bar: each level owns the buffer band up to its safe radius. */
 function DistanceScale({ level }: { level: AlertLevel }) {
-  const bands: { level: AlertLevel; from: number; to: number }[] = [
-    { level: "red", from: 0, to: ALERT_RADII_KM.red },
-    { level: "orange", from: ALERT_RADII_KM.red, to: ALERT_RADII_KM.orange },
-    { level: "yellow", from: ALERT_RADII_KM.orange, to: ALERT_RADII_KM.yellow },
-    { level: "green", from: ALERT_RADII_KM.yellow, to: SCALE_MAX_KM },
-  ]
-  const ticks = [0, ALERT_RADII_KM.red, ALERT_RADII_KM.orange, ALERT_RADII_KM.yellow, ALERT_RADII_KM.green]
-  const hazardKm = level === "green" ? null : ALERT_RADII_KM[level]
+  const bands: { level: AlertLevel; from: number; to: number }[] = LEVEL_ORDER.map((l, i) => ({
+    level: l,
+    from: i === 0 ? 0 : SAFE_RADIUS_KM[LEVEL_ORDER[i - 1]],
+    to: SAFE_RADIUS_KM[l],
+  }))
+  const ticks = [0, ...LEVEL_ORDER.map((l) => SAFE_RADIUS_KM[l])]
+  const reach = LEVEL_ORDER.indexOf(level)
   return (
-    <div className="flex flex-col gap-1.5" role="img" aria-label={`Distance scale: ${MEANING[level].hazard}. ${MEANING[level].safe}.`}>
+    <div className="flex flex-col gap-1.5" role="img" aria-label={`${LEVEL_NAME[level]}: ${MEANING[level].safe}.`}>
       <div className="relative h-8">
-        <div className="absolute inset-x-0 top-3 flex h-2.5 overflow-hidden rounded-full">
-          {bands.map((b) => (
+        <div className="absolute inset-x-0 top-3 flex h-2.5 overflow-hidden rounded-full bg-border/50">
+          {bands.map((b, i) => (
             <span
               key={b.level}
-              className={cn(LEVEL_BG[b.level], b.level === level ? "opacity-100" : "opacity-35")}
+              className={cn(LEVEL_BG[b.level], i <= reach ? "opacity-100" : "opacity-25")}
               style={{ width: `${((b.to - b.from) / SCALE_MAX_KM) * 100}%` }}
             />
           ))}
         </div>
-        <span className="absolute left-0 top-0 -translate-x-1/2 font-mono text-[0.5625rem] font-bold uppercase text-foreground">
-          You
+        <span className="absolute left-0 top-0 font-mono text-[0.5625rem] font-bold uppercase text-foreground">
+          Site
         </span>
-        {hazardKm != null && (
-          <span className="absolute top-0 flex -translate-x-1/2 flex-col items-center" style={{ left: pct(hazardKm) }}>
-            <span className={cn("h-7 w-1 rounded-full tier-blink", LEVEL_BG[level])} aria-hidden="true" />
-          </span>
-        )}
+        <span className="absolute top-0 flex -translate-x-1/2 flex-col items-center" style={{ left: pct(SAFE_RADIUS_KM[level]) }}>
+          <span className={cn("h-7 w-1 rounded-full", LEVEL_BG[level], level !== "green" && "tier-blink")} aria-hidden="true" />
+        </span>
       </div>
       <div className="relative h-4">
         {ticks.map((t) => (
@@ -97,11 +94,15 @@ export type AlarmDriver = {
   label: string
   level: AlertLevel
   reason: string
+  /** Shown for awareness only — does not set the alarm level or sound the buzzer. */
+  advisory?: boolean
 }
 
 type Props = {
   finalLevel: AlertLevel
   alarmActive: boolean
+  /** Explains a level held above the live readings by the release dead band. */
+  deadbandHold?: string | null
   simulator: boolean
   drivers: AlarmDriver[]
   sites: AlarmSite[]
@@ -110,7 +111,7 @@ type Props = {
 }
 
 const fmt = (v: number) => (Number.isFinite(v) ? (Number.isInteger(v) ? String(v) : v.toFixed(1)) : "—")
-const cap = (l: AlertLevel) => l.charAt(0).toUpperCase() + l.slice(1)
+const cap = (l: AlertLevel) => LEVEL_NAME[l]
 
 function LevelChip({ level, blink = false }: { level: AlertLevel; blink?: boolean }) {
   return (
@@ -122,7 +123,7 @@ function LevelChip({ level, blink = false }: { level: AlertLevel; blink?: boolea
       )}
     >
       <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true" />
-      {level}
+      {LEVEL_NAME[level]}
     </span>
   )
 }
@@ -135,13 +136,15 @@ function LevelChip({ level, blink = false }: { level: AlertLevel; blink?: boolea
 export function AlarmDetailsPanel({
   finalLevel,
   alarmActive,
+  deadbandHold = null,
   simulator,
   drivers,
   sites,
   forecastHazards,
   windMonitor,
 }: Props) {
-  const triggering = drivers.filter((d) => d.level !== "green")
+  const triggering = drivers.filter((d) => d.level !== "green" && !d.advisory)
+  const advisories = drivers.filter((d) => d.level !== "green" && d.advisory)
 
   return (
     <section
@@ -188,13 +191,21 @@ export function AlarmDetailsPanel({
               {cap(finalLevel)} · {MEANING[finalLevel].action}
             </span>
             {" — "}
-            {MEANING[finalLevel].hazard}. {MEANING[finalLevel].safe}.
+            {MEANING[finalLevel].safe}. {MEANING[finalLevel].hazard}.
           </p>
           <p className="text-pretty text-sm leading-relaxed text-foreground/80">
             {triggering.length
               ? `Cause: ${triggering.map((d) => `${d.label} (${d.reason})`).join("; ")}.`
-              : "Nothing is causing an alarm. Every check below is OK."}
+              : deadbandHold
+                ? deadbandHold
+                : "Nothing on site is causing an alarm. Every on-site check below is OK."}
           </p>
+          {advisories.length > 0 && (
+            <p className="text-pretty text-xs leading-relaxed text-foreground/70">
+              {"Advisory only (no buzzer): "}
+              {advisories.map((d) => `${d.label.replace(" (advisory)", "")} at ${LEVEL_NAME[d.level]}`).join("; ")}.
+            </p>
+          )}
         </div>
         <DistanceScale level={finalLevel} />
       </div>
@@ -202,7 +213,7 @@ export function AlarmDetailsPanel({
       {/* 2 · What the colours mean */}
       <div className="mt-4">
         <h4 className="font-mono text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground">
-          What the colours mean
+          What each level means · safety buffer around the site
         </h4>
         <ul className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           {LEVEL_ORDER.map((l) => {
@@ -235,7 +246,7 @@ export function AlarmDetailsPanel({
       {/* 3 · Each check, OK or causing the alarm */}
       <div className="mt-4">
         <h4 className="font-mono text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground">
-          What the model checks · the worst one sets the colour
+          What the model checks · on-site checks set the level, advisories do not
         </h4>
         <ul className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           {drivers.map((d) => {
@@ -258,7 +269,7 @@ export function AlarmDetailsPanel({
                     causing ? LEVEL_TEXT[d.level] : "text-alert-green",
                   )}
                 >
-                  {causing ? "Causing alarm" : "OK"}
+                  {!causing ? "OK" : d.advisory ? "Advisory · no buzzer" : "Causing alarm"}
                 </span>
                 <span className="text-pretty text-xs leading-relaxed text-foreground/80">{d.reason}</span>
               </li>
@@ -361,8 +372,7 @@ export function AlarmDetailsPanel({
             <CloudLightning className="h-3.5 w-3.5" aria-hidden="true" /> Forecast hazards · strength
           </span>
           <p className="mt-1 text-pretty text-xs leading-relaxed text-muted-foreground">
-            These colours rate how strong each hazard is. The Forecast tier rates how close it is, so a weak hazard
-            50 km away still gives Yellow.
+            Advisory only. Forecast hazards are shown for awareness and never change the on-site alarm level.
           </p>
           <ul className="mt-2 flex flex-col gap-1.5">
             {forecastHazards.length ? (

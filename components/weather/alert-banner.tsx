@@ -24,7 +24,9 @@ import {
   Wind,
 } from "lucide-react"
 import {
-  ALERT_RADII_KM,
+  FAR_SITE_KM,
+  LEVEL_NAME,
+  SAFE_RADIUS_KM,
   buildAlert,
   compass,
   DANGER_RADIUS_KM,
@@ -122,11 +124,14 @@ const LEVEL_STYLES: Record<
 }
 
 const LADDER: { level: AlertLevel; label: string; solid: string }[] = [
-  { level: "green", label: "GREEN", solid: "bg-alert-green" },
-  { level: "yellow", label: "YELLOW", solid: "bg-alert-yellow" },
-  { level: "orange", label: "ORANGE", solid: "bg-alert-orange" },
-  { level: "red", label: "RED", solid: "bg-alert-red" },
+  { level: "green", label: "LEVEL 1", solid: "bg-alert-green" },
+  { level: "yellow", label: "LEVEL 2", solid: "bg-alert-yellow" },
+  { level: "orange", label: "LEVEL 3", solid: "bg-alert-orange" },
+  { level: "red", label: "LEVEL 4", solid: "bg-alert-red" },
 ]
+
+/** Neutral far-site readings, so live levels are set by the at-site readings alone. */
+const CALM_READINGS: SiteReadings = { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 }
 
 /** The two detection sites shown under every tier button, wired to each rule's ranges. */
 const SITE_ROWS: { key: SiteKey; name: string }[] = [
@@ -288,15 +293,13 @@ export function AlertBanner() {
   // site readings exist; this is what arms the auto buzzer.
   const [rangeTier, setRangeTier] = useState<AlertLevel>("green")
   const rangeHeldRef = useRef<AlertLevel | null>(null)
-  // The banner reflects the range tier when simulating; live it takes the worse of the
-  // held forecast tier and the range tier so a station reading beyond a band escalates it.
-  const alert = useMemo(() => {
-    if (!rawAlert) return null
-    if (simulator.active) return withAlertLevel(rawAlert, rangeTier)
-    const base = heldLevel ?? rawAlert.level
-    const rank = (l: AlertLevel) => ESCALATION_LEVELS.indexOf(l)
-    return withAlertLevel(rawAlert, rank(rangeTier) > rank(base) ? rangeTier : base)
-  }, [rawAlert, heldLevel, simulator.active, rangeTier])
+  // The alarm level follows the live ON-SITE readings only (at-site ranges + Wind Event
+  // Monitor), so the colour always matches what is measured at the site. Forecast and
+  // far-site hazards are shown as advisories and never raise the alarm on their own.
+  const alert = useMemo(
+    () => (rawAlert ? withAlertLevel(rawAlert, rangeTier) : null),
+    [rawAlert, rangeTier],
+  )
   const level = alert?.level ?? null
   const [ncm, setNcm] = useState<EmirateWarning | null>(null)
 
@@ -354,7 +357,7 @@ export function AlertBanner() {
             payload.location.latitude,
             payload.location.longitude,
             payload.current.windDirection,
-            ALERT_RADII_KM.yellow,
+            FAR_SITE_KM,
           )
         : null,
     [payload],
@@ -396,10 +399,14 @@ export function AlertBanner() {
     rangeHeldRef.current = null
   }, [simulator.active])
   useEffect(() => {
-    const next = drillLevelFromSites(siteReadings, rules, rangeHeldRef.current)
-    rangeHeldRef.current = next
-    setRangeTier(next)
-  }, [siteReadings, rules])
+    // Drills still exercise both sites; live, only the at-site readings set the level.
+    const sites = simulator.active ? siteReadings : { atSite: siteReadings.atSite, farSite: CALM_READINGS }
+    const range = drillLevelFromSites(sites, rules, rangeHeldRef.current)
+    rangeHeldRef.current = range
+    const wind = evaluateWindMonitor(siteReadings.atSite.windMs, windTiers).level
+    const rank = (l: AlertLevel) => ESCALATION_LEVELS.indexOf(l)
+    setRangeTier(rank(wind) > rank(range) ? wind : range)
+  }, [siteReadings, rules, simulator.active, windTiers])
   // Evaluate the active tier's ranges. The alarm/blink is driven by three
   // independent conditions — nothing sounds because a tier is merely "active"; it
   // sounds when (1) an at-site reading meets the tier's range, (2) a far-site
@@ -415,9 +422,19 @@ export function AlertBanner() {
     const far = rule ? evaluateSite(rule.farSite, siteReadings.farSite) : { met: false, reason: null }
     return { at, far, anyMet: at.met || far.met }
   }, [rules, level, siteReadings])
-  // Any of the three wired conditions arms the alarm and blink.
-  // A reading beyond a configured Yellow / Orange / Red band also arms it automatically.
-  const siteAlarm = rangeTier !== "green" || siteEval.anyMet || windEval.met
+  // The buzzer sounds only above Level 1, so it always agrees with the on-site level shown.
+  // rangeTier already folds in the Wind Event Monitor (and drill readings when simulating).
+  const siteAlarm = rangeTier !== "green" || windEval.met
+  // When a reading has just dropped back below its entry value, the dead band keeps the
+  // level held until it falls below the release value — say so instead of "nothing on site".
+  const deadbandHold = useMemo(() => {
+    if (simulator.active || rangeTier === "green") return null
+    const rank = (l: AlertLevel) => ESCALATION_LEVELS.indexOf(l)
+    const raw = levelFromReadings(siteReadings.atSite, tierThresholds(rules, "atSite"))
+    const live = rank(windEval.level) > rank(raw) ? windEval.level : raw
+    if (rank(rangeTier) <= rank(live)) return null
+    return `${LEVEL_NAME[rangeTier]} is being held by the dead band: an on-site reading recently reached a ${LEVEL_NAME[rangeTier]} limit and has not yet dropped below its release value. It returns to ${LEVEL_NAME[live]} once it does.`
+  }, [simulator.active, rangeTier, siteReadings.atSite, rules, windEval.level])
   // Acknowledgment latch: the buzzer sounds while a site condition is met and un-acked.
   // Clearing the condition (all sites back to green) re-arms it for the next trip, and
   // escalating to a higher range tier re-sounds it even if the lower tier was silenced.
@@ -486,7 +503,7 @@ export function AlertBanner() {
   // distance ÷ speed ETA with a gust-weighted, confidence-scored model.
   const originCompass = compass(payload.current.windDirection)
   const arrivals = predictArrivals({
-    distanceKm: ALERT_RADII_KM.yellow,
+    distanceKm: FAR_SITE_KM,
     units: payload.units,
     near: {
       windSpeed: payload.current.windSpeed,
@@ -554,7 +571,7 @@ export function AlertBanner() {
     return {
       key: k,
       name: k === "atSite" ? "At site" : "Far site",
-      distanceKm: k === "atSite" ? 0 : ALERT_RADII_KM.yellow,
+      distanceKm: k === "atSite" ? 0 : FAR_SITE_KM,
       compass: k === "atSite" ? null : originCompass,
       sourceLabel: sourceLabelFor(k),
       tier: levelFromReadings(siteReadings[k], thresholds),
@@ -568,25 +585,27 @@ export function AlertBanner() {
     (a, b) => ESCALATION_LEVELS.indexOf(b.level) - ESCALATION_LEVELS.indexOf(a.level),
   )[0]
   const drivers: AlarmDriver[] = [
-    {
-      id: "forecast",
-      label: "Forecast tier",
-      level: forecastLevel,
-      reason: simulator.active
-        ? "Ignored during a drill — tier comes from the simulator readings."
-        : forecastLevel === "green"
-          ? "No forecast hazard tracking toward your location."
-          : `${topHazard ? `${topHazard.label} ${topHazard.value} · ` : ""}hazard within ${ALERT_RADII_KM[forecastLevel]} km`,
-    },
     ...detailSites.map<AlarmDriver>((s) => ({
       id: s.key,
-      label: `${s.name} ranges`,
+      label: s.key === "atSite" ? "At site readings" : "Far site (advisory)",
       level: s.tier,
+      advisory: s.key !== "atSite" && !simulator.active,
       reason:
         s.tier === "green"
-          ? `All metrics below Yellow entry · ${s.sourceLabel}`
+          ? `All readings below ${LEVEL_NAME.yellow} limits · ${s.sourceLabel}`
           : `${siteReasonFor(s) ?? "Held by dead band"} · ${s.distanceKm} km${s.compass ? ` ${s.compass}` : ""}`,
     })),
+    {
+      id: "forecast",
+      label: "Forecast (advisory)",
+      level: simulator.active ? "green" : forecastLevel,
+      advisory: true,
+      reason: simulator.active
+        ? "Ignored during a drill."
+        : forecastLevel === "green"
+          ? "No forecast hazard tracking toward your location."
+          : `${topHazard ? `${topHazard.label} ${topHazard.value} · ` : ""}forecast ${LEVEL_NAME[forecastLevel]} · does not sound the buzzer`,
+    },
     {
       id: "wind-monitor",
       label: "Wind Event Monitor",
@@ -813,7 +832,7 @@ export function AlertBanner() {
                       active ? rungStyles.text : "text-muted-foreground",
                     )}
                   >
-                    {rung.level === "green" ? `${ALERT_RADII_KM.green}km+` : `${ALERT_RADII_KM[rung.level]} km`}
+                    Safe for {SAFE_RADIUS_KM[rung.level]} km
                   </span>
 
                   {/* At-site / Near-site detection — green when clear, red-blink when met */}
@@ -910,6 +929,7 @@ export function AlertBanner() {
       <AlarmDetailsPanel
         finalLevel={alert.level}
         alarmActive={alarmActive}
+        deadbandHold={deadbandHold}
         simulator={simulator.active}
         drivers={drivers}
         sites={detailSites}
@@ -1160,10 +1180,10 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 
 /** Fixed 4-level station status lamps — always shown, highest active level blinks. */
 const STATION_LEVELS: { level: keyof typeof WIND_TIER_STYLES; label: string; sub: string }[] = [
-  { level: "green", label: "Green", sub: "Normal" },
-  { level: "yellow", label: "Yellow", sub: "Watch" },
-  { level: "orange", label: "Orange", sub: "Alert" },
-  { level: "red", label: "Red", sub: "Severe" },
+  { level: "green", label: "Level 1", sub: "Normal" },
+  { level: "yellow", label: "Level 2", sub: "Watch" },
+  { level: "orange", label: "Level 3", sub: "Alert" },
+  { level: "red", label: "Level 4", sub: "Severe" },
 ]
 
 /** Resolve a site's feed to a linkable chip, falling back to its default NCM Ghaith wind feed. */
