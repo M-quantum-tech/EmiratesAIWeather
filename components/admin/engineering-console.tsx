@@ -20,6 +20,8 @@ import {
   evaluateWindMonitor,
   drillLevelFromSites,
   tierThresholds,
+  tierPreset,
+  tierOverlaps,
   BUZZER_METRIC_KEYS,
   type BuzzerMetricKey,
   type TierThresholds,
@@ -78,20 +80,9 @@ const SIM_PRESETS: Record<AlertLevel, SiteReadings> = {
   red: { windMs: 25, gustMs: 32, rainMm: 32, cloudPct: 90 },
 }
 
-/**
- * Preset that lands exactly on a tier's configured entry values, so pressing a tier button
- * reproduces that tier from the live escalation ranges rather than fixed demo numbers.
- */
+/** Preset that lands on exactly this tier (never a higher one) from the escalation ranges. */
 function presetFromThresholds(level: AlertLevel, t: TierThresholds): SiteReadings {
-  const base = SIM_PRESETS[level]
-  if (level === "green") return { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: base.cloudPct }
-  const entry = t[level]
-  return {
-    windMs: entry.windMs ?? 0,
-    gustMs: entry.gustMs ?? 0,
-    rainMm: entry.rainMm ?? 0,
-    cloudPct: base.cloudPct,
-  }
+  return tierPreset(level, t)
 }
 
 let uid = 0
@@ -270,39 +261,6 @@ export function EngineeringConsole({
         if (r.level !== level) return r
         const site = r[siteKey]
         return { ...r, [siteKey]: { ...site, [metric]: site[metric].filter((_, i) => i !== index) } }
-      }),
-    )
-  }
-
-  /**
-   * Edit a tier's buzzer entry from the trigger table. The entry is the floor of the band that
-   * currently drives it, so we move that band's min (shifting its max to keep the band width).
-   * If no band drives the metric yet, a new open-ended band is added at the entered value.
-   */
-  function setTierEntry(
-    level: AlertLevel,
-    siteKey: SiteKey,
-    metric: BuzzerMetricKey,
-    current: number | null,
-    next: number,
-  ) {
-    if (!Number.isFinite(next) || next <= 0) return
-    setSaved(false)
-    setRules((prev) =>
-      prev.map((r) => {
-        if (r.level !== level) return r
-        const site = r[siteKey]
-        const ranges = site[metric]
-        const index = current == null ? -1 : ranges.findIndex((rg) => rg.min === current)
-        const updated =
-          index === -1
-            ? [...ranges, { min: next, max: null, label: "Buzzer entry" }]
-            : ranges.map((rg, i) =>
-                i === index
-                  ? { ...rg, min: next, max: rg.max == null ? null : Math.max(next, rg.max + (next - rg.min)) }
-                  : rg,
-              )
-        return { ...r, [siteKey]: { ...site, [metric]: updated } }
       }),
     )
   }
@@ -626,12 +584,7 @@ export function EngineeringConsole({
               )
             })}
           </div>
-          <BuzzerThresholdTable
-            thresholds={thresholds}
-            rules={rules}
-            onEntryChange={setTierEntry}
-            onDeadbandChange={updateDeadband}
-          />
+          <BuzzerThresholdTable thresholds={thresholds} rules={rules} />
           <div className="mt-3 flex flex-col gap-3">
             <span className="label-caps text-muted-foreground">Test live values — set each site independently</span>
             {SITE_KEYS.map((siteKey) => (
@@ -1814,92 +1767,43 @@ const BUZZER_METRIC_INFO: Record<BuzzerMetricKey, { name: string; unit: string }
 const fmtNum = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1))
 
 /**
- * Number cell that keeps a local draft while typing and commits on blur / Enter, so the
- * derived entry value doesn't jump around mid-keystroke. Escape reverts.
- */
-function EditableNumberCell({
-  value,
-  placeholder,
-  onCommit,
-  label,
-  className,
-}: {
-  value: number | null
-  placeholder?: string
-  onCommit: (n: number) => void
-  label: string
-  className?: string
-}) {
-  const [draft, setDraft] = useState<string | null>(null)
-  const shown = draft ?? (value == null ? "" : fmtNum(value))
-
-  function commit() {
-    if (draft == null) return
-    const n = Number(draft)
-    if (draft.trim() !== "" && Number.isFinite(n)) onCommit(n)
-    setDraft(null)
-  }
-
-  return (
-    <input
-      type="number"
-      inputMode="decimal"
-      step="0.1"
-      min={0}
-      aria-label={label}
-      value={shown}
-      placeholder={placeholder}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") e.currentTarget.blur()
-        if (e.key === "Escape") {
-          setDraft(null)
-          e.currentTarget.blur()
-        }
-      }}
-      className={cn(
-        "h-8 w-16 rounded-md border border-border/60 bg-background px-2 text-right font-mono text-xs tabular-nums text-foreground",
-        "placeholder:text-muted-foreground/50 hover:border-border focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40",
-        "[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
-        className,
-      )}
-    />
-  )
-}
-
-/**
- * Editable view of what sounds the auto buzzer. Each tier's entry per metric and site is the
- * floor of its escalation range — editing a cell moves that range. The dead band per tier and
- * metric sets the release point. Green is the all-clear band below the Yellow entry.
+ * Read-only view of what sounds the auto buzzer, derived from the Escalation rules. The
+ * simulator only tests against these values — it never writes back to the ranges.
  */
 function BuzzerThresholdTable({
   thresholds,
   rules,
-  onEntryChange,
-  onDeadbandChange,
 }: {
   thresholds: Record<SiteKey, TierThresholds>
   rules: EscalationRule[]
-  onEntryChange: (
-    level: AlertLevel,
-    siteKey: SiteKey,
-    metric: BuzzerMetricKey,
-    current: number | null,
-    next: number,
-  ) => void
-  onDeadbandChange: (level: AlertLevel, field: keyof TierDeadbands, value: string) => void
 }) {
-  const siteShort = (s: SiteKey) => (s === "atSite" ? "At site" : "Far site")
+  const overlaps = tierOverlaps(rules)
 
   return (
     <div className="mt-3 flex flex-col overflow-hidden rounded-lg border border-border/60 bg-background/40">
       <div className="flex flex-col gap-1 border-b border-border/60 px-3 py-2.5 md:flex-row md:items-center md:justify-between">
-        <span className="label-caps text-foreground">Auto buzzer trigger table</span>
+        <span className="label-caps text-foreground">Auto buzzer trigger table · read only</span>
         <span className="text-xs leading-relaxed text-muted-foreground">
-          Entry = top band of each escalation tier · any one value ≥ entry buzzes (OR) · releases below entry − dead band
+          Mirrors the Escalation rules below — edit ranges there · any one value ≥ entry buzzes (OR) · releases below
+          entry − dead band
         </span>
       </div>
+      {overlaps.length > 0 ? (
+        <div role="alert" className="flex flex-col gap-1 border-b border-alert-orange/40 bg-alert-orange/10 px-3 py-2.5">
+          <span className="font-mono text-xs font-bold uppercase tracking-wide text-alert-orange">
+            Range conflict — lower tier starts at or above a higher tier
+          </span>
+          <ul className="flex flex-col gap-0.5 text-xs leading-relaxed text-foreground">
+            {overlaps.map((o) => (
+              <li key={`${o.siteKey}-${o.metric}-${o.lower}-${o.higher}`}>
+                {o.siteKey === "atSite" ? "At site" : "Far site"} · {BUZZER_METRIC_INFO[o.metric].name}:{" "}
+                {LEVEL_META[o.lower].name} {fmtNum(o.lowerEntry)} ≥ {LEVEL_META[o.higher].name} {fmtNum(o.higherEntry)}{" "}
+                <span className="text-muted-foreground">— this reading escalates straight to {LEVEL_META[o.higher].name}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       <div className="overflow-x-auto">
         <table className="w-full min-w-[60rem] border-collapse text-left text-xs">
           <thead>
@@ -1984,12 +1888,14 @@ function BuzzerThresholdTable({
                           return (
                             <td key={siteKey} className="px-2 py-2 text-center align-middle">
                               <span className="flex flex-col items-center gap-0.5">
-                                <EditableNumberCell
-                                  value={t}
-                                  placeholder="off"
-                                  label={`${meta.name} ${siteShort(siteKey)} ${BUZZER_METRIC_INFO[key].name} entry`}
-                                  onCommit={(n) => onEntryChange(level, siteKey, key, t, n)}
-                                />
+                                <span
+                                  className={cn(
+                                    "font-mono text-sm font-semibold tabular-nums",
+                                    t == null ? "text-muted-foreground/60" : "text-foreground",
+                                  )}
+                                >
+                                  {t == null ? "off" : `≥ ${fmtNum(t)}`}
+                                </span>
                                 <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
                                   {t == null ? "not driving" : `rel < ${fmtNum(Math.max(0, t - band))}`}
                                 </span>
@@ -2002,12 +1908,7 @@ function BuzzerThresholdTable({
                             <span className="font-mono text-muted-foreground/60">—</span>
                           ) : (
                             <span className="flex flex-col items-center gap-0.5">
-                              <EditableNumberCell
-                                value={band}
-                                label={`${meta.name} ${BUZZER_METRIC_INFO[key].name} dead band`}
-                                onCommit={(n) => onDeadbandChange(level, key, String(n))}
-                                className="w-14 border-dashed"
-                              />
+                              <span className="font-mono text-sm tabular-nums text-foreground">{fmtNum(band)}</span>
                               <span className="font-mono text-[10px] text-muted-foreground">± both sites</span>
                             </span>
                           )}

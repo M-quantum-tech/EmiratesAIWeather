@@ -565,6 +565,58 @@ export function tierThresholds(rules: EscalationRule[], siteKey: SiteKey): TierT
   return out
 }
 
+const HIGHER_TIERS: Record<AlertLevel, AlertingLevel[]> = {
+  green: ["yellow", "orange", "red"],
+  yellow: ["orange", "red"],
+  orange: ["red"],
+  red: [],
+}
+
+/**
+ * Test readings that land on `level` and nothing higher. A metric's entry is only used when it
+ * sits below every higher tier's entry for that metric, otherwise the OR rule would trip the
+ * higher tier. Falls back to every entry (and therefore a higher tier) only when the ranges
+ * leave no metric unique to this tier — `tierOverlaps` reports those conflicts.
+ */
+export function tierPreset(level: AlertLevel, t: TierThresholds): SiteReadings {
+  const zero: SiteReadings = { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 }
+  if (level === "green") return zero
+  const exclusive = { ...zero }
+  const all = { ...zero }
+  let any = false
+  for (const key of BUZZER_METRIC_KEYS) {
+    const e = t[level][key]
+    if (e == null) continue
+    all[key] = e
+    if (HIGHER_TIERS[level].every((h) => t[h][key] == null || e < t[h][key]!)) {
+      exclusive[key] = e
+      any = true
+    }
+  }
+  return any ? exclusive : all
+}
+
+export type TierOverlap = { siteKey: SiteKey; metric: BuzzerMetricKey; lower: AlertingLevel; lowerEntry: number; higher: AlertingLevel; higherEntry: number }
+
+/** Entries where a lower tier starts at or above a higher tier — that lower tier escalates straight past itself. */
+export function tierOverlaps(rules: EscalationRule[]): TierOverlap[] {
+  const out: TierOverlap[] = []
+  for (const siteKey of SITE_KEYS) {
+    const t = tierThresholds(rules, siteKey)
+    for (const lower of ["yellow", "orange"] as const) {
+      for (const metric of BUZZER_METRIC_KEYS) {
+        const le = t[lower][metric]
+        if (le == null) continue
+        for (const higher of HIGHER_TIERS[lower]) {
+          const he = t[higher][metric]
+          if (he != null && le >= he) out.push({ siteKey, metric, lower, lowerEntry: le, higher, higherEntry: he })
+        }
+      }
+    }
+  }
+  return out
+}
+
 /** Floor of the most severe (highest) configured band, or null when no band starts above 0. */
 export function topBandFloor(ranges: MetricRange[]): number | null {
   const floors = ranges.map((r) => r.min).filter((m) => Number.isFinite(m) && m > 0)
