@@ -458,6 +458,7 @@ const SITE_TRIGGER_METRICS: { key: SiteMetricKey; label: string }[] = [
   { key: "windMs", label: "Wind" },
   { key: "gustMs", label: "Gust" },
   { key: "rainMm", label: "Rain" },
+  { key: "cloudPct", label: "Cloud" },
 ]
 
 /**
@@ -471,11 +472,11 @@ export function evaluateSite(
   readings: SiteReadings,
 ): { met: boolean; reason: string | null } {
   for (const { key, label } of SITE_TRIGGER_METRICS) {
-    const ranges = config[key]
-    if (!ranges.length) continue
-    const top = ranges[ranges.length - 1]
+    const floor = topBandFloor(config[key])
+    if (floor == null) continue
+    const top = config[key].find((r) => r.min === floor)!
     const value = readings[key]
-    if (Number.isFinite(value) && value >= top.min) {
+    if (Number.isFinite(value) && value >= floor) {
       const unit = SITE_METRIC_META[key].unit
       const shown = Number.isInteger(value) ? String(value) : value.toFixed(1)
       return { met: true, reason: `${label} ${shown} ${unit} · ${top.label}` }
@@ -545,32 +546,29 @@ export type TierEntry = Record<BuzzerMetricKey, number | null>
 export type TierThresholds = Record<AlertLevel, TierEntry>
 
 /**
- * Derive each tier's buzzer entry values straight from the Green / Yellow / Orange / Red
- * ranges configured in the Engineering Console. For every metric, a tier engages at the
- * first configured band floor that sits above the tier below it. Baseline bands that start
- * at 0 (e.g. "Trace", "Clear") are ignored so they can't sound the alarm on calm readings.
- *
- * Example — Wind speed ranges Yellow 6–8 / Orange 8–11 / Red 11–14 give entries of
- * 6, 8 and 11 m/s; any reading beyond 11 m/s is Red.
+ * Derive each tier's buzzer entry values straight from the Tier 2–4 (Yellow / Orange / Red)
+ * escalation ranges. For every metric and site, a tier engages at the floor of its most
+ * severe configured band — the same check the station's At-site / Far-site indicators use —
+ * so the trigger table always mirrors the escalation rules. Any one metric (wind, gust,
+ * rainfall or cloud cover) reaching an entry trips that tier; the highest tier wins.
  */
 export function tierThresholds(rules: EscalationRule[], siteKey: SiteKey): TierThresholds {
   const out = {} as TierThresholds
-  const prev: Record<BuzzerMetricKey, number> = { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 }
   for (const level of ESCALATION_LEVELS) {
     const site = rules.find((r) => r.level === level)?.[siteKey] ?? DEFAULT_SITE_CONFIG[level][siteKey]
     const entry = { windMs: null, gustMs: null, rainMm: null, cloudPct: null } as TierEntry
     if (level !== "green") {
-      for (const key of BUZZER_METRIC_KEYS) {
-        const floors = site[key].map((r) => r.min).filter((m) => m > 0 && m > prev[key])
-        if (floors.length) {
-          entry[key] = Math.min(...floors)
-          prev[key] = entry[key]!
-        }
-      }
+      for (const key of BUZZER_METRIC_KEYS) entry[key] = topBandFloor(site[key])
     }
     out[level] = entry
   }
   return out
+}
+
+/** Floor of the most severe (highest) configured band, or null when no band starts above 0. */
+export function topBandFloor(ranges: MetricRange[]): number | null {
+  const floors = ranges.map((r) => r.min).filter((m) => Number.isFinite(m) && m > 0)
+  return floors.length ? Math.max(...floors) : null
 }
 
 /** True when any driving metric is at/above its entry, offset by `margin` (negative = release side). */

@@ -1897,7 +1897,7 @@ function BuzzerThresholdTable({
       <div className="flex flex-col gap-1 border-b border-border/60 px-3 py-2.5 md:flex-row md:items-center md:justify-between">
         <span className="label-caps text-foreground">Auto buzzer trigger table</span>
         <span className="text-xs leading-relaxed text-muted-foreground">
-          Sounds at ≥ entry · releases below entry − dead band · click any value to edit, then Save
+          Entry = top band of each escalation tier · any one value ≥ entry buzzes (OR) · releases below entry − dead band
         </span>
       </div>
       <div className="overflow-x-auto">

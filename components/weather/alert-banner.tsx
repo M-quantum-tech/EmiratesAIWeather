@@ -417,9 +417,10 @@ export function AlertBanner() {
   }, [level])
   const alarmActive = siteAlarm && !acked
   const acknowledge = () => setAcked(true)
-  // Auto-silence after 15 s while the condition persists, unless reset sooner.
+  // Auto-silence after 15 s while the condition persists, unless reset sooner. A simulator
+  // drill holds the buzzer on continuously until the values drop or it is acknowledged.
   useEffect(() => {
-    if (!alarmActive) return
+    if (!alarmActive || simulator.active) return
     const timer = window.setTimeout(() => setAcked(true), 15_000)
     return () => window.clearTimeout(timer)
   }, [alarmActive])
