@@ -642,7 +642,7 @@ export function EngineeringConsole({
                   <span className="label-caps text-muted-foreground">
                     Dead bands · active hysteresis — tier holds until readings drop past these margins
                   </span>
-                  <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                     <NumberField
                       label="Wind speed"
                       unit="m/s"
@@ -660,6 +660,12 @@ export function EngineeringConsole({
                       unit="mm"
                       value={rule.deadbands.rainMm}
                       onChange={(v) => updateDeadband(rule.level, "rainMm", v)}
+                    />
+                    <NumberField
+                      label="Intensive cloud cover"
+                      unit="%"
+                      value={rule.deadbands.cloudPct}
+                      onChange={(v) => updateDeadband(rule.level, "cloudPct", v)}
                     />
                   </div>
                   <p className="text-xs text-muted-foreground/70">
@@ -1753,6 +1759,7 @@ const BUZZER_METRIC_SHORT: Record<(typeof BUZZER_METRIC_KEYS)[number], string> =
   windMs: "Wind",
   gustMs: "Gust",
   rainMm: "Rain",
+  cloudPct: "Cloud",
 }
 
 /**

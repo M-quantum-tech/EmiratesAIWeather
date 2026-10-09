@@ -25,6 +25,8 @@ export type TierDeadbands = {
   directionDeg: number
   /** Rainfall dead band (mm). */
   rainMm: number
+  /** Intensive cloud cover dead band (%). */
+  cloudPct: number
 }
 
 /** One tier of the NCM-style escalation ladder. */
@@ -50,10 +52,10 @@ export type EscalationRule = {
 
 /** Built-in dead bands per tier — widen as severity climbs to avoid flapping. */
 export const DEFAULT_DEADBANDS: Record<AlertLevel, TierDeadbands> = {
-  green: { windMs: 1, gustMs: 2, directionDeg: 20, rainMm: 0.5 },
-  yellow: { windMs: 1.5, gustMs: 2.5, directionDeg: 15, rainMm: 1 },
-  orange: { windMs: 2, gustMs: 3, directionDeg: 10, rainMm: 2 },
-  red: { windMs: 2.5, gustMs: 4, directionDeg: 8, rainMm: 3 },
+  green: { windMs: 1, gustMs: 2, directionDeg: 20, rainMm: 0.5, cloudPct: 5 },
+  yellow: { windMs: 1.5, gustMs: 2.5, directionDeg: 15, rainMm: 1, cloudPct: 5 },
+  orange: { windMs: 2, gustMs: 3, directionDeg: 10, rainMm: 2, cloudPct: 5 },
+  red: { windMs: 2.5, gustMs: 4, directionDeg: 8, rainMm: 3, cloudPct: 5 },
 }
 
 /** Parse an unknown value into a clean TierDeadbands, falling back per level. */
@@ -69,6 +71,7 @@ export function parseDeadbands(value: unknown, level: AlertLevel): TierDeadbands
     gustMs: num(r.gustMs, d.gustMs, 80),
     directionDeg: num(r.directionDeg, d.directionDeg, 180),
     rainMm: num(r.rainMm, d.rainMm, 200),
+    cloudPct: num(r.cloudPct, d.cloudPct, 50),
   }
 }
 
@@ -495,6 +498,8 @@ export type HysteresisReadings = {
   gustMs: number
   /** Rain accumulation over the next 6 h (mm). */
   rainMm: number
+  /** Intensive cloud cover (%). */
+  cloudPct?: number
 }
 
 /**
@@ -510,7 +515,7 @@ export type HysteresisReadings = {
  * can therefore only ever read green or the top tier.
  */
 export function levelFromReadings(
-  readings: { windMs: number; gustMs?: number; rainMm: number },
+  readings: { windMs: number; gustMs?: number; rainMm: number; cloudPct?: number },
   thresholds?: TierThresholds,
 ): AlertLevel {
   let level: AlertLevel = "green"
@@ -527,8 +532,8 @@ export function levelFromReadings(
   return level
 }
 
-/** Metrics that drive the buzzer (cloud cover is contextual and never sounds the alarm). */
-export const BUZZER_METRIC_KEYS = ["windMs", "gustMs", "rainMm"] as const
+/** Metrics that drive the buzzer — wind, gust, rainfall and intensive cloud cover. */
+export const BUZZER_METRIC_KEYS = ["windMs", "gustMs", "rainMm", "cloudPct"] as const
 export type BuzzerMetricKey = (typeof BUZZER_METRIC_KEYS)[number]
 
 /** Entry value per driving metric for one tier. `null` = that metric doesn't drive this tier. */
@@ -546,10 +551,10 @@ export type TierThresholds = Record<AlertLevel, TierEntry>
  */
 export function tierThresholds(rules: EscalationRule[], siteKey: SiteKey): TierThresholds {
   const out = {} as TierThresholds
-  const prev: Record<BuzzerMetricKey, number> = { windMs: 0, gustMs: 0, rainMm: 0 }
+  const prev: Record<BuzzerMetricKey, number> = { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 }
   for (const level of ESCALATION_LEVELS) {
     const site = rules.find((r) => r.level === level)?.[siteKey] ?? DEFAULT_SITE_CONFIG[level][siteKey]
-    const entry = { windMs: null, gustMs: null, rainMm: null } as TierEntry
+    const entry = { windMs: null, gustMs: null, rainMm: null, cloudPct: null } as TierEntry
     if (level !== "green") {
       for (const key of BUZZER_METRIC_KEYS) {
         const floors = site[key].map((r) => r.min).filter((m) => m > 0 && m > prev[key])
@@ -566,7 +571,7 @@ export function tierThresholds(rules: EscalationRule[], siteKey: SiteKey): TierT
 
 /** True when any driving metric is at/above its entry, offset by `margin` (negative = release side). */
 function metricsAtOrAbove(
-  readings: { windMs: number; gustMs?: number; rainMm: number },
+  readings: { windMs: number; gustMs?: number; rainMm: number; cloudPct?: number },
   entry: TierEntry,
   margin: number | TierDeadbands,
 ): boolean {
@@ -606,7 +611,7 @@ export function siteTierWithDeadband(
 export function tierReason(readings: SiteReadings, thresholds: TierThresholds, level: AlertLevel): string | null {
   if (level === "green") return null
   const entry = thresholds[level]
-  const names: Record<BuzzerMetricKey, string> = { windMs: "Wind", gustMs: "Gust", rainMm: "Rain" }
+  const names: Record<BuzzerMetricKey, string> = { windMs: "Wind", gustMs: "Gust", rainMm: "Rain", cloudPct: "Cloud" }
   for (const key of BUZZER_METRIC_KEYS) {
     const t = entry[key]
     const v = readings[key]
@@ -660,8 +665,15 @@ export function applyLevelHysteresis(
     const windRelease = (entry.windMs ?? LEVEL_WIND_ENTRY_MS[current]) - db.windMs
     const gustRelease = (entry.gustMs ?? LEVEL_WIND_ENTRY_MS[current]) - db.gustMs
     const rainRelease = (entry.rainMm ?? LEVEL_RAIN_ENTRY_MM[current]) - db.rainMm
+    const cloudHeld =
+      entry.cloudPct != null &&
+      readings.cloudPct != null &&
+      readings.cloudPct > entry.cloudPct - db.cloudPct
     const stillHeld =
-      readings.windMs > windRelease || readings.gustMs > gustRelease || readings.rainMm > rainRelease
+      readings.windMs > windRelease ||
+      readings.gustMs > gustRelease ||
+      readings.rainMm > rainRelease ||
+      cloudHeld
     if (stillHeld) return current
     current = ESCALATION_LEVELS[rank(current) - 1]
   }
