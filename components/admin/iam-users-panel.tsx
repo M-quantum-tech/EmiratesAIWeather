@@ -2,7 +2,7 @@
 
 import type React from "react"
 import { useState, useTransition } from "react"
-import { Check, KeyRound, Pencil, Trash2, UserPlus, Users } from "lucide-react"
+import { Check, Download, KeyRound, Pencil, RotateCcw, Save, Trash2, Undo2, UserPlus, Users } from "lucide-react"
 import {
   createIamUser,
   editIamUser,
@@ -12,12 +12,15 @@ import {
   setIamUserRole,
 } from "@/app/actions/iam"
 import { IAM_ROLES, IAM_ROLE_CODES, iamCan, type IamRoleCode } from "@/lib/iam"
+import { downloadIamCsv } from "@/lib/iam-csv"
 import type { IamUserRow } from "@/lib/iam-server"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
 const inputClass =
   "h-9 rounded-md border border-input bg-background px-2.5 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+
+type AccessStatus = "allowed" | "denied"
 
 export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
   const [pending, startTransition] = useTransition()
@@ -26,8 +29,34 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
   const [newPassword, setNewPassword] = useState("")
   const [editFor, setEditFor] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState({ username: "", title: "" })
-  const [deleteFor, setDeleteFor] = useState<string | null>(null)
   const [draft, setDraft] = useState({ username: "", title: "", role: "Supervisor" as IamRoleCode, password: "" })
+
+  const [stagedRoles, setStagedRoles] = useState<Record<string, IamRoleCode>>({})
+  const [stagedAccess, setStagedAccess] = useState<Record<string, AccessStatus>>({})
+  const [stagedDeletes, setStagedDeletes] = useState<string[]>([])
+
+  const byId = new Map(users.map((u) => [u.id, u]))
+  const roleChanges = Object.entries(stagedRoles).filter(
+    ([id, role]) => byId.has(id) && byId.get(id)!.role !== role && !stagedDeletes.includes(id),
+  )
+  const accessChanges = Object.entries(stagedAccess).filter(([id, status]) => {
+    const u = byId.get(id)
+    return u && (u.accessStatus === "denied" ? "denied" : "allowed") !== status && !stagedDeletes.includes(id)
+  })
+  const deletes = stagedDeletes.filter((id) => byId.has(id))
+  const changeCount = roleChanges.length + accessChanges.length + deletes.length
+
+  const effective = users.map((u) => ({
+    ...u,
+    role: stagedRoles[u.id] ?? u.role,
+    accessStatus: stagedAccess[u.id] ?? u.accessStatus,
+  }))
+
+  function discard() {
+    setStagedRoles({})
+    setStagedAccess({})
+    setStagedDeletes([])
+  }
 
   function run(action: () => Promise<unknown>, ok: string) {
     setMessage(null)
@@ -41,6 +70,22 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
     })
   }
 
+  function saveChanges() {
+    const summary = [
+      roleChanges.length ? `${roleChanges.length} role change${roleChanges.length > 1 ? "s" : ""}` : "",
+      accessChanges.length ? `${accessChanges.length} status change${accessChanges.length > 1 ? "s" : ""}` : "",
+      deletes.length ? `${deletes.length} deletion${deletes.length > 1 ? "s" : ""}` : "",
+    ]
+      .filter(Boolean)
+      .join(", ")
+    run(async () => {
+      for (const [id, role] of roleChanges) await setIamUserRole(id, role)
+      for (const [id, status] of accessChanges) await setIamUserAccess(id, status as AccessStatus)
+      for (const id of deletes) await removeIamUser(id)
+      discard()
+    }, `Saved: ${summary}.`)
+  }
+
   function handleCreate(e: React.FormEvent) {
     e.preventDefault()
     run(async () => {
@@ -51,17 +96,23 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
 
   return (
     <section aria-labelledby="iam-users-heading" className="flex flex-col gap-4 rounded-xl border border-border bg-card p-5 sm:p-6">
-      <div className="flex flex-col gap-1">
-        <div className="flex items-center gap-2">
-          <Users className="h-4 w-4 text-accent" aria-hidden="true" />
-          <span className="label-caps text-foreground">User management · Plant IAM</span>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4 text-accent" aria-hidden="true" />
+            <span className="label-caps text-foreground">User management · Plant IAM</span>
+          </div>
+          <h2 id="iam-users-heading" className="text-lg font-semibold text-foreground">
+            Control room logins & roles
+          </h2>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Role, status and delete changes are staged — press Save changes to apply. Saved changes sign that user out immediately.
+          </p>
         </div>
-        <h2 id="iam-users-heading" className="text-lg font-semibold text-foreground">
-          Control room logins & roles
-        </h2>
-        <p className="text-sm leading-relaxed text-muted-foreground">
-          Changing a role, disabling an account, or resetting a password signs that user out immediately.
-        </p>
+        <Button type="button" size="sm" variant="outline" className="w-fit" onClick={() => downloadIamCsv(users)}>
+          <Download className="h-3.5 w-3.5" aria-hidden="true" />
+          Download CSV
+        </Button>
       </div>
 
       {message ? (
@@ -79,10 +130,10 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
       ) : null}
 
       <div className="overflow-x-auto rounded-lg border border-border">
-        <table className="w-full min-w-[46rem] text-sm">
+        <table className="w-full min-w-[52rem] text-sm">
           <thead className="bg-secondary/50 text-left">
             <tr>
-              <th scope="col" className="label-caps px-3 py-2 font-normal">Username</th>
+              <th scope="col" className="label-caps sticky left-0 z-10 bg-secondary px-3 py-2 font-normal">Username</th>
               <th scope="col" className="label-caps px-3 py-2 font-normal">Role code</th>
               <th scope="col" className="label-caps px-3 py-2 font-normal">Deep trends</th>
               <th scope="col" className="label-caps px-3 py-2 font-normal">Status</th>
@@ -91,11 +142,18 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {users.map((u) => {
+            {effective.map((u) => {
+              const original = byId.get(u.id)!
               const enabled = u.accessStatus !== "denied"
+              const markedDelete = stagedDeletes.includes(u.id)
+              const roleDirty = u.role !== original.role
+              const accessDirty = (u.accessStatus === "denied") !== (original.accessStatus === "denied")
               return (
-                <tr key={u.id} className="align-middle">
-                  <td className="px-3 py-2">
+                <tr
+                  key={u.id}
+                  className={cn("align-middle", markedDelete && "bg-destructive/10", !markedDelete && (roleDirty || accessDirty) && "bg-primary/5")}
+                >
+                  <td className="sticky left-0 z-10 bg-card px-3 py-2">
                     {editFor === u.id ? (
                       <form
                         id={`edit-${u.id}`}
@@ -127,10 +185,10 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
                         />
                       </form>
                     ) : (
-                      <>
+                      <div className={cn(markedDelete && "line-through opacity-60")}>
                         <p className="font-mono font-semibold text-foreground">{u.username}</p>
                         <p className="text-xs text-muted-foreground">{u.title}</p>
-                      </>
+                      </div>
                     )}
                   </td>
                   <td className="px-3 py-2">
@@ -138,9 +196,9 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
                     <select
                       id={`role-${u.id}`}
                       value={u.role}
-                      disabled={pending}
-                      onChange={(e) => run(() => setIamUserRole(u.id, e.target.value), `${u.username} is now ${e.target.value}.`)}
-                      className={inputClass}
+                      disabled={pending || markedDelete}
+                      onChange={(e) => setStagedRoles({ ...stagedRoles, [u.id]: e.target.value as IamRoleCode })}
+                      className={cn(inputClass, roleDirty && "border-primary ring-1 ring-primary")}
                     >
                       {IAM_ROLE_CODES.map((code) => (
                         <option key={code} value={code}>{code} — {IAM_ROLES[code].title}</option>
@@ -157,16 +215,13 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
                   <td className="px-3 py-2">
                     <button
                       type="button"
-                      disabled={pending}
-                      onClick={() =>
-                        run(
-                          () => setIamUserAccess(u.id, enabled ? "denied" : "allowed"),
-                          `${u.username} ${enabled ? "disabled" : "enabled"}.`,
-                        )
-                      }
+                      disabled={pending || markedDelete}
+                      aria-pressed={enabled}
+                      onClick={() => setStagedAccess({ ...stagedAccess, [u.id]: enabled ? "denied" : "allowed" })}
                       className={cn(
                         "rounded-md border px-2 py-1 font-mono text-xs uppercase tracking-[0.1em]",
                         enabled ? "border-alert-green/50 text-alert-green" : "border-destructive/50 text-destructive",
+                        accessDirty && "ring-1 ring-primary",
                       )}
                     >
                       {enabled ? "Enabled" : "Disabled"}
@@ -179,12 +234,7 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
                     <div className="flex items-center justify-end gap-1.5">
                       {editFor === u.id ? (
                         <>
-                          <Button
-                            type="submit"
-                            form={`edit-${u.id}`}
-                            size="sm"
-                            disabled={pending || !editDraft.username.trim()}
-                          >
+                          <Button type="submit" form={`edit-${u.id}`} size="sm" disabled={pending || !editDraft.username.trim()}>
                             <Check className="h-3.5 w-3.5" aria-hidden="true" />
                             Save
                           </Button>
@@ -192,92 +242,84 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
                             Cancel
                           </Button>
                         </>
-                      ) : deleteFor === u.id ? (
+                      ) : markedDelete ? (
                         <>
-                          <span className="font-mono text-xs uppercase text-destructive">Delete?</span>
+                          <span className="font-mono text-xs uppercase text-destructive">Will be deleted</span>
                           <Button
                             type="button"
                             size="sm"
-                            variant="destructive"
+                            variant="outline"
                             disabled={pending}
-                            onClick={() =>
-                              run(async () => {
-                                await removeIamUser(u.id)
-                                setDeleteFor(null)
-                              }, `${u.username} deleted.`)
-                            }
+                            onClick={() => setStagedDeletes(stagedDeletes.filter((id) => id !== u.id))}
                           >
-                            Confirm
-                          </Button>
-                          <Button type="button" size="sm" variant="ghost" onClick={() => setDeleteFor(null)}>
-                            Cancel
+                            <Undo2 className="h-3.5 w-3.5" aria-hidden="true" />
+                            Undo
                           </Button>
                         </>
                       ) : (
-                      <>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        disabled={pending}
-                        aria-label={`Edit ${u.username}`}
-                        onClick={() => {
-                          setResetFor(null)
-                          setDeleteFor(null)
-                          setEditDraft({ username: u.username, title: u.title })
-                          setEditFor(u.id)
-                        }}
-                      >
-                        <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
-                        Edit
-                      </Button>
-                      {resetFor === u.id ? (
-                        <form
-                          className="flex items-center gap-1.5"
-                          onSubmit={(e) => {
-                            e.preventDefault()
-                            run(async () => {
-                              await setIamUserPassword(u.id, newPassword)
+                        <>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={pending}
+                            aria-label={`Edit ${u.username}`}
+                            onClick={() => {
                               setResetFor(null)
-                              setNewPassword("")
-                            }, `Password reset for ${u.username}.`)
-                          }}
-                        >
-                          <label className="sr-only" htmlFor={`pw-${u.id}`}>New password</label>
-                          <input
-                            id={`pw-${u.id}`}
-                            type="password"
-                            autoComplete="new-password"
-                            placeholder="New password"
-                            value={newPassword}
-                            onChange={(e) => setNewPassword(e.target.value)}
-                            className={cn(inputClass, "w-36")}
-                          />
-                          <Button type="submit" size="sm" disabled={pending || newPassword.length < 8}>Save</Button>
-                          <Button type="button" size="sm" variant="ghost" onClick={() => setResetFor(null)}>Cancel</Button>
-                        </form>
-                      ) : (
-                        <Button type="button" size="sm" variant="outline" disabled={pending} onClick={() => setResetFor(u.id)}>
-                          <KeyRound className="h-3.5 w-3.5" aria-hidden="true" />
-                          Reset
-                        </Button>
-                      )}
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        disabled={pending}
-                        aria-label={`Delete ${u.username}`}
-                        className="text-muted-foreground hover:text-destructive"
-                        onClick={() => {
-                          setResetFor(null)
-                          setDeleteFor(u.id)
-                        }}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                        Delete
-                      </Button>
-                      </>
+                              setEditDraft({ username: u.username, title: u.title })
+                              setEditFor(u.id)
+                            }}
+                          >
+                            <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                            Edit
+                          </Button>
+                          {resetFor === u.id ? (
+                            <form
+                              className="flex items-center gap-1.5"
+                              onSubmit={(e) => {
+                                e.preventDefault()
+                                run(async () => {
+                                  await setIamUserPassword(u.id, newPassword)
+                                  setResetFor(null)
+                                  setNewPassword("")
+                                }, `Password reset for ${u.username}.`)
+                              }}
+                            >
+                              <label className="sr-only" htmlFor={`pw-${u.id}`}>New password</label>
+                              <input
+                                id={`pw-${u.id}`}
+                                type="password"
+                                autoComplete="new-password"
+                                placeholder="New password"
+                                value={newPassword}
+                                onChange={(e) => setNewPassword(e.target.value)}
+                                className={cn(inputClass, "w-36")}
+                              />
+                              <Button type="submit" size="sm" disabled={pending || newPassword.length < 8}>Save</Button>
+                              <Button type="button" size="sm" variant="ghost" onClick={() => setResetFor(null)}>Cancel</Button>
+                            </form>
+                          ) : (
+                            <Button type="button" size="sm" variant="outline" disabled={pending} onClick={() => setResetFor(u.id)}>
+                              <KeyRound className="h-3.5 w-3.5" aria-hidden="true" />
+                              Reset
+                            </Button>
+                          )}
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            disabled={pending}
+                            aria-label={`Delete ${u.username}`}
+                            className="text-muted-foreground hover:text-destructive"
+                            onClick={() => {
+                              setResetFor(null)
+                              setStagedDeletes([...stagedDeletes, u.id])
+                            }}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                            Delete
+                          </Button>
+                        </>
                       )}
                     </div>
                   </td>
@@ -286,6 +328,34 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
             })}
           </tbody>
         </table>
+      </div>
+
+      <div
+        className={cn(
+          "sticky bottom-4 z-20 flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between",
+          changeCount > 0 ? "border-primary/60 bg-card shadow-lg" : "border-border bg-secondary/30",
+        )}
+      >
+        <p className="text-sm text-muted-foreground" aria-live="polite">
+          {changeCount > 0 ? (
+            <>
+              <span className="font-semibold text-foreground">{changeCount} unsaved change{changeCount > 1 ? "s" : ""}</span>
+              {deletes.length > 0 ? ` · ${deletes.length} to delete (cannot be undone after save)` : ""}
+            </>
+          ) : (
+            "No unsaved changes."
+          )}
+        </p>
+        <div className="flex items-center gap-2">
+          <Button type="button" size="sm" variant="ghost" disabled={pending || changeCount === 0} onClick={discard}>
+            <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+            Discard
+          </Button>
+          <Button type="button" size="sm" disabled={pending || changeCount === 0} onClick={saveChanges}>
+            <Save className="h-3.5 w-3.5" aria-hidden="true" />
+            {pending ? "Saving…" : "Save changes"}
+          </Button>
+        </div>
       </div>
 
       <form onSubmit={handleCreate} className="flex flex-col gap-3 rounded-lg border border-dashed border-border p-4">
