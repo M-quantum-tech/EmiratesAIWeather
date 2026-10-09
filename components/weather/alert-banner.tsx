@@ -6,7 +6,6 @@ import {
   Activity,
   BellRing,
   Check,
-  Clock,
   Cloud,
   CloudRain,
   Droplets,
@@ -450,7 +449,20 @@ export function AlertBanner() {
       return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
     }
   }
-  const localClock = safeTime(now, true)
+  const ncmTimezone = payload.timezone || "Asia/Dubai"
+  const ncmClock = (() => {
+    try {
+      return new Intl.DateTimeFormat("en-GB", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+        timeZone: ncmTimezone,
+      }).format(now)
+    } catch {
+      return safeTime(now, true)
+    }
+  })()
 
   // AI advection nowcast: blend the on-site reading with the 50 km upwind sample to
   // predict when the wind, rain and cloud fields reach the site — replacing the old
@@ -586,9 +598,12 @@ export function AlertBanner() {
               Live · updated {formatClock(payload.current.time)}
             </span>
           ) : null}
-          <span className="flex items-center gap-1.5 rounded-md border border-border bg-background/60 px-2 py-1 font-mono text-[0.625rem] uppercase tracking-wider text-foreground tabular-nums">
-            <Clock className="h-3 w-3 text-signal" aria-hidden="true" />
-            {localClock}
+          <span
+            className="flex items-center gap-1.5 rounded-md border border-border bg-background/60 px-2 py-1 font-mono text-[0.625rem] uppercase tracking-wider text-foreground tabular-nums"
+            title={`NCM-synced station time (${ncmTimezone})`}
+          >
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-signal" aria-hidden="true" />
+            NCM {ncmClock}
           </span>
           <span className="flex items-center gap-1.5 rounded-md border border-signal/40 bg-signal/10 px-2 py-1 font-mono text-[0.625rem] uppercase tracking-wider text-signal">
             <Timer className={cn("h-3 w-3", isValidating && "animate-spin")} aria-hidden="true" />
