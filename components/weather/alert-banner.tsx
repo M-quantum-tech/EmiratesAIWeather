@@ -45,7 +45,6 @@ import {
 } from "@/lib/weather"
 import { fetchWarningFrames, type EmirateWarning } from "@/lib/ncm-warnings"
 import {
-  applyLevelHysteresis,
   AT_SITE_SOURCE,
   FAR_SITE_SOURCE,
   BUZZER_TONE,
@@ -122,10 +121,10 @@ const LEVEL_STYLES: Record<
 }
 
 const LADDER: { level: AlertLevel; label: string; solid: string }[] = [
-  { level: "green", label: "GREEN", solid: "bg-alert-green" },
-  { level: "yellow", label: "YELLOW", solid: "bg-alert-yellow" },
-  { level: "orange", label: "ORANGE", solid: "bg-alert-orange" },
-  { level: "red", label: "RED", solid: "bg-alert-red" },
+  { level: "green", label: "GREEN · TIER 1", solid: "bg-alert-green" },
+  { level: "yellow", label: "YELLOW · TIER 2", solid: "bg-alert-yellow" },
+  { level: "orange", label: "ORANGE · TIER 3", solid: "bg-alert-orange" },
+  { level: "red", label: "RED · TIER 4", solid: "bg-alert-red" },
 ]
 
 /** The two detection sites shown under every tier button, wired to each rule's ranges. */
@@ -259,25 +258,6 @@ export function AlertBanner() {
   )
   const cloudSource = cloudSourceData?.source ?? DEFAULT_CLOUD_SOURCE
   const rawAlert = useMemo(() => (payload ? buildAlert(payload) : null), [payload])
-  // Dead-band hysteresis: the displayed tier escalates immediately but only de-escalates
-  // once every driving metric has fallen below the held tier's entry threshold minus its
-  // configured dead band — so noisy readings can't flap the alarm between tiers.
-  const [heldLevel, setHeldLevel] = useState<AlertLevel | null>(null)
-  const heldRef = useRef<AlertLevel | null>(null)
-  useEffect(() => {
-    if (!rawAlert) return
-    const raw = Object.fromEntries(rawAlert.hazards.map((h) => [h.key, h.raw])) as Record<string, number>
-    const readings = {
-      windMs: (raw.wind ?? 0) / 3.6,
-      gustMs: (raw.gust ?? 0) / 3.6,
-      rainMm: raw.rain ?? 0,
-    }
-    const next = applyLevelHysteresis(rawAlert.level, heldRef.current, readings, rules)
-    if (next !== heldRef.current) {
-      heldRef.current = next
-      setHeldLevel(next)
-    }
-  }, [rawAlert, rules])
   // During a drill the tier is DERIVED from the operator's per-site test readings — the
   // console's tier buttons merely preset those readings. Evaluating every rung against both
   // sites and taking the highest met tier means lowering a site's values below the limits
@@ -288,16 +268,6 @@ export function AlertBanner() {
   // site readings exist; this is what arms the auto buzzer.
   const [rangeTier, setRangeTier] = useState<AlertLevel>("green")
   const rangeHeldRef = useRef<AlertLevel | null>(null)
-  // The banner reflects the range tier when simulating; live it takes the worse of the
-  // held forecast tier and the range tier so a station reading beyond a band escalates it.
-  const alert = useMemo(() => {
-    if (!rawAlert) return null
-    if (simulator.active) return withAlertLevel(rawAlert, rangeTier)
-    const base = heldLevel ?? rawAlert.level
-    const rank = (l: AlertLevel) => ESCALATION_LEVELS.indexOf(l)
-    return withAlertLevel(rawAlert, rank(rangeTier) > rank(base) ? rangeTier : base)
-  }, [rawAlert, heldLevel, simulator.active, rangeTier])
-  const level = alert?.level ?? null
   const [ncm, setNcm] = useState<EmirateWarning | null>(null)
 
   // Live NCM Al Bahar warning for the current hour — matched to the user's emirate
@@ -409,6 +379,13 @@ export function AlertBanner() {
     () => evaluateWindMonitor(siteReadings.atSite.windMs, windTiers),
     [siteReadings.atSite.windMs, windTiers],
   )
+  // Safety Model tier = Live Wind Monitor tier (Tier 1 Green … Tier 4 Red). The escalation
+  // ranges for that tier are then checked below as confirmation. A drill uses the range tier.
+  const alert = useMemo(() => {
+    if (!rawAlert) return null
+    return withAlertLevel(rawAlert, simulator.active ? rangeTier : windEval.level)
+  }, [rawAlert, simulator.active, rangeTier, windEval.level])
+  const level = alert?.level ?? null
   const siteEval = useMemo(() => {
     const rule = rules.find((r) => r.level === level) ?? null
     const at = rule ? evaluateSite(rule.atSite, siteReadings.atSite) : { met: false, reason: null }
@@ -417,7 +394,8 @@ export function AlertBanner() {
   }, [rules, level, siteReadings])
   // Any of the three wired conditions arms the alarm and blink.
   // A reading beyond a configured Yellow / Orange / Red band also arms it automatically.
-  const siteAlarm = rangeTier !== "green" || siteEval.anyMet || windEval.met
+  // Live, the buzzer follows the displayed tier, so it never sounds while the display is Green.
+  const siteAlarm = simulator.active ? rangeTier !== "green" || siteEval.anyMet : windEval.met
   // Acknowledgment latch: the buzzer sounds while a site condition is met and un-acked.
   // Clearing the condition (all sites back to green) re-arms it for the next trip, and
   // escalating to a higher range tier re-sounds it even if the lower tier was silenced.
@@ -428,9 +406,10 @@ export function AlertBanner() {
   const prevRangeTierRef = useRef<AlertLevel>("green")
   useEffect(() => {
     const rank = (l: AlertLevel) => ESCALATION_LEVELS.indexOf(l)
-    if (rank(rangeTier) > rank(prevRangeTierRef.current)) setAcked(false)
-    prevRangeTierRef.current = rangeTier
-  }, [rangeTier])
+    const current = level ?? "green"
+    if (rank(current) > rank(prevRangeTierRef.current)) setAcked(false)
+    prevRangeTierRef.current = current
+  }, [level])
   const alarmActive = siteAlarm && !acked
   const acknowledge = () => setAcked(true)
   // Auto-silence after 15 s while the condition persists, unless reset sooner.
