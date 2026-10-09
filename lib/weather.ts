@@ -431,28 +431,6 @@ export const ALERT_RADII_KM: Record<AlertLevel, number> = {
 export const DANGER_RADIUS_KM = ALERT_RADII_KM.red
 
 /**
- * Safety buffer per alert level: the radius around the site that must stay clear.
- * The higher the level, the wider the buffer — Level 1 safe for 30 km up to Level 4 at 60 km.
- */
-export const SAFE_RADIUS_KM: Record<AlertLevel, number> = {
-  green: 30,
-  yellow: 40,
-  orange: 50,
-  red: 60,
-}
-
-/** Operator-facing names for the four tiers. */
-export const LEVEL_NAME: Record<AlertLevel, string> = {
-  green: "Level 1",
-  yellow: "Level 2",
-  orange: "Level 3",
-  red: "Level 4",
-}
-
-/** Upwind distance (km) of the far-site sample point. */
-export const FAR_SITE_KM = 50
-
-/**
  * Great-circle destination point `distanceKm` away from (lat, lon) along
  * `bearingDeg` (degrees clockwise from true north). Used to sample a "far site"
  * upwind of the user so the model can preview hazards before they arrive on site.
@@ -598,10 +576,10 @@ export type WeatherAlert = {
 }
 
 const ALERT_META: Record<AlertLevel, { code: string; emoji: string; title: string }> = {
-  green: { code: "GREEN", emoji: "🧍", title: "LEVEL 1" },
-  yellow: { code: "YELLOW", emoji: "🧍‍♂️", title: "LEVEL 2" },
-  orange: { code: "ORANGE", emoji: "🏃", title: "LEVEL 3" },
-  red: { code: "RED", emoji: "🏃‍♂️💨", title: "LEVEL 4" },
+  green: { code: "GREEN", emoji: "🧍", title: "GREEN" },
+  yellow: { code: "YELLOW", emoji: "🧍‍♂️", title: "YELLOW" },
+  orange: { code: "ORANGE", emoji: "🏃", title: "ORANGE" },
+  red: { code: "RED", emoji: "🏃‍♂️💨", title: "RED" },
 }
 
 const ALERT_COPY: Record<AlertLevel, { headline: string; detail: string; advice: string }> = {
