@@ -296,24 +296,6 @@ export function AlertBanner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locationId])
 
-  // Live 60-second auto-refresh counter + a wall clock synced to real time, both
-  // driven by a single 1-second tick so the header stays in step with the network clock.
-  const [countdown, setCountdown] = useState(REFRESH_SECONDS)
-  const [now, setNow] = useState(() => new Date())
-  useEffect(() => {
-    const id = setInterval(() => {
-      setNow(new Date())
-      setCountdown((c) => {
-        if (c <= 1) {
-          refresh()
-          return REFRESH_SECONDS
-        }
-        return c - 1
-      })
-    }, 1000)
-    return () => clearInterval(id)
-  }, [refresh])
-
   // Far site: sample weather 50 km upwind (toward the wind's origin) so the model
   // previews approaching gusts before they reach the user's on-site location.
   const farPoint = useMemo(
@@ -332,10 +314,34 @@ export function AlertBanner() {
     farPoint && payload
       ? `/api/weather?lat=${farPoint.lat.toFixed(3)}&lon=${farPoint.lon.toFixed(3)}&units=${payload.units}`
       : null
-  const { data: farData } = useSWR(farKey, farFetcher, {
-    refreshInterval: 60 * 1000,
+  const { data: farData, mutate: refreshFar } = useSWR(farKey, farFetcher, {
     keepPreviousData: true,
   })
+
+  // One 1-second tick drives the NCM clock and the refresh countdown. Data refreshes on
+  // every NCM minute boundary (hh:mm:00), so the countdown hits 0:00 exactly as the NCM
+  // clock rolls over and the "Updated" stamp lands on that same minute.
+  const [now, setNow] = useState(() => new Date())
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
+  const lastMinuteRef = useRef(Math.floor(Date.now() / 60_000))
+  useEffect(() => {
+    if (payload) setUpdatedAt((prev) => prev ?? new Date())
+  }, [payload])
+  useEffect(() => {
+    const id = setInterval(() => {
+      const d = new Date()
+      setNow(d)
+      const minute = Math.floor(d.getTime() / 60_000)
+      if (minute !== lastMinuteRef.current) {
+        lastMinuteRef.current = minute
+        Promise.all([Promise.resolve(refresh()), refreshFar()])
+          .then(() => setUpdatedAt(new Date(minute * 60_000)))
+          .catch((err) => console.log("[v0] minute refresh failed:", err instanceof Error ? err.message : err))
+      }
+    }, 1000)
+    return () => clearInterval(id)
+  }, [refresh, refreshFar])
+  const countdown = REFRESH_SECONDS - now.getSeconds()
 
   // Per-site live readings, derived through the SAME shared helper the Engineering
   // Console uses, so the At-site / Far-site indicators here and there fire from
@@ -450,7 +456,7 @@ export function AlertBanner() {
     }
   }
   const ncmTimezone = payload.timezone || "Asia/Dubai"
-  const ncmClock = (() => {
+  const formatNcm = (d: Date) => {
     try {
       return new Intl.DateTimeFormat("en-GB", {
         hour: "2-digit",
@@ -458,11 +464,13 @@ export function AlertBanner() {
         second: "2-digit",
         hour12: false,
         timeZone: ncmTimezone,
-      }).format(now)
+      }).format(d)
     } catch {
-      return safeTime(now, true)
+      return safeTime(d, true)
     }
-  })()
+  }
+  const ncmClock = formatNcm(now)
+  const ncmUpdated = updatedAt ? formatNcm(updatedAt) : "—"
 
   // AI advection nowcast: blend the on-site reading with the 50 km upwind sample to
   // predict when the wind, rain and cloud fields reach the site — replacing the old
@@ -595,7 +603,9 @@ export function AlertBanner() {
                 <span className="absolute inline-flex h-full w-full rounded-full bg-alert-green opacity-75" />
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-alert-green" />
               </span>
-              Live · updated {formatClock(payload.current.time)}
+              <span title={`Model reading time ${formatClock(payload.current.time)}`}>
+                Live · updated NCM {ncmUpdated}
+              </span>
             </span>
           ) : null}
           <span
