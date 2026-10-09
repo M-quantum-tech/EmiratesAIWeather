@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { Fragment, useEffect, useMemo, useRef, useState } from "react"
 import useSWR from "swr"
 import { BellRing, Check, Cloud, Database, ExternalLink, FlaskConical, LineChart, Link2, Plus, Power, RotateCcw, Save, Square, Trash2, Volume2, Wind } from "lucide-react"
 import {
@@ -21,6 +21,7 @@ import {
   drillLevelFromSites,
   tierThresholds,
   BUZZER_METRIC_KEYS,
+  type BuzzerMetricKey,
   type TierThresholds,
   type AiPredictionSource,
   type CloudSourceConfig,
@@ -265,6 +266,39 @@ export function EngineeringConsole({
         if (r.level !== level) return r
         const site = r[siteKey]
         return { ...r, [siteKey]: { ...site, [metric]: site[metric].filter((_, i) => i !== index) } }
+      }),
+    )
+  }
+
+  /**
+   * Edit a tier's buzzer entry from the trigger table. The entry is the floor of the band that
+   * currently drives it, so we move that band's min (shifting its max to keep the band width).
+   * If no band drives the metric yet, a new open-ended band is added at the entered value.
+   */
+  function setTierEntry(
+    level: AlertLevel,
+    siteKey: SiteKey,
+    metric: BuzzerMetricKey,
+    current: number | null,
+    next: number,
+  ) {
+    if (!Number.isFinite(next) || next <= 0) return
+    setSaved(false)
+    setRules((prev) =>
+      prev.map((r) => {
+        if (r.level !== level) return r
+        const site = r[siteKey]
+        const ranges = site[metric]
+        const index = current == null ? -1 : ranges.findIndex((rg) => rg.min === current)
+        const updated =
+          index === -1
+            ? [...ranges, { min: next, max: null, label: "Buzzer entry" }]
+            : ranges.map((rg, i) =>
+                i === index
+                  ? { ...rg, min: next, max: rg.max == null ? null : Math.max(next, rg.max + (next - rg.min)) }
+                  : rg,
+              )
+        return { ...r, [siteKey]: { ...site, [metric]: updated } }
       }),
     )
   }
@@ -582,7 +616,12 @@ export function EngineeringConsole({
               )
             })}
           </div>
-          <BuzzerThresholdTable thresholds={thresholds} rules={rules} />
+          <BuzzerThresholdTable
+            thresholds={thresholds}
+            rules={rules}
+            onEntryChange={setTierEntry}
+            onDeadbandChange={updateDeadband}
+          />
           <div className="mt-3 flex flex-col gap-3">
             <span className="label-caps text-muted-foreground">Test live values — set each site independently</span>
             {SITE_KEYS.map((siteKey) => (
@@ -1755,71 +1794,217 @@ function Field({ label, value, onChange }: { label: string; value: string; onCha
   )
 }
 
-const BUZZER_METRIC_SHORT: Record<(typeof BUZZER_METRIC_KEYS)[number], string> = {
-  windMs: "Wind",
-  gustMs: "Gust",
-  rainMm: "Rain",
-  cloudPct: "Cloud",
+const BUZZER_METRIC_INFO: Record<BuzzerMetricKey, { name: string; unit: string }> = {
+  windMs: { name: "Wind speed", unit: "m/s" },
+  gustMs: { name: "Wind gust", unit: "m/s" },
+  rainMm: { name: "Rainfall", unit: "mm" },
+  cloudPct: { name: "Cloud cover", unit: "%" },
+}
+
+const fmtNum = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1))
+
+/**
+ * Number cell that keeps a local draft while typing and commits on blur / Enter, so the
+ * derived entry value doesn't jump around mid-keystroke. Escape reverts.
+ */
+function EditableNumberCell({
+  value,
+  placeholder,
+  onCommit,
+  label,
+  className,
+}: {
+  value: number | null
+  placeholder?: string
+  onCommit: (n: number) => void
+  label: string
+  className?: string
+}) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const shown = draft ?? (value == null ? "" : fmtNum(value))
+
+  function commit() {
+    if (draft == null) return
+    const n = Number(draft)
+    if (draft.trim() !== "" && Number.isFinite(n)) onCommit(n)
+    setDraft(null)
+  }
+
+  return (
+    <input
+      type="number"
+      inputMode="decimal"
+      step="0.1"
+      min={0}
+      aria-label={label}
+      value={shown}
+      placeholder={placeholder}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur()
+        if (e.key === "Escape") {
+          setDraft(null)
+          e.currentTarget.blur()
+        }
+      }}
+      className={cn(
+        "h-8 w-16 rounded-md border border-border/60 bg-background px-2 text-right font-mono text-xs tabular-nums text-foreground",
+        "placeholder:text-muted-foreground/50 hover:border-border focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/40",
+        "[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
+        className,
+      )}
+    />
+  )
 }
 
 /**
- * Live readout of what sounds the auto buzzer: each tier's entry value per metric, derived
- * from the ranges configured below, and the release point after that tier's dead band.
+ * Editable view of what sounds the auto buzzer. Each tier's entry per metric and site is the
+ * floor of its escalation range — editing a cell moves that range. The dead band per tier and
+ * metric sets the release point. Green is the all-clear band below the Yellow entry.
  */
 function BuzzerThresholdTable({
   thresholds,
   rules,
+  onEntryChange,
+  onDeadbandChange,
 }: {
   thresholds: Record<SiteKey, TierThresholds>
   rules: EscalationRule[]
+  onEntryChange: (
+    level: AlertLevel,
+    siteKey: SiteKey,
+    metric: BuzzerMetricKey,
+    current: number | null,
+    next: number,
+  ) => void
+  onDeadbandChange: (level: AlertLevel, field: keyof TierDeadbands, value: string) => void
 }) {
-  const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1))
+  const siteShort = (s: SiteKey) => (s === "atSite" ? "At site" : "Far site")
+
   return (
-    <div className="mt-3 flex flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-3">
-      <span className="label-caps text-muted-foreground">
-        Auto buzzer trigger · from escalation ranges (≥ entry sounds, releases below entry − dead band)
-      </span>
+    <div className="mt-3 flex flex-col overflow-hidden rounded-lg border border-border/60 bg-background/40">
+      <div className="flex flex-col gap-1 border-b border-border/60 px-3 py-2.5 md:flex-row md:items-center md:justify-between">
+        <span className="label-caps text-foreground">Auto buzzer trigger table</span>
+        <span className="text-xs leading-relaxed text-muted-foreground">
+          Sounds at ≥ entry · releases below entry − dead band · click any value to edit, then Save
+        </span>
+      </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[36rem] border-collapse text-left font-mono text-xs">
+        <table className="w-full min-w-[60rem] border-collapse text-left text-xs">
           <thead>
-            <tr className="text-muted-foreground">
-              <th scope="col" className="py-1 pr-3 font-medium">Tier</th>
-              {SITE_KEYS.flatMap((siteKey) =>
-                BUZZER_METRIC_KEYS.map((key) => (
-                  <th key={`${siteKey}-${key}`} scope="col" className="py-1 pr-3 font-medium">
-                    {siteKey === "atSite" ? "At" : "Far"} · {BUZZER_METRIC_SHORT[key]}
+            <tr className="bg-muted/40">
+              <th
+                scope="col"
+                rowSpan={2}
+                className="sticky left-0 z-10 border-r border-border/60 bg-muted px-3 py-2 font-mono font-medium uppercase tracking-wide text-muted-foreground"
+              >
+                Tier
+              </th>
+              {BUZZER_METRIC_KEYS.map((key) => (
+                <th
+                  key={key}
+                  scope="colgroup"
+                  colSpan={3}
+                  className="border-r border-border/60 px-3 pt-2 pb-1 text-center font-mono font-semibold uppercase tracking-wide text-foreground last:border-r-0"
+                >
+                  {BUZZER_METRIC_INFO[key].name}
+                  <span className="ml-1 font-normal normal-case text-muted-foreground">
+                    ({BUZZER_METRIC_INFO[key].unit})
+                  </span>
+                </th>
+              ))}
+            </tr>
+            <tr className="border-b border-border/60 bg-muted/40 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
+              {BUZZER_METRIC_KEYS.map((key) => (
+                <Fragment key={key}>
+                  <th scope="col" className="px-2 pb-2 text-center font-medium">At site</th>
+                  <th scope="col" className="px-2 pb-2 text-center font-medium">Far site</th>
+                  <th scope="col" className="border-r border-border/60 px-2 pb-2 text-center font-medium last:border-r-0">
+                    Dead band
                   </th>
-                )),
-              )}
+                </Fragment>
+              ))}
             </tr>
           </thead>
           <tbody>
-            {ESCALATION_LEVELS.filter((l) => l !== "green").map((level) => {
+            {ESCALATION_LEVELS.map((level) => {
               const meta = LEVEL_META[level]
+              const isGreen = level === "green"
               const db = rules.find((r) => r.level === level)?.deadbands
+              const yellowDb = rules.find((r) => r.level === "yellow")?.deadbands
               return (
-                <tr key={level} className="border-t border-border/40">
-                  <th scope="row" className={cn("py-1.5 pr-3 font-bold uppercase", meta.text)}>
-                    {meta.name}
+                <tr key={level} className={cn("border-b border-border/40 last:border-b-0", meta.fill)}>
+                  <th
+                    scope="row"
+                    className="sticky left-0 z-10 border-r border-border/60 bg-card px-3 py-2.5 align-middle"
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", meta.dot)} aria-hidden="true" />
+                      <span className={cn("font-mono text-xs font-bold uppercase tracking-wide", meta.text)}>
+                        {meta.name}
+                      </span>
+                    </span>
+                    <span className="mt-0.5 block text-[11px] font-normal text-muted-foreground">
+                      {isGreen ? "All clear · buzzer silent" : "Buzzer sounds"}
+                    </span>
                   </th>
-                  {SITE_KEYS.flatMap((siteKey) =>
-                    BUZZER_METRIC_KEYS.map((key) => {
-                      const t = thresholds[siteKey][level][key]
-                      const band = db?.[key] ?? 0
-                      return (
-                        <td key={`${siteKey}-${key}`} className="py-1.5 pr-3 tabular-nums text-foreground">
-                          {t == null ? (
-                            <span className="text-muted-foreground/60">—</span>
+                  {BUZZER_METRIC_KEYS.map((key) => {
+                    const band = db?.[key] ?? 0
+                    return (
+                      <Fragment key={key}>
+                        {SITE_KEYS.map((siteKey) => {
+                          if (isGreen) {
+                            const yEntry = thresholds[siteKey].yellow[key]
+                            const clears = yEntry == null ? null : Math.max(0, yEntry - (yellowDb?.[key] ?? 0))
+                            return (
+                              <td key={siteKey} className="px-2 py-2.5 text-center align-middle font-mono tabular-nums">
+                                {yEntry == null ? (
+                                  <span className="text-muted-foreground/60">—</span>
+                                ) : (
+                                  <span className="flex flex-col items-center leading-tight">
+                                    <span className="text-foreground">{"< "}{fmtNum(yEntry)}</span>
+                                    <span className="text-[10px] text-muted-foreground">clears ≤ {fmtNum(clears!)}</span>
+                                  </span>
+                                )}
+                              </td>
+                            )
+                          }
+                          const t = thresholds[siteKey][level][key]
+                          return (
+                            <td key={siteKey} className="px-2 py-2 text-center align-middle">
+                              <span className="flex flex-col items-center gap-0.5">
+                                <EditableNumberCell
+                                  value={t}
+                                  placeholder="off"
+                                  label={`${meta.name} ${siteShort(siteKey)} ${BUZZER_METRIC_INFO[key].name} entry`}
+                                  onCommit={(n) => onEntryChange(level, siteKey, key, t, n)}
+                                />
+                                <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+                                  {t == null ? "not driving" : `rel < ${fmtNum(Math.max(0, t - band))}`}
+                                </span>
+                              </span>
+                            </td>
+                          )
+                        })}
+                        <td className="border-r border-border/60 px-2 py-2 text-center align-middle last:border-r-0">
+                          {isGreen ? (
+                            <span className="font-mono text-muted-foreground/60">—</span>
                           ) : (
-                            <>
-                              ≥ {fmt(t)}
-                              <span className="ml-1 text-muted-foreground">↓{fmt(Math.max(0, t - band))}</span>
-                            </>
+                            <span className="flex flex-col items-center gap-0.5">
+                              <EditableNumberCell
+                                value={band}
+                                label={`${meta.name} ${BUZZER_METRIC_INFO[key].name} dead band`}
+                                onCommit={(n) => onDeadbandChange(level, key, String(n))}
+                                className="w-14 border-dashed"
+                              />
+                              <span className="font-mono text-[10px] text-muted-foreground">± both sites</span>
+                            </span>
                           )}
                         </td>
-                      )
-                    }),
-                  )}
+                      </Fragment>
+                    )
+                  })}
                 </tr>
               )
             })}
