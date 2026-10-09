@@ -2,9 +2,10 @@
 
 import type React from "react"
 import { useState, useTransition } from "react"
-import { KeyRound, Trash2, UserPlus, Users } from "lucide-react"
+import { Check, KeyRound, Pencil, Trash2, UserPlus, Users } from "lucide-react"
 import {
   createIamUser,
+  editIamUser,
   removeIamUser,
   setIamUserAccess,
   setIamUserPassword,
@@ -23,6 +24,9 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
   const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null)
   const [resetFor, setResetFor] = useState<string | null>(null)
   const [newPassword, setNewPassword] = useState("")
+  const [editFor, setEditFor] = useState<string | null>(null)
+  const [editDraft, setEditDraft] = useState({ username: "", title: "" })
+  const [deleteFor, setDeleteFor] = useState<string | null>(null)
   const [draft, setDraft] = useState({ username: "", title: "", role: "Supervisor" as IamRoleCode, password: "" })
 
   function run(action: () => Promise<unknown>, ok: string) {
@@ -92,8 +96,42 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
               return (
                 <tr key={u.id} className="align-middle">
                   <td className="px-3 py-2">
-                    <p className="font-mono font-semibold text-foreground">{u.username}</p>
-                    <p className="text-xs text-muted-foreground">{u.title}</p>
+                    {editFor === u.id ? (
+                      <form
+                        id={`edit-${u.id}`}
+                        className="flex flex-col gap-1.5"
+                        onSubmit={(e) => {
+                          e.preventDefault()
+                          run(async () => {
+                            await editIamUser(u.id, editDraft.username, editDraft.title)
+                            setEditFor(null)
+                          }, `Updated ${editDraft.username.trim()}.`)
+                        }}
+                      >
+                        <label className="sr-only" htmlFor={`edit-name-${u.id}`}>Username</label>
+                        <input
+                          id={`edit-name-${u.id}`}
+                          value={editDraft.username}
+                          maxLength={40}
+                          onChange={(e) => setEditDraft({ ...editDraft, username: e.target.value })}
+                          className={cn(inputClass, "w-40 font-mono")}
+                        />
+                        <label className="sr-only" htmlFor={`edit-title-${u.id}`}>Position title</label>
+                        <input
+                          id={`edit-title-${u.id}`}
+                          value={editDraft.title}
+                          maxLength={80}
+                          placeholder="Position title"
+                          onChange={(e) => setEditDraft({ ...editDraft, title: e.target.value })}
+                          className={cn(inputClass, "h-8 w-40 text-xs")}
+                        />
+                      </form>
+                    ) : (
+                      <>
+                        <p className="font-mono font-semibold text-foreground">{u.username}</p>
+                        <p className="text-xs text-muted-foreground">{u.title}</p>
+                      </>
+                    )}
                   </td>
                   <td className="px-3 py-2">
                     <label className="sr-only" htmlFor={`role-${u.id}`}>Role for {u.username}</label>
@@ -139,6 +177,60 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
                   </td>
                   <td className="px-3 py-2">
                     <div className="flex items-center justify-end gap-1.5">
+                      {editFor === u.id ? (
+                        <>
+                          <Button
+                            type="submit"
+                            form={`edit-${u.id}`}
+                            size="sm"
+                            disabled={pending || !editDraft.username.trim()}
+                          >
+                            <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                            Save
+                          </Button>
+                          <Button type="button" size="sm" variant="ghost" onClick={() => setEditFor(null)}>
+                            Cancel
+                          </Button>
+                        </>
+                      ) : deleteFor === u.id ? (
+                        <>
+                          <span className="font-mono text-xs uppercase text-destructive">Delete?</span>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="destructive"
+                            disabled={pending}
+                            onClick={() =>
+                              run(async () => {
+                                await removeIamUser(u.id)
+                                setDeleteFor(null)
+                              }, `${u.username} deleted.`)
+                            }
+                          >
+                            Confirm
+                          </Button>
+                          <Button type="button" size="sm" variant="ghost" onClick={() => setDeleteFor(null)}>
+                            Cancel
+                          </Button>
+                        </>
+                      ) : (
+                      <>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={pending}
+                        aria-label={`Edit ${u.username}`}
+                        onClick={() => {
+                          setResetFor(null)
+                          setDeleteFor(null)
+                          setEditDraft({ username: u.username, title: u.title })
+                          setEditFor(u.id)
+                        }}
+                      >
+                        <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                        Edit
+                      </Button>
                       {resetFor === u.id ? (
                         <form
                           className="flex items-center gap-1.5"
@@ -176,14 +268,17 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
                         variant="ghost"
                         disabled={pending}
                         aria-label={`Delete ${u.username}`}
+                        className="text-muted-foreground hover:text-destructive"
                         onClick={() => {
-                          if (confirm(`Delete ${u.username}? This cannot be undone.`)) {
-                            run(() => removeIamUser(u.id), `${u.username} deleted.`)
-                          }
+                          setResetFor(null)
+                          setDeleteFor(u.id)
                         }}
                       >
                         <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        Delete
                       </Button>
+                      </>
+                      )}
                     </div>
                   </td>
                 </tr>

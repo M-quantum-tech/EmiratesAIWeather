@@ -190,13 +190,24 @@ async function assertIamUser(userId: string) {
 
 export async function updateIamUser(
   userId: string,
-  patch: { role?: IamRoleCode; title?: string; accessStatus?: "allowed" | "denied" },
+  patch: { role?: IamRoleCode; title?: string; accessStatus?: "allowed" | "denied"; username?: string },
 ) {
   await ensureIamColumns()
   await assertIamUser(userId)
+  let renamed = false
+  if (patch.username !== undefined) {
+    const email = iamEmailFor(patch.username)
+    const [clash] = await db.select({ id: user.id }).from(user).where(eq(user.email, email)).limit(1)
+    if (clash && clash.id !== userId) throw new Error("A user with that username already exists.")
+    const [current] = await db.select({ email: user.email }).from(user).where(eq(user.id, userId)).limit(1)
+    renamed = current?.email !== email
+  }
   await db
     .update(user)
     .set({
+      ...(patch.username !== undefined
+        ? { iamUsername: patch.username, name: patch.username, email: iamEmailFor(patch.username) }
+        : {}),
       ...(patch.role ? { iamRole: patch.role } : {}),
       ...(patch.title !== undefined ? { iamTitle: patch.title } : {}),
       ...(patch.accessStatus ? { accessStatus: patch.accessStatus } : {}),
@@ -204,7 +215,7 @@ export async function updateIamUser(
     })
     .where(eq(user.id, userId))
   // Role or access changes take effect immediately: force a fresh sign-in.
-  if (patch.role || patch.accessStatus === "denied") await revokeSessions(userId)
+  if (patch.role || patch.accessStatus === "denied" || renamed) await revokeSessions(userId)
 }
 
 export async function resetIamPassword(userId: string, password: string) {
