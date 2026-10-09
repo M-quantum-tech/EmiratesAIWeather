@@ -71,7 +71,7 @@ import {
 } from "@/lib/escalation"
 import { computeSiteReadings } from "@/lib/site-readings"
 import { ProximityRings, type RadarSite } from "@/components/weather/proximity-rings"
-import { AlarmDetailsPanel, type AlarmDriver, type AlarmSite } from "@/components/weather/alarm-details-panel"
+import type { AlarmSite } from "@/components/weather/alarm-details-panel"
 import { WindDirectionRadar } from "@/components/weather/wind-direction-radar"
 import { useWeather } from "@/components/weather/weather-provider"
 import { useSimulatorMode } from "@/components/weather/use-simulator-mode"
@@ -563,37 +563,6 @@ export function AlertBanner() {
   })
   const siteReasonFor = (s: AlarmSite) =>
     tierReason(siteReadings[s.key as SiteKey], tierThresholds(rules, s.key as SiteKey), s.tier)
-  const forecastLevel: AlertLevel = simulator.active ? "green" : heldLevel ?? rawAlert!.level
-  const topHazard = [...alert.hazards].sort(
-    (a, b) => ESCALATION_LEVELS.indexOf(b.level) - ESCALATION_LEVELS.indexOf(a.level),
-  )[0]
-  const drivers: AlarmDriver[] = [
-    {
-      id: "forecast",
-      label: "Forecast tier",
-      level: forecastLevel,
-      reason: simulator.active
-        ? "Ignored during a drill — tier comes from the simulator readings."
-        : forecastLevel === "green"
-          ? "No forecast hazard tracking toward your location."
-          : `${topHazard ? `${topHazard.label} ${topHazard.value} · ` : ""}hazard within ${ALERT_RADII_KM[forecastLevel]} km`,
-    },
-    ...detailSites.map<AlarmDriver>((s) => ({
-      id: s.key,
-      label: `${s.name} ranges`,
-      level: s.tier,
-      reason:
-        s.tier === "green"
-          ? `All metrics below Yellow entry · ${s.sourceLabel}`
-          : `${siteReasonFor(s) ?? "Held by dead band"} · ${s.distanceKm} km${s.compass ? ` ${s.compass}` : ""}`,
-    })),
-    {
-      id: "wind-monitor",
-      label: "Wind Event Monitor",
-      level: windEval.level,
-      reason: windEval.reason ?? `Sustained wind ${siteReadings.atSite.windMs.toFixed(1)} m/s below thresholds`,
-    },
-  ]
   const radarSites: RadarSite[] = detailSites.map((s) => ({
     key: s.key,
     label: s.name,
@@ -705,12 +674,6 @@ export function AlertBanner() {
                     : `Armed at ${alert.title}`}
             {danger ? ` · severe conditions within ${DANGER_RADIUS_KM} km` : ""} — sounding for 15 s or until reset.
           </span>
-          <a
-            href="#alarm-details"
-            className="font-mono text-xs font-bold uppercase tracking-wider underline underline-offset-4"
-          >
-            View full details
-          </a>
           <button
             type="button"
             onClick={acknowledge}
@@ -906,16 +869,6 @@ export function AlertBanner() {
   />
         </div>
       </div>
-
-      <AlarmDetailsPanel
-        finalLevel={alert.level}
-        alarmActive={alarmActive}
-        simulator={simulator.active}
-        drivers={drivers}
-        sites={detailSites}
-        forecastHazards={alert.hazards}
-        windMonitor={{ level: windEval.level, reason: windEval.reason, windMs: siteReadings.atSite.windMs }}
-      />
 
       {/* Approach tracker — on-site vs far-site (50 km upwind) gust + distance legend */}
       <div className="border-t border-border/60 p-5 sm:p-7">
