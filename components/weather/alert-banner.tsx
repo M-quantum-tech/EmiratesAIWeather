@@ -13,7 +13,6 @@ import {
   ExternalLink,
   FlaskConical,
   Gauge,
-  MapPin,
   Navigation,
   Radar,
   Radio,
@@ -435,14 +434,6 @@ export function AlertBanner() {
   const farGust = farData?.current.windGusts ?? null
   const gustDelta = farGust != null ? farGust - onGust : null
   const approaching = gustDelta != null && gustDelta > 3
-  const easing = gustDelta != null && gustDelta < -3
-  const deltaTone = approaching ? "text-alert-orange" : easing ? "text-alert-green" : "text-muted-foreground"
-  const deltaBorder = approaching
-    ? "border-alert-orange/40 bg-alert-orange/10"
-    : easing
-      ? "border-alert-green/40 bg-alert-green/10"
-      : "border-border bg-background/50"
-  const deltaWord = gustDelta == null ? "Sampling" : approaching ? "Intensifying" : easing ? "Easing" : "Steady"
   const mm = Math.floor(countdown / 60)
   const ss = countdown % 60
 
@@ -548,6 +539,10 @@ export function AlertBanner() {
     label: s.name,
     distanceKm: s.distanceKm,
     bearingDeg: payload.current.windDirection,
+    directionDeg:
+      s.key === "farSite"
+        ? farData?.current.windDirection ?? payload.current.windDirection
+        : payload.current.windDirection,
     windMs: siteReadings[s.key as SiteKey].windMs,
     gustMs: siteReadings[s.key as SiteKey].gustMs,
     level: s.tier,
@@ -892,54 +887,6 @@ export function AlertBanner() {
               {k === "atSite" ? "At" : "Far"} · {siteSource[k] === "ghaith" ? "Ghaith mirror" : "Grid fallback"}
             </span>
           ))}
-        </div>
-
-        <div className="mt-3 grid items-stretch gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
-          {/* ON SITE (near) */}
-          <div className="rounded-xl border border-signal/40 bg-signal/5 p-4">
-            <span className="flex items-center gap-1.5 font-mono text-[0.625rem] uppercase tracking-widest text-signal">
-              <MapPin className="h-3 w-3" aria-hidden="true" /> On site · near
-            </span>
-            <div className="mt-1.5 flex items-baseline gap-1.5">
-              <span className="text-4xl font-black tabular-nums text-foreground">{Math.round(gustKmh)}</span>
-              <span className="text-sm text-muted-foreground">km/h gust</span>
-            </div>
-            <span className="mt-0.5 block font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
-              {(gustKmh / MS_TO_KMH).toFixed(1)} m/s · {compass(payload.current.windDirection)} wind
-            </span>
-            <WindSourceLink source={atSiteFeed} />
-          </div>
-
-          {/* delta */}
-          <div className="flex flex-row items-center justify-center gap-2 sm:flex-col">
-            <span className={cn("grid h-11 w-11 place-items-center rounded-full border", deltaBorder)}>
-              <Wind className={cn("h-5 w-5", deltaTone)} aria-hidden="true" />
-            </span>
-            <div className="flex flex-col items-center leading-tight">
-              <span className={cn("font-mono text-sm font-bold tabular-nums", deltaTone)}>
-                {gustDelta == null ? "—" : `${gustDelta > 0 ? "+" : ""}${Math.round(gustDelta)}`}
-              </span>
-              <span className={cn("font-mono text-[0.5625rem] uppercase tracking-wider", deltaTone)}>{deltaWord}</span>
-            </div>
-          </div>
-
-          {/* FAR SITE (50 km) */}
-          <div className={cn("rounded-xl border p-4", deltaBorder)}>
-            <span className={cn("flex items-center gap-1.5 font-mono text-[0.625rem] uppercase tracking-widest", deltaTone)}>
-              <Navigation className="h-3 w-3" aria-hidden="true" /> Far site · 50 km away
-            </span>
-            <div className="mt-1.5 flex items-baseline gap-1.5">
-              <span className="text-4xl font-black tabular-nums text-foreground">
-                {farGustMs == null ? "—" : Math.round(farGustMs * 3.6)}
-              </span>
-              <span className="text-sm text-muted-foreground">km/h gust</span>
-            </div>
-            <span className="mt-0.5 block font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
-              {farGustMs == null ? "Sampling · " : `${farGustMs.toFixed(1)} m/s · `}
-              {compass(payload.current.windDirection)} origin
-            </span>
-            <WindSourceLink source={farSiteFeed} />
-          </div>
         </div>
 
         {/* Escalation rules table — the fixed NCM-style ladder, active tier highlighted */}

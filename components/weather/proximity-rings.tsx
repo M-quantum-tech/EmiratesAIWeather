@@ -1,6 +1,6 @@
 "use client"
 
-import { MapPin, Navigation2, Wind } from "lucide-react"
+import { MapPin, Merge, Navigation2, Shuffle, Split, Wind } from "lucide-react"
 import { ALERT_RADII_KM, type AlertLevel } from "@/lib/weather"
 import { cn } from "@/lib/utils"
 
@@ -43,6 +43,8 @@ export type RadarSite = {
   distanceKm: number
   /** Bearing from the user to the spot, degrees clockwise from north. */
   bearingDeg: number
+  /** Direction the wind is blowing FROM at this spot, degrees. */
+  directionDeg?: number
   windMs: number
   gustMs: number
   level: AlertLevel
@@ -65,14 +67,124 @@ const SITE_LABEL: Record<AlertLevel, string> = {
 const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 const compassOf = (deg: number) => COMPASS[Math.round((((deg % 360) + 360) % 360) / 45) % 8]
 
+/** Ghaith AWS-wind style: whole km/h first, m/s alongside. */
+const kmh = (ms: number) => Math.round(ms * 3.6)
+
+/** Pixel radius on the scope for a distance, kept inside the outer ring. */
+const toPx = (km: number, maxRadius: number) => (Math.min(km, maxRadius) / maxRadius) * (MAX_PX / 2 - 12)
+
 function siteTitle(site: RadarSite) {
-  return `${site.label} · ${site.distanceKm} km · wind ${site.windMs.toFixed(1)} m/s · gust ${site.gustMs.toFixed(1)} m/s · ${site.level.toUpperCase()}${site.reason ? ` · ${site.reason}` : ""}`
+  const dir = site.directionDeg != null ? `${compassOf(site.directionDeg)} ` : ""
+  return `${site.label} · ${site.distanceKm} km · wind ${dir}${kmh(site.windMs)} km/h (${site.windMs.toFixed(1)} m/s) · gust ${kmh(site.gustMs)} km/h (${site.gustMs.toFixed(1)} m/s) · ${site.level.toUpperCase()}${site.reason ? ` · ${site.reason}` : ""}`
+}
+
+type FlowKind = "diverging" | "converging" | "shear"
+type FlowZone = {
+  kind: FlowKind
+  x: number
+  y: number
+  axisDeg: number
+  distanceKm: number
+  speedChangeMs: number
+  turnDeg: number
+}
+
+const FLOW_MIN_MS = 1.5
+const FLOW_MIN_TURN = 45
+
+/**
+ * Compares the wind vectors at the site and the far site along the line joining them.
+ * Flows pulling apart along that line = diverging; pushing together = converging;
+ * a large direction change without either = shear.
+ */
+function analyseFlow(sites: RadarSite[], maxRadius: number): FlowZone | null {
+  const near = sites.find((s) => s.distanceKm === 0)
+  const far = sites.find((s) => s.distanceKm > 0)
+  if (!near || !far || near.directionDeg == null || far.directionDeg == null) return null
+
+  const heading = (fromDeg: number, speed: number) => {
+    const h = ((fromDeg + 180) * Math.PI) / 180
+    return { x: Math.sin(h) * speed, y: Math.cos(h) * speed }
+  }
+  const axisRad = (far.bearingDeg * Math.PI) / 180
+  const vn = heading(near.directionDeg, near.windMs)
+  const vf = heading(far.directionDeg, far.windMs)
+  const along = (vf.x - vn.x) * Math.sin(axisRad) + (vf.y - vn.y) * Math.cos(axisRad)
+  const rawTurn = Math.abs((((far.directionDeg - near.directionDeg) % 360) + 540) % 360 - 180)
+
+  const kind: FlowKind | null =
+    along >= FLOW_MIN_MS ? "diverging" : along <= -FLOW_MIN_MS ? "converging" : rawTurn >= FLOW_MIN_TURN ? "shear" : null
+  if (!kind) return null
+
+  const midKm = far.distanceKm / 2
+  const r = toPx(midKm, maxRadius)
+  return {
+    kind,
+    x: Math.sin(axisRad) * r,
+    y: -Math.cos(axisRad) * r,
+    axisDeg: far.bearingDeg,
+    distanceKm: Math.round(midKm),
+    speedChangeMs: along,
+    turnDeg: Math.round(rawTurn),
+  }
+}
+
+const FLOW_STYLE: Record<FlowKind, { Icon: typeof Split; text: string; border: string; bg: string; title: string }> = {
+  diverging: { Icon: Split, text: "text-accent", border: "border-accent/60", bg: "bg-accent/10", title: "Diverging winds" },
+  converging: { Icon: Merge, text: "text-alert-orange", border: "border-alert-orange/60", bg: "bg-alert-orange/10", title: "Converging winds" },
+  shear: { Icon: Shuffle, text: "text-alert-yellow", border: "border-alert-yellow/60", bg: "bg-alert-yellow/10", title: "Wind shear" },
+}
+
+function flowMeaning(zone: FlowZone) {
+  const change = `${Math.abs(zone.speedChangeMs).toFixed(1)} m/s apart along the line · direction turns ${zone.turnDeg}°`
+  if (zone.kind === "diverging")
+    return `Air is spreading apart between the sites (${change}). Surface divergence usually means sinking air — skies tend to clear, but storm outflow can bring sudden gusts.`
+  if (zone.kind === "converging")
+    return `Air is piling together between the sites (${change}). Surface convergence lifts air — watch for cloud build-up, dust lifting or storm development heading to site.`
+  return `Wind changes direction sharply between the sites (${change}). Shear zones bring gusty, shifting wind at the boundary.`
+}
+
+function FlowMarker({ zone }: { zone: FlowZone }) {
+  const { Icon, text, border, bg, title } = FLOW_STYLE[zone.kind]
+  return (
+    <span
+      className="absolute z-20"
+      style={{ left: `calc(50% + ${zone.x}px)`, top: `calc(50% + ${zone.y}px)`, transform: "translate(-50%, -50%)" }}
+      title={`${title} · ~${zone.distanceKm} km ${compassOf(zone.axisDeg)}`}
+    >
+      <span className={cn("absolute inset-0 animate-ping rounded-md border-2 opacity-50", border)} aria-hidden="true" />
+      <span className={cn("relative grid h-7 w-7 place-items-center rounded-md border-2 bg-background", border, text)}>
+        <Icon className="h-4 w-4" style={{ transform: `rotate(${zone.axisDeg}deg)` }} aria-hidden="true" />
+        <span className="sr-only">{title}</span>
+      </span>
+    </span>
+  )
+}
+
+function FlowCard({ zone }: { zone: FlowZone }) {
+  const { Icon, text, border, bg, title } = FLOW_STYLE[zone.kind]
+  return (
+    <div className={cn("flex w-full gap-3 rounded-lg border px-3 py-2.5", border, bg)}>
+      <span className={cn("grid h-8 w-8 shrink-0 place-items-center rounded-md border-2 bg-background", border, text)}>
+        <Icon className="h-4 w-4" aria-hidden="true" />
+      </span>
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className={cn("text-sm font-bold leading-tight", text)}>
+          {title}
+          <span className="ml-1.5 font-normal text-muted-foreground">
+            · ~{zone.distanceKm} km {compassOf(zone.axisDeg)}
+          </span>
+        </span>
+        <p className="text-pretty text-xs leading-relaxed text-muted-foreground">{flowMeaning(zone)}</p>
+      </div>
+    </div>
+  )
 }
 
 /** Numbered dot on the scope; full readings live in the legend below so nothing overflows. */
 function SiteMarker({ site, index, maxRadius }: { site: RadarSite; index: number; maxRadius: number }) {
   // Keep the dot inside the scope even when the site sits on the outer ring.
-  const r = (Math.min(site.distanceKm, maxRadius) / maxRadius) * (MAX_PX / 2 - 12)
+  const r = toPx(site.distanceKm, maxRadius)
   const rad = (site.bearingDeg * Math.PI) / 180
   const x = Math.sin(rad) * r
   const y = -Math.cos(rad) * r
@@ -90,6 +202,13 @@ function SiteMarker({ site, index, maxRadius }: { site: RadarSite; index: number
     >
       {alerting ? (
         <span className={cn("absolute inline-flex h-6 w-6 animate-ping rounded-full opacity-60", SITE_DOT[site.level])} />
+      ) : null}
+      {site.directionDeg != null ? (
+        <Navigation2
+          aria-hidden="true"
+          className="absolute h-3.5 w-3.5 fill-foreground text-foreground"
+          style={{ transform: `rotate(${(site.directionDeg + 180) % 360}deg) translateY(-19px)` }}
+        />
       ) : null}
       <span
         className={cn(
@@ -131,14 +250,27 @@ function SiteLegend({ sites }: { sites: RadarSite[] }) {
                 {s.distanceKm === 0 ? "· your location" : `· ${s.distanceKm} km ${compassOf(s.bearingDeg)}`}
               </span>
             </span>
-            <span className="flex flex-wrap gap-x-3 font-mono text-sm tabular-nums text-foreground">
-              <span className="whitespace-nowrap">
-                Wind <span className="font-bold">{s.windMs.toFixed(1)}</span>
-                <span className="text-xs text-muted-foreground"> m/s</span>
+            <span className="mt-0.5 flex flex-wrap items-baseline gap-x-4 gap-y-0.5 tabular-nums text-foreground">
+              <span className="flex items-baseline gap-1 whitespace-nowrap">
+                {s.directionDeg != null ? (
+                  <Navigation2
+                    aria-hidden="true"
+                    className="h-3.5 w-3.5 self-center fill-foreground"
+                    style={{ transform: `rotate(${(s.directionDeg + 180) % 360}deg)` }}
+                  />
+                ) : null}
+                {s.directionDeg != null ? (
+                  <span className="font-mono text-xs font-semibold text-muted-foreground">{compassOf(s.directionDeg)}</span>
+                ) : null}
+                <span className="text-lg font-bold leading-none">{kmh(s.windMs)}</span>
+                <span className="text-xs text-muted-foreground">km/h</span>
+                <span className="font-mono text-xs text-muted-foreground">({s.windMs.toFixed(1)} m/s)</span>
               </span>
-              <span className="whitespace-nowrap">
-                Gust <span className="font-bold">{s.gustMs.toFixed(1)}</span>
-                <span className="text-xs text-muted-foreground"> m/s</span>
+              <span className="flex items-baseline gap-1 whitespace-nowrap">
+                <span className="text-xs text-muted-foreground">Gust</span>
+                <span className="text-lg font-bold leading-none">{kmh(s.gustMs)}</span>
+                <span className="text-xs text-muted-foreground">km/h</span>
+                <span className="font-mono text-xs text-muted-foreground">({s.gustMs.toFixed(1)} m/s)</span>
               </span>
             </span>
             {s.reason ? <span className="text-xs leading-snug text-muted-foreground">{s.reason}</span> : null}
@@ -178,6 +310,7 @@ export function ProximityRings({
   const maxRadius = ALERT_RADII_KM.green
   const yellowSize = (ALERT_RADII_KM.yellow / maxRadius) * MAX_PX
   const activeTier = TIERS.find((t) => t.level === active) ?? TIERS[0]
+  const flowZone = sites?.length ? analyseFlow(sites, maxRadius) : null
 
   return (
     <div className="flex w-full max-w-[20rem] flex-col items-center gap-3">
@@ -244,6 +377,7 @@ export function ProximityRings({
         {sites?.length
           ? sites.map((s, i) => <SiteMarker key={s.key} site={s} index={i} maxRadius={maxRadius} />)
           : null}
+        {flowZone ? <FlowMarker zone={flowZone} /> : null}
         {showFarSite && !sites?.length ? (
           <span
             className="absolute z-10 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center"
@@ -279,6 +413,13 @@ export function ProximityRings({
       </span>
 
       {sites?.length ? <SiteLegend sites={sites} /> : null}
+      {flowZone ? (
+        <FlowCard zone={flowZone} />
+      ) : sites?.length ? (
+        <p className="w-full text-pretty text-xs leading-relaxed text-muted-foreground">
+          No diverging or converging wind between the sites — the flow is uniform.
+        </p>
+      ) : null}
 
       {/* Live readout — wind in m/s */}
       <div className="grid w-full grid-cols-1 gap-2">
