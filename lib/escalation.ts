@@ -128,11 +128,11 @@ export type SiteConfig = {
   source: SourceLink
 }
 
-const AT_SITE_SOURCE: SourceLink = {
+export const AT_SITE_SOURCE: SourceLink = {
   label: "NCM AWS Wind · at site",
   url: "https://ghaith.ncm.gov.ae/?lang=en#aws-wind",
 }
-const FAR_SITE_SOURCE: SourceLink = {
+export const FAR_SITE_SOURCE: SourceLink = {
   label: "NCM COSMO-UAE Wind · far site",
   url: "https://ghaith.ncm.gov.ae/?lang=en#cosmo-uae-wind",
 }
@@ -418,14 +418,18 @@ export function parseMetricRanges(value: unknown, fallback: MetricRange[], max: 
   return out.length ? out : fallback.map((r) => ({ ...r }))
 }
 
-/** Parse a per-site data source, allowing an intentionally empty (unassigned) feed. */
-function parseSiteSource(value: unknown): SourceLink {
-  if (!value || typeof value !== "object") return { label: "" }
+/**
+ * Parse a per-site data source. A saved source with no usable URL falls back to the
+ * site's NCM Ghaith feed (#aws-wind at site, #cosmo-uae-wind far site), so the
+ * escalation panel never loses its upstream link.
+ */
+function parseSiteSource(value: unknown, fallback: SourceLink): SourceLink {
+  if (!value || typeof value !== "object") return { ...fallback }
   const r = value as Record<string, unknown>
   const label = String(r.label ?? "").slice(0, 80).trim()
   const url = sanitizeSourceUrl(r.url)
-  if (!label && !url) return { label: "" }
-  return { label: label || url!, ...(url ? { url } : {}) }
+  if (!url) return { ...fallback }
+  return { label: label || url, url }
 }
 
 /** Parse an unknown value into a clean SiteConfig, falling back per field. */
@@ -437,7 +441,7 @@ export function parseSiteConfig(value: unknown, fallback: SiteConfig): SiteConfi
     gustMs: parseMetricRanges(r.gustMs, fallback.gustMs, SITE_METRIC_META.gustMs.max),
     rainMm: parseMetricRanges(r.rainMm, fallback.rainMm, SITE_METRIC_META.rainMm.max),
     cloudPct: parseMetricRanges(r.cloudPct, fallback.cloudPct, SITE_METRIC_META.cloudPct.max),
-    source: r.source === undefined ? { ...fallback.source } : parseSiteSource(r.source),
+    source: parseSiteSource(r.source, fallback.source),
   }
 }
 

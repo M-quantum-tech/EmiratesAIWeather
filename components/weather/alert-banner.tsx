@@ -46,6 +46,8 @@ import {
 import { fetchWarningFrames, type EmirateWarning } from "@/lib/ncm-warnings"
 import {
   applyLevelHysteresis,
+  AT_SITE_SOURCE,
+  FAR_SITE_SOURCE,
   BUZZER_TONE,
   DEFAULT_CLOUD_SOURCE,
   DEFAULT_RULES,
@@ -59,6 +61,7 @@ import {
   type EscalationRule,
   type SiteKey,
   type SiteReadings,
+  type SourceLink,
   type WindMonitorTier,
   type WindSourceConfig,
 } from "@/lib/escalation"
@@ -237,6 +240,11 @@ export function AlertBanner() {
     { refreshInterval: 300_000, revalidateOnFocus: false },
   )
   const windSource = windSourceData?.source ?? DEFAULT_WIND_SOURCE
+  // Escalation panel + Wind Event Monitor share one pair of feeds: the at-site rule's
+  // source (Ghaith #aws-wind) and the far-site rule's source (Ghaith #cosmo-uae-wind).
+  const feedRule = rules.find((r) => r.atSite?.source?.url || r.farSite?.source?.url)
+  const atSiteFeed = feedLink(feedRule?.atSite?.source, AT_SITE_SOURCE)
+  const farSiteFeed = feedLink(feedRule?.farSite?.source, FAR_SITE_SOURCE)
   // NCM cloud / satellite source — tracks intensifying convection, editable in the Engineering Console.
   const { data: cloudSourceData } = useSWR<{ source: CloudSourceConfig }>(
     "/api/cloud-source",
@@ -825,6 +833,13 @@ export function AlertBanner() {
       <div className="border-t border-border/60 p-5 sm:p-7">
         {/* Live Wind Event Monitor — active tier driven by on-site sustained wind */}
         <WindEventMonitor windMs={windMs} tiers={windTiers} />
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+            Data source · NCM Ghaith
+          </span>
+          <WindSourceLink source={atSiteFeed} />
+          <WindSourceLink source={farSiteFeed} />
+        </div>
 
         <div className="mt-3 grid items-stretch gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
           {/* ON SITE (near) */}
@@ -839,7 +854,7 @@ export function AlertBanner() {
             <span className="mt-0.5 block font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
               {(gustKmh / MS_TO_KMH).toFixed(1)} m/s · {compass(payload.current.windDirection)} wind
             </span>
-            <WindSourceLink source={windSource} />
+            <WindSourceLink source={atSiteFeed} />
           </div>
 
           {/* delta */}
@@ -870,7 +885,7 @@ export function AlertBanner() {
               {farGustMs == null ? "Sampling · " : `${farGustMs.toFixed(1)} m/s · `}
               {compass(payload.current.windDirection)} origin
             </span>
-            <WindSourceLink source={windSource} />
+            <WindSourceLink source={farSiteFeed} />
           </div>
         </div>
 
@@ -1051,6 +1066,12 @@ const STATION_LEVELS: { level: keyof typeof WIND_TIER_STYLES; label: string; sub
   { level: "orange", label: "Orange", sub: "Alert" },
   { level: "red", label: "Red", sub: "Severe" },
 ]
+
+/** Resolve a site's feed to a linkable chip, falling back to its default NCM Ghaith wind feed. */
+function feedLink(source: SourceLink | undefined, fallback: SourceLink): WindSourceConfig {
+  const resolved = source?.url ? source : fallback
+  return { label: resolved.label || fallback.label, url: resolved.url ?? fallback.url ?? "" }
+}
 
 /** Small "connected source" chip that links wind speed & gust readouts to the configured NCM feed. */
 function WindSourceLink({ source }: { source: WindSourceConfig }) {
