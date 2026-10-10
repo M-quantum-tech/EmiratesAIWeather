@@ -268,6 +268,9 @@ export function AlertBanner() {
   const [rangeTier, setRangeTier] = useState<AlertLevel>("green")
   const rangeHeldRef = useRef<AlertLevel | null>(null)
   const [ncm, setNcm] = useState<EmirateWarning | null>(null)
+  // Only a warning issued for the station's own emirate may sound the buzzer; the
+  // UAE-wide fallback above is shown for context but never trips the local alarm.
+  const [ncmLocal, setNcmLocal] = useState<EmirateWarning | null>(null)
 
   // Live NCM Al Bahar warning for the current hour — matched to the user's emirate
   // when possible, otherwise the most severe active UAE warning. Refreshed every 10 min.
@@ -282,6 +285,7 @@ export function AlertBanner() {
         const frame = data.frames[0] ?? []
         const mine = frame.find((w) => loc.includes(w.name.toLowerCase()))
         setNcm(mine ?? frame[0] ?? null)
+        setNcmLocal(mine ?? null)
       } catch (err) {
         if ((err as any)?.name !== "AbortError")
           console.log("[v0] alert ncm warning failed:", err instanceof Error ? err.message : err)
@@ -386,10 +390,25 @@ export function AlertBanner() {
   )
   // Safety Model tier = Live Wind Monitor tier (Tier 1 Green … Tier 4 Red). The escalation
   // ranges for that tier are then checked below as confirmation. A drill uses the range tier.
+  // Live tier = the highest of three wired sources, so any one of them trips the buzzer:
+  //  1. Wind Event Monitor (at-site sustained wind, e.g. ≥ 14 m/s → Red)
+  //  2. Escalation ranges — wind, gust, rainfall OR cloud at the At-site OR Far-site
+  //  3. NCM / Al Bahar official warning issued for this station's emirate
+  const ncmLevel: AlertLevel = ncmLocal?.level ?? "green"
+  const liveSources = useMemo(() => {
+    const rank = (l: AlertLevel) => ESCALATION_LEVELS.indexOf(l)
+    const candidates: { level: AlertLevel; source: "wind" | "range" | "ncm" }[] = [
+      { level: windEval.level, source: "wind" },
+      { level: rangeTier, source: "range" },
+      { level: ncmLevel, source: "ncm" },
+    ]
+    return candidates.reduce((best, c) => (rank(c.level) > rank(best.level) ? c : best))
+  }, [windEval.level, rangeTier, ncmLevel])
+  const liveLevel = liveSources.level
   const alert = useMemo(() => {
     if (!rawAlert) return null
-    return withAlertLevel(rawAlert, simulator.active ? rangeTier : windEval.level)
-  }, [rawAlert, simulator.active, rangeTier, windEval.level])
+    return withAlertLevel(rawAlert, simulator.active ? rangeTier : liveLevel)
+  }, [rawAlert, simulator.active, rangeTier, liveLevel])
   const level = alert?.level ?? null
   const siteEval = useMemo(() => {
     const rule = rules.find((r) => r.level === level) ?? null
@@ -400,7 +419,7 @@ export function AlertBanner() {
   // Any of the three wired conditions arms the alarm and blink.
   // A reading beyond a configured Yellow / Orange / Red band also arms it automatically.
   // Live, the buzzer follows the displayed tier, so it never sounds while the display is Green.
-  const siteAlarm = simulator.active ? rangeTier !== "green" || siteEval.anyMet : windEval.met
+  const siteAlarm = simulator.active ? rangeTier !== "green" || siteEval.anyMet : liveLevel !== "green"
   // Acknowledgment latch: the buzzer sounds while a site condition is met and un-acked.
   // Clearing the condition (all sites back to green) re-arms it for the next trip, and
   // escalating to a higher range tier re-sounds it even if the lower tier was silenced.
@@ -672,7 +691,9 @@ export function AlertBanner() {
                   ? `Far site in range · ${siteEval.far.reason}`
                   : windEval.met
                     ? `Wind event met · ${windEval.reason}`
-                    : `Armed at ${alert.title}`}
+                    : !simulator.active && liveSources.source === "ncm" && ncmLocal
+                      ? `NCM / Al Bahar ${ncmLocal.level} warning · ${ncmLocal.name}${ncmLocal.headline ? ` · ${ncmLocal.headline}` : ""}`
+                      : `Armed at ${alert.title}`}
             {danger ? ` · severe conditions within ${DANGER_RADIUS_KM} km` : ""} — sounding for 15 s or until reset.
           </span>
           <button

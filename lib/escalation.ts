@@ -890,9 +890,11 @@ export type WindMonitorTier = {
 
 /** Default Wind Event Monitor ladder — mirrors the NCM high-wind escalation. */
 export const DEFAULT_WIND_MONITOR: WindMonitorTier[] = [
-  { id: "hhh-16", minSpeed: 16, level: "orange", label: "High · High · High", note: "Level 3 alert" },
-  { id: "hhh-14", minSpeed: 14, level: "orange", label: "High · High · High", note: "Level 3 alert" },
-  { id: "hh-12", minSpeed: 12, level: "yellow", label: "High · High", note: "Level 2 warning alert" },
+  { id: "red-14", minSpeed: 14, level: "red", label: "High · High · High", note: "Level 3 alert" },
+  { id: "orange-11", minSpeed: 11, level: "orange", label: "High · High · High", note: "Level 3 alert" },
+  { id: "yellow-10", minSpeed: 10, level: "yellow", label: "High · High", note: "Level 2 warning alert" },
+  { id: "yellow-7_5", minSpeed: 7.5, level: "yellow", label: "High", note: "Level 2 warning" },
+  { id: "green-5", minSpeed: 5, level: "green", label: "Normal", note: "Level 1 warning" },
 ]
 
 /**
