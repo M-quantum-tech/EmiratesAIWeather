@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import useSWR from "swr"
 import {
   Activity,
@@ -78,6 +78,16 @@ import { useSimulatorMode } from "@/components/weather/use-simulator-mode"
 import { useGhaithMirror } from "@/components/weather/use-ghaith-mirror"
 import { StationMirrorPush } from "@/components/weather/station-mirror-push"
 import { BuzzerTriggerTable } from "@/components/weather/buzzer-trigger-table"
+import { getAudioState, installAudioUnlock, startLiveBuzzer, stopLiveBuzzer } from "@/lib/escalation-buzzer"
+import {
+  clearStationAlarm,
+  getAlertsEnabled,
+  notifyStationAlarm,
+  startTitleFlash,
+  stopTitleFlash,
+  subscribeAlertsEnabled,
+} from "@/lib/alert-notify"
+import { AlertReadiness } from "@/components/weather/alert-readiness"
 import { cn } from "@/lib/utils"
 
 /** Header auto-refresh cadence (seconds) surfaced as a live countdown. */
@@ -160,65 +170,43 @@ type ParamCell = {
   tone: ParamTone
 }
 
-/** Looping level-tuned alarm via the Web Audio API (no asset needed). */
-function useBuzzer(active: boolean, level: AlertLevel) {
-  const ctxRef = useRef<AudioContext | null>(null)
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+/** Looping level-tuned alarm through the shared buzzer player (same tones as the console). */
+function useBuzzer(rawActive: boolean, level: AlertLevel, reason: string) {
+  const enabled = useSyncExternalStore(subscribeAlertsEnabled, getAlertsEnabled, () => true)
+  const active = rawActive && enabled
 
   useEffect(() => {
-    if (!active) {
-      if (timerRef.current) clearInterval(timerRef.current)
-      timerRef.current = null
+    installAudioUnlock()
+  }, [])
+
+  useEffect(() => {
+    if (active) startLiveBuzzer(level)
+    else stopLiveBuzzer()
+  }, [active, level])
+
+  // OS notification + flashing tab title: these reach the operator with no click on the
+  // page and while the tab is hidden, so an alarm is never missed when sound is blocked.
+  const reasonRef = useRef(reason)
+  reasonRef.current = reason
+  useEffect(() => {
+    if (!active || level === "green") {
+      stopTitleFlash()
+      clearStationAlarm()
       return
     }
-    const AudioCtor = window.AudioContext ?? (window as any).webkitAudioContext
-    if (!AudioCtor) return
-    if (!ctxRef.current) ctxRef.current = new AudioCtor()
-    const ctx = ctxRef.current
-    if (ctx.state === "suspended") ctx.resume().catch(() => {})
-
-    const tone = BUZZER_TONE[level]
-    const beep = (freq: number, at: number, dur: number) => {
-      // A shared master gain lets a tier layer several oscillators (fundamental,
-      // detuned twin, sub-octave) into one bigger, klaxon-like note.
-      const master = ctx.createGain()
-      master.gain.setValueAtTime(0.0001, at)
-      master.gain.exponentialRampToValueAtTime(tone.gain, at + 0.02)
-      master.gain.setValueAtTime(tone.gain, at + dur * 0.7)
-      master.gain.exponentialRampToValueAtTime(0.0001, at + dur)
-      master.connect(ctx.destination)
-
-      const voice = (f: number, detune: number, level: number) => {
-        const osc = ctx.createOscillator()
-        const g = ctx.createGain()
-        osc.type = tone.type
-        osc.frequency.value = f
-        if (detune) osc.detune.value = detune
-        g.gain.value = level
-        osc.connect(g).connect(master)
-        osc.start(at)
-        osc.stop(at + dur)
-      }
-      voice(freq, 0, 1)
-      if (tone.detune) voice(freq, tone.detune, 0.9)
-      if (tone.sub) voice(freq / 2, 0, 0.7)
-    }
-    const cycle = () => {
-      const t = ctx.currentTime
-      const hold = tone.hold ?? 0.2
-      tone.pattern.forEach((freq, i) => beep(freq, t + i * tone.step, hold))
-    }
-    cycle()
-    timerRef.current = setInterval(cycle, tone.interval)
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current)
-      timerRef.current = null
-    }
+    const label = level.toUpperCase()
+    notifyStationAlarm({
+      level,
+      title: `${label} alert · Weather station`,
+      body: reasonRef.current || `Station escalated to ${label}. Open the station to review and silence.`,
+    })
+    startTitleFlash(`(!) ${label} ALERT`)
   }, [active, level])
 
   useEffect(
     () => () => {
-      ctxRef.current?.close().catch(() => {})
+      stopLiveBuzzer()
+      stopTitleFlash()
     },
     [],
   )
@@ -231,6 +219,7 @@ export function AlertBanner() {
   // Escalation ladder — persisted overrides from the Engineering Console, defaults otherwise.
   const { data: rulesData } = useSWR<{ rules: EscalationRule[] }>("/api/escalation", farFetcher as never, {
     refreshInterval: 15_000,
+    refreshWhenHidden: true,
     revalidateOnFocus: true,
   })
   const rules = rulesData?.rules ?? DEFAULT_RULES
@@ -238,14 +227,14 @@ export function AlertBanner() {
   const { data: windMonitorData } = useSWR<{ tiers: WindMonitorTier[] }>(
     "/api/wind-monitor",
     farFetcher as never,
-    { refreshInterval: 15_000, revalidateOnFocus: true },
+    { refreshInterval: 15_000, refreshWhenHidden: true, revalidateOnFocus: true },
   )
   const windTiers = windMonitorData?.tiers ?? DEFAULT_WIND_MONITOR
   // Wind speed & gust source link — NCM COSMO-UAE by default, editable in the Engineering Console.
   const { data: windSourceData } = useSWR<{ source: WindSourceConfig }>(
     "/api/wind-source",
     farFetcher as never,
-    { refreshInterval: 15_000, revalidateOnFocus: true },
+    { refreshInterval: 15_000, refreshWhenHidden: true, revalidateOnFocus: true },
   )
   const windSource = windSourceData?.source ?? DEFAULT_WIND_SOURCE
   // Escalation panel + Wind Event Monitor share one pair of feeds: the at-site rule's
@@ -257,7 +246,7 @@ export function AlertBanner() {
   const { data: cloudSourceData } = useSWR<{ source: CloudSourceConfig }>(
     "/api/cloud-source",
     farFetcher as never,
-    { refreshInterval: 15_000, revalidateOnFocus: true },
+    { refreshInterval: 15_000, refreshWhenHidden: true, revalidateOnFocus: true },
   )
   const cloudSource = cloudSourceData?.source ?? DEFAULT_CLOUD_SOURCE
   const rawAlert = useMemo(() => (payload ? buildAlert(payload) : null), [payload])
@@ -445,12 +434,17 @@ export function AlertBanner() {
   // drill holds the buzzer on continuously until the values drop or it is acknowledged.
   useEffect(() => {
     if (!alarmActive || simulator.active) return
-    const timer = window.setTimeout(() => setAcked(true), 15_000)
+    // If the browser is still muting audio, keep the alarm armed so the first click
+    // anywhere on the page sounds it instead of it silently timing out unheard.
+    const timer = window.setTimeout(() => {
+      if (getAudioState() === "running") setAcked(true)
+    }, 15_000)
     return () => window.clearTimeout(timer)
   }, [alarmActive])
 
   const danger = alert?.danger ?? false
-  useBuzzer(alarmActive, level ?? "green")
+  const alarmReason = [siteEval.at.reason, siteEval.far.reason].filter(Boolean).join(" · ")
+  useBuzzer(alarmActive, level ?? "green", alarmReason)
 
   if (!payload || !alert) {
     return <div className="h-40 animate-pulse rounded-lg border border-border bg-panel" />
@@ -594,6 +588,8 @@ export function AlertBanner() {
     reason: siteReasonFor(s),
   }))
   return (
+    <>
+    <AlertReadiness />
     <section aria-label="Advance AI safety model" className={cn("station-rise rounded-xl border", styles.bar)}>
       {/* Header ribbon */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 px-4 py-2.5">
@@ -1149,6 +1145,7 @@ export function AlertBanner() {
         </div>
       </div>
     </section>
+    </>
   )
 }
 

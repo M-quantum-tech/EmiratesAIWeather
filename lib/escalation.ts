@@ -1107,19 +1107,23 @@ export type BuzzerTone = {
   detune?: number
   /** Add an octave-below layer for extra body and perceived loudness. */
   sub?: boolean
+  /** Level (0–1) of an octave-above harmonic — adds clarity and cut without harshness. */
+  overtone?: number
+  /** Bell envelope: instant strike then a natural decay, instead of a flat sustained note. */
+  bell?: boolean
 }
 
 /**
- * Per-level buzzer character — each tier has its own pitch set, cadence and
- * loudness so the alarm is audibly identifiable, escalating from a soft green
- * chime to a loud red danger horn. Higher tiers use richer waveforms, detuned
- * layering and a sub-octave so they read as a big, urgent klaxon.
+ * Per-level buzzer character. Green is silent (normal conditions), Yellow is a
+ * soft two-note cue, Orange is a clear descending bell chime, and Red is a fast
+ * high-pitched electronic alert pulse — urgent and attention-grabbing without
+ * the harsh sawtooth horn.
  */
 export const BUZZER_TONE: Record<AlertLevel, BuzzerTone> = {
-  green: { pattern: [523], step: 0, interval: 2600, gain: 0.08, type: "sine", hold: 0.22 },
+  green: { pattern: [], step: 0, interval: 2600, gain: 0, type: "sine" },
   yellow: { pattern: [659, 784], step: 0.24, interval: 1500, gain: 0.16, type: "triangle", hold: 0.24 },
-  orange: { pattern: [740, 932], step: 0.22, interval: 1000, gain: 0.24, type: "sawtooth", hold: 0.3, detune: 14, sub: true },
-  red: { pattern: [466, 370, 466], step: 0.34, interval: 640, gain: 0.4, type: "sawtooth", hold: 0.42, detune: 22, sub: true },
+  orange: { pattern: [1047, 784, 1047, 784], step: 0.26, interval: 1600, gain: 0.26, type: "sine", hold: 0.5, overtone: 0.35, bell: true },
+  red: { pattern: [1319, 1568, 1319, 1568, 1319, 1568], step: 0.11, interval: 1100, gain: 0.3, type: "triangle", hold: 0.1, overtone: 0.2 },
 }
 
 /** Validate an unknown value into a clean EscalationRule[] (or null if invalid). */

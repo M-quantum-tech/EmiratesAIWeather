@@ -421,7 +421,7 @@ export function IamUsersPanel({ users }: { users: IamUserRow[] }) {
         <div className="grid gap-2 sm:grid-cols-4">
           <input
             aria-label="Username"
-            placeholder="Username (e.g. Supervisor 13)"
+            placeholder="Username (e.g. Supervisor 3)"
             value={draft.username}
             onChange={(e) => setDraft({ ...draft, username: e.target.value })}
             className={inputClass}

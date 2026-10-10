@@ -88,7 +88,7 @@ export const IAM_SEED_USERS: IamSeedUser[] = [
   { username: "D_OM", title: "Deputy Operations Manager", role: "OM" },
   { username: "Section Head 1", title: "Operation Section Manager", role: "OM" },
   { username: "Section Head 2", title: "Operation Section Manager", role: "OM" },
-  ...Array.from({ length: 12 }, (_, i) => ({
+  ...Array.from({ length: 2 }, (_, i) => ({
     username: `Supervisor ${i + 1}`,
     title: "Shift / Area Supervisor",
     role: "Supervisor" as const,

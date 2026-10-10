@@ -57,6 +57,7 @@ export function setSimulatorMode(state: SimulatorState) {
 export function useSimulatorMode(): SimulatorState {
   const { data } = useSWR<SimulatorState>(KEY, fetchState, {
     refreshInterval: 5_000,
+    refreshWhenHidden: true,
     revalidateOnFocus: true,
   })
   return data ?? OFF
