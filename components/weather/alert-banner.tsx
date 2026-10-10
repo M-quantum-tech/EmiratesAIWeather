@@ -78,6 +78,7 @@ import { useSimulatorMode } from "@/components/weather/use-simulator-mode"
 import { useGhaithMirror } from "@/components/weather/use-ghaith-mirror"
 import { StationMirrorPush } from "@/components/weather/station-mirror-push"
 import { BuzzerTriggerTable } from "@/components/weather/buzzer-trigger-table"
+import { playToneCycle, toneIsAudible } from "@/lib/escalation-buzzer"
 import { cn } from "@/lib/utils"
 
 /** Header auto-refresh cadence (seconds) surfaced as a live countdown. */
@@ -171,43 +172,15 @@ function useBuzzer(active: boolean, level: AlertLevel) {
       timerRef.current = null
       return
     }
+    const tone = BUZZER_TONE[level]
+    if (!toneIsAudible(tone)) return
     const AudioCtor = window.AudioContext ?? (window as any).webkitAudioContext
     if (!AudioCtor) return
     if (!ctxRef.current) ctxRef.current = new AudioCtor()
     const ctx = ctxRef.current
     if (ctx.state === "suspended") ctx.resume().catch(() => {})
 
-    const tone = BUZZER_TONE[level]
-    const beep = (freq: number, at: number, dur: number) => {
-      // A shared master gain lets a tier layer several oscillators (fundamental,
-      // detuned twin, sub-octave) into one bigger, klaxon-like note.
-      const master = ctx.createGain()
-      master.gain.setValueAtTime(0.0001, at)
-      master.gain.exponentialRampToValueAtTime(tone.gain, at + 0.02)
-      master.gain.setValueAtTime(tone.gain, at + dur * 0.7)
-      master.gain.exponentialRampToValueAtTime(0.0001, at + dur)
-      master.connect(ctx.destination)
-
-      const voice = (f: number, detune: number, level: number) => {
-        const osc = ctx.createOscillator()
-        const g = ctx.createGain()
-        osc.type = tone.type
-        osc.frequency.value = f
-        if (detune) osc.detune.value = detune
-        g.gain.value = level
-        osc.connect(g).connect(master)
-        osc.start(at)
-        osc.stop(at + dur)
-      }
-      voice(freq, 0, 1)
-      if (tone.detune) voice(freq, tone.detune, 0.9)
-      if (tone.sub) voice(freq / 2, 0, 0.7)
-    }
-    const cycle = () => {
-      const t = ctx.currentTime
-      const hold = tone.hold ?? 0.2
-      tone.pattern.forEach((freq, i) => beep(freq, t + i * tone.step, hold))
-    }
+    const cycle = () => playToneCycle(ctx, tone)
     cycle()
     timerRef.current = setInterval(cycle, tone.interval)
     return () => {
