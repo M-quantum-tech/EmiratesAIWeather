@@ -50,7 +50,7 @@ export function IamLoginForm({ redirectTo, disabled }: { redirectTo: string; dis
             onChange={(e) => setUsername(e.target.value)}
             autoComplete="username"
             required
-            placeholder="e.g. PGM, Supervisor 3, CRO 1"
+            placeholder="e.g. PGM, Supervisor 1, CRO 1"
             className="h-11 w-full rounded-md border border-input bg-background pl-9 pr-3 font-mono text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
         </div>
