@@ -1,8 +1,10 @@
 "use client"
 
 import { useState } from "react"
+import { usePathname } from "next/navigation"
 import { useSWRConfig } from "swr"
-import { Check, ExternalLink, Send, X } from "lucide-react"
+import { Check, ExternalLink, LogIn, Send, X } from "lucide-react"
+import { useSession } from "@/lib/auth-client"
 import { cn } from "@/lib/utils"
 import type { SiteKey, SiteReadings } from "@/lib/escalation"
 import { GHAITH_FEEDS } from "@/lib/ghaith-mirror"
@@ -27,8 +29,8 @@ function toDraft(r: SiteReadings | undefined): Draft {
 }
 
 /**
- * Station-side Ghaith mirror push. Any visitor can read the values off Ghaith
- * (#aws-wind / #cosmo-uae-wind) and push them, making the mirror live for everyone.
+ * Station-side Ghaith mirror push. Signed-in users can read the values off Ghaith
+ * (#aws-wind / #cosmo-uae-wind) and push them; guests only see a sign-in prompt.
  */
 export function StationMirrorPush({
   readings,
@@ -37,6 +39,8 @@ export function StationMirrorPush({
   readings: Record<SiteKey, SiteReadings>
   source: Record<SiteKey, "ghaith" | "grid">
 }) {
+  const { data: session, isPending } = useSession()
+  const pathname = usePathname()
   const { mutate } = useSWRConfig()
   const [open, setOpen] = useState<SiteKey | null>(null)
   const [draft, setDraft] = useState<Draft>(() => toDraft(undefined))
@@ -76,6 +80,20 @@ export function StationMirrorPush({
     } finally {
       setBusy(false)
     }
+  }
+
+  if (isPending) return null
+
+  if (!session?.user) {
+    return (
+      <a
+        href={`/sign-in?redirect=${encodeURIComponent(pathname || "/")}`}
+        className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <LogIn className="h-3 w-3" aria-hidden="true" />
+        Sign in to push to mirror
+      </a>
+    )
   }
 
   return (

@@ -24,7 +24,7 @@ import {
 } from "@/lib/escalation"
 import type { AlertLevel } from "@/lib/weather"
 import { DEFAULT_NCM_WARNINGS, parseNcmWarnings, type NcmWarning } from "@/lib/ncm-warnings"
-import { isAdmin } from "@/lib/admin"
+import { getSessionUser, isAdmin } from "@/lib/admin"
 import { EMPTY_MIRROR, parseMirror, parseMirrorSite, type GhaithMirror } from "@/lib/ghaith-mirror"
 
 const ESCALATION_KEY = "escalation_rules"
@@ -170,7 +170,8 @@ export async function pushGhaithMirror(
   body: unknown,
   requested: "console" | "relay",
 ): Promise<GhaithMirror> {
-  // Non-admin station visitors may push fresh readings, but not clear sites or change the window.
+  // Station pushes require a signed-in account; non-admins may add readings but not clear sites or change the window.
+  if (requested === "console" && !(await getSessionUser())) throw new Error("Unauthorized")
   const via = requested === "console" && !(await isAdmin()) ? "public" : requested
   const r = (body && typeof body === "object" ? body : {}) as Record<string, unknown>
   if (via === "public" && (r.atSite === null || r.farSite === null || r.ttlMin !== undefined)) {
