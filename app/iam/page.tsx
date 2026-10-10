@@ -1,6 +1,7 @@
 import Link from "next/link"
 import { Activity, Check, Cpu, LineChart, Lock, Radio, ShieldCheck, X } from "lucide-react"
-import { requireIamUser } from "@/lib/iam-server"
+import { listIamUsers, requireIamUser } from "@/lib/iam-server"
+import { IamRosterReadonly } from "@/components/iam/iam-roster-readonly"
 import { CAPABILITY_LABELS, IAM_ROLES, iamCan, type IamCapability } from "@/lib/iam"
 import { SiteNav } from "@/components/site-nav"
 import { WeatherProvider } from "@/components/weather/weather-provider"
@@ -10,6 +11,7 @@ export const metadata = { title: "Control dashboard — EmiratesAIWeather" }
 
 export default async function IamDashboardPage() {
   const me = await requireIamUser("/iam")
+  const roster = await listIamUsers()
   const role = IAM_ROLES[me.role]
   const canTrends = me.isAdmin || iamCan(me.role, "deepTrends")
   const capabilities = Object.keys(CAPABILITY_LABELS) as IamCapability[]
@@ -113,6 +115,8 @@ export default async function IamDashboardPage() {
             })}
           </ul>
         </div>
+
+        <IamRosterReadonly users={roster} />
       </section>
     </main>
   )

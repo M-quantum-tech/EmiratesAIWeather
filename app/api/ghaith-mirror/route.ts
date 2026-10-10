@@ -32,7 +32,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ mirror })
   } catch (err) {
     const message = err instanceof Error ? err.message : "Push failed"
-    const status = message === "Forbidden" ? 403 : 400
+    const status = message === "Unauthorized" ? 401 : message === "Forbidden" ? 403 : 400
     return NextResponse.json({ error: message }, { status })
   }
 }

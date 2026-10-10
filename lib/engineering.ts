@@ -19,10 +19,14 @@ import {
   type TrendSourceGroup,
   type WindMonitorTier,
   type WindSourceConfig,
+  type SiteKey,
+  type SiteReadings,
 } from "@/lib/escalation"
+import type { AlertLevel } from "@/lib/weather"
 import { DEFAULT_NCM_WARNINGS, parseNcmWarnings, type NcmWarning } from "@/lib/ncm-warnings"
-import { isAdmin } from "@/lib/admin"
+import { getSessionUser, isAdmin } from "@/lib/admin"
 import { EMPTY_MIRROR, parseMirror, parseMirrorSite, type GhaithMirror } from "@/lib/ghaith-mirror"
+import { getMirrorPushPermission } from "@/lib/iam-server"
 
 const ESCALATION_KEY = "escalation_rules"
 const NCM_WARNINGS_KEY = "ncm_warnings"
@@ -165,10 +169,20 @@ export async function getGhaithMirror(): Promise<GhaithMirror> {
  */
 export async function pushGhaithMirror(
   body: unknown,
-  via: "console" | "relay",
+  requested: "console" | "relay",
 ): Promise<GhaithMirror> {
-  if (via === "console" && !(await isAdmin())) throw new Error("Forbidden")
+  // Station pushes need a session plus the Plant IAM "Push to mirror" grant; non-admins may add readings but not clear sites or change the window.
+  let via: "console" | "relay" | "public" = requested
+  if (requested === "console") {
+    const permission = await getMirrorPushPermission()
+    if (!permission.signedIn) throw new Error("Unauthorized")
+    if (!permission.allowed) throw new Error("Forbidden")
+    if (!permission.isAdmin) via = "public"
+  }
   const r = (body && typeof body === "object" ? body : {}) as Record<string, unknown>
+  if (via === "public" && (r.atSite === null || r.farSite === null || r.ttlMin !== undefined)) {
+    throw new Error("Forbidden")
+  }
   const current = await getGhaithMirror()
   const atSite = r.atSite === null ? null : r.atSite !== undefined ? parseMirrorSite({ ...(r.atSite as object), via }, via) : current.atSite
   const farSite = r.farSite === null ? null : r.farSite !== undefined ? parseMirrorSite({ ...(r.farSite as object), via }, via) : current.farSite
@@ -295,6 +309,82 @@ export async function saveAiSources(value: unknown): Promise<AiPredictionSource[
   await db.execute(sql`
     INSERT INTO "app_setting" ("key", "value", "updatedAt")
     VALUES (${AI_SOURCES_KEY}, ${json}::jsonb, now())
+    ON CONFLICT ("key") DO UPDATE SET "value" = ${json}::jsonb, "updatedAt" = now()
+  `)
+  return clean
+}
+
+const SIMULATOR_KEY = "simulator_mode"
+const ALERT_LEVELS: AlertLevel[] = ["green", "yellow", "orange", "red"]
+/** A drill left running (closed tab, lost connection) must not alarm the public forever. */
+const SIMULATOR_MAX_AGE_MS = 30 * 60 * 1000
+
+export type SharedSimulatorState = {
+  active: boolean
+  level: AlertLevel | null
+  readings: Record<SiteKey, SiteReadings> | null
+}
+
+export const SIMULATOR_OFF: SharedSimulatorState = { active: false, level: null, readings: null }
+
+function finite(n: unknown): number | null {
+  return typeof n === "number" && Number.isFinite(n) ? n : null
+}
+
+function parseSiteReadings(v: unknown): SiteReadings | null {
+  if (!v || typeof v !== "object") return null
+  const r = v as Record<string, unknown>
+  const windMs = finite(r.windMs)
+  const gustMs = finite(r.gustMs)
+  const rainMm = finite(r.rainMm)
+  const cloudPct = finite(r.cloudPct)
+  if (windMs == null || gustMs == null || rainMm == null || cloudPct == null) return null
+  return { windMs, gustMs, rainMm, cloudPct }
+}
+
+function parseSimulator(v: unknown): SharedSimulatorState | null {
+  if (!v || typeof v !== "object") return null
+  const s = v as Record<string, unknown>
+  if (!s.active) return SIMULATOR_OFF
+  const level = ALERT_LEVELS.includes(s.level as AlertLevel) ? (s.level as AlertLevel) : null
+  if (!level) return null
+  let readings: Record<SiteKey, SiteReadings> | null = null
+  if (s.readings && typeof s.readings === "object") {
+    const raw = s.readings as Record<string, unknown>
+    const atSite = parseSiteReadings(raw.atSite)
+    const farSite = parseSiteReadings(raw.farSite)
+    if (atSite && farSite) readings = { atSite, farSite }
+  }
+  return { active: true, level, readings }
+}
+
+/** Current drill state shared with every visitor — expires automatically after 30 minutes. */
+export async function getSimulatorState(): Promise<SharedSimulatorState> {
+  try {
+    await ensureSettingsTable()
+    const res = await db.execute(
+      sql`SELECT value, "updatedAt" FROM "app_setting" WHERE key = ${SIMULATOR_KEY}`,
+    )
+    const row = (res.rows as { value: unknown; updatedAt: string | Date }[])[0]
+    if (!row) return SIMULATOR_OFF
+    const age = Date.now() - new Date(row.updatedAt).getTime()
+    if (age > SIMULATOR_MAX_AGE_MS) return SIMULATOR_OFF
+    return parseSimulator(row.value) ?? SIMULATOR_OFF
+  } catch {
+    return SIMULATOR_OFF
+  }
+}
+
+/** Start, update or stop the shared drill — admin only. */
+export async function saveSimulatorState(value: unknown): Promise<SharedSimulatorState> {
+  if (!(await isAdmin())) throw new Error("Forbidden")
+  const clean = parseSimulator(value)
+  if (!clean) throw new Error("Invalid simulator state")
+  await ensureSettingsTable()
+  const json = JSON.stringify(clean)
+  await db.execute(sql`
+    INSERT INTO "app_setting" ("key", "value", "updatedAt")
+    VALUES (${SIMULATOR_KEY}, ${json}::jsonb, now())
     ON CONFLICT ("key") DO UPDATE SET "value" = ${json}::jsonb, "updatedAt" = now()
   `)
   return clean

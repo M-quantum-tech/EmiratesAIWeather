@@ -1,7 +1,7 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { ExternalLink, Navigation2, Wind } from "lucide-react"
+import { useEffect, useState, type ReactNode } from "react"
+import { Navigation2, Send, Wind } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { fetchWindFrames } from "@/lib/wind-field"
 import { stationReadings } from "@/lib/stations"
@@ -52,6 +52,10 @@ type WindDirectionRadarProps = {
   /** Configurable feed the radar is sourced from (defaults to NCM COSMO-UAE Wind). */
   sourceUrl?: string
   sourceLabel?: string
+  /** Live feed buttons shown under the radar (AWS wind · at site, COSMO-UAE wind · far site). */
+  feeds?: { label: string; url: string }[]
+  /** Replaces the feed links under the radar (e.g. the station push-to-mirror controls). */
+  footer?: ReactNode
 }
 
 type NearbyStation = { name: string; kmh: number; ms: number; fromDeg: number; km: number }
@@ -81,6 +85,8 @@ export function WindDirectionRadar({
   lon = null,
   sourceUrl = "https://ghaith.ncm.gov.ae/?lang=en#cosmo-uae-wind",
   sourceLabel = "NCM COSMO-UAE Wind",
+  feeds,
+  footer,
 }: WindDirectionRadarProps) {
   const speed = windMs ?? 0
   const band = bandFor(speed)
@@ -199,7 +205,7 @@ export function WindDirectionRadar({
               key={n.name}
               className="absolute left-1/2 top-1/2 z-[5] flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-0.5"
               style={{ transform: `translate(calc(-50% + ${nx}px), calc(-50% + ${ny}px))` }}
-              title={`${n.name} · ${n.kmh} km/h · ${n.ms.toFixed(1)} m/s · ${Math.round(n.km)} km away`}
+              title={`${n.name} �� ${n.kmh} km/h · ${n.ms.toFixed(1)} m/s · ${Math.round(n.km)} km away`}
             >
               <span
                 className={cn(
@@ -281,17 +287,22 @@ export function WindDirectionRadar({
         </div>
       </div>
 
-      {/* configurable feed the radar is connected to */}
-      <a
-        href={sourceUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex items-center gap-1 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground transition-colors hover:text-signal"
-      >
-        <span className="h-1.5 w-1.5 rounded-full bg-signal" aria-hidden="true" />
-        Source · {sourceLabel}
-        <ExternalLink className="h-2.5 w-2.5" aria-hidden="true" />
-      </a>
+      {/* live wind feeds the radar is connected to */}
+      {footer ?? <nav aria-label="Live wind feeds" className="flex flex-wrap items-center justify-center gap-2">
+        {(feeds ?? [{ label: sourceLabel, url: sourceUrl }]).map((f) => (
+          <a
+            key={`${f.label}-${f.url}`}
+            href={f.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Send className="h-3 w-3" aria-hidden="true" />
+            {f.label}
+            <span className="sr-only">(opens in a new tab)</span>
+          </a>
+        ))}
+      </nav>}
     </div>
   )
 }

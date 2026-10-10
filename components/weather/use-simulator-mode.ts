@@ -1,17 +1,14 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import useSWR, { mutate } from "swr"
 import type { AlertLevel } from "@/lib/weather"
 import type { SiteKey, SiteReadings } from "@/lib/escalation"
 
 /**
- * Shared "simulator mode" signal. The Engineering Console runs the simulator on its own
- * route, but the public safety panel lives elsewhere, so the active state is broadcast
- * through localStorage: a custom event updates listeners in the same tab and the native
- * `storage` event updates other tabs (operator drives the drill in one tab, the public
- * dashboard shows the banner in another). This carries no user data — only the on/off
- * flag, the tier being rehearsed, and the per-site test readings so the safety panel can
- * run the drill through the exact same At-site / Far-site wiring the live stations use.
+ * Shared "simulator mode" signal, stored server-side so a drill started in the Engineering
+ * Console reaches every visitor's safety panel, not just the operator's browser. The console
+ * writes through /api/simulator (admin only); every station polls it. The server expires a
+ * drill after 30 minutes so a forgotten simulator can't keep alarming the public.
  */
 export type SimulatorState = {
   active: boolean
@@ -19,57 +16,48 @@ export type SimulatorState = {
   readings: Record<SiteKey, SiteReadings> | null
 }
 
-const KEY = "eaw:simulator-mode"
-const EVENT = "eaw:simulator-mode"
+const KEY = "/api/simulator"
 const OFF: SimulatorState = { active: false, level: null, readings: null }
+const WRITE_DEBOUNCE_MS = 400
 
-function read(): SimulatorState {
-  if (typeof window === "undefined") return OFF
-  try {
-    const raw = window.localStorage.getItem(KEY)
-    if (!raw) return OFF
-    const parsed = JSON.parse(raw) as Partial<SimulatorState>
-    return {
-      active: Boolean(parsed.active),
-      level: (parsed.level as AlertLevel | null) ?? null,
-      readings:
-        parsed.readings && typeof parsed.readings === "object"
-          ? (parsed.readings as Record<SiteKey, SiteReadings>)
-          : null,
-    }
-  } catch {
-    return OFF
-  }
+let pending: ReturnType<typeof setTimeout> | null = null
+let lastSent = JSON.stringify(OFF)
+
+async function fetchState(url: string): Promise<SimulatorState> {
+  const res = await fetch(url, { cache: "no-store" })
+  if (!res.ok) return OFF
+  const data = (await res.json()) as { state?: SimulatorState }
+  return data.state ?? OFF
 }
 
-/** Publish the current simulator state to every listener (this tab and others). */
+/** Publish the simulator state to every visitor. Typing in test values is debounced. */
 export function setSimulatorMode(state: SimulatorState) {
   if (typeof window === "undefined") return
-  try {
-    window.localStorage.setItem(KEY, JSON.stringify(state))
-  } catch {
-    // Ignore storage failures — the badge is best-effort signalling, not persistence.
-  }
-  window.dispatchEvent(new CustomEvent<SimulatorState>(EVENT, { detail: state }))
+  const json = JSON.stringify(state)
+  // The console re-publishes on mount; don't overwrite a running drill with "off" for nothing.
+  if (json === lastSent) return
+  mutate(KEY, state, { revalidate: false })
+  if (pending) clearTimeout(pending)
+  pending = setTimeout(async () => {
+    pending = null
+    try {
+      const res = await fetch(KEY, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state }),
+      })
+      if (res.ok) lastSent = json
+    } catch {
+      // Network blip — the next change or poll will reconcile.
+    }
+  }, WRITE_DEBOUNCE_MS)
 }
 
-/** Subscribe to the shared simulator state. Returns `{ active: false }` until hydrated. */
+/** Subscribe to the shared simulator state. Returns `{ active: false }` until loaded. */
 export function useSimulatorMode(): SimulatorState {
-  const [state, setState] = useState<SimulatorState>(OFF)
-
-  useEffect(() => {
-    setState(read())
-    const onCustom = (e: Event) => setState((e as CustomEvent<SimulatorState>).detail ?? read())
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === KEY) setState(read())
-    }
-    window.addEventListener(EVENT, onCustom)
-    window.addEventListener("storage", onStorage)
-    return () => {
-      window.removeEventListener(EVENT, onCustom)
-      window.removeEventListener("storage", onStorage)
-    }
-  }, [])
-
-  return state
+  const { data } = useSWR<SimulatorState>(KEY, fetchState, {
+    refreshInterval: 5_000,
+    revalidateOnFocus: true,
+  })
+  return data ?? OFF
 }

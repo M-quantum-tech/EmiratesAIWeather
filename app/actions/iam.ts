@@ -20,12 +20,14 @@ export async function setIamUserRole(userId: string, role: string) {
   if (!isIamRoleCode(role)) throw new Error("Invalid role code.")
   await updateIamUser(userId, { role })
   revalidatePath("/admin/engineering")
+  revalidatePath("/iam")
 }
 
 export async function setIamUserTitle(userId: string, title: string) {
   await guard()
   await updateIamUser(userId, { title: String(title).trim().slice(0, 80) })
   revalidatePath("/admin/engineering")
+  revalidatePath("/iam")
 }
 
 export async function editIamUser(userId: string, username: string, title: string) {
@@ -34,6 +36,7 @@ export async function editIamUser(userId: string, username: string, title: strin
   if (!iamUsernameKey(name)) throw new Error("Username is required.")
   await updateIamUser(userId, { username: name, title: String(title).trim().slice(0, 80) })
   revalidatePath("/admin/engineering")
+  revalidatePath("/iam")
 }
 
 export async function setIamUserAccess(userId: string, accessStatus: "allowed" | "denied") {
@@ -41,6 +44,23 @@ export async function setIamUserAccess(userId: string, accessStatus: "allowed" |
   if (accessStatus !== "allowed" && accessStatus !== "denied") throw new Error("Invalid status.")
   await updateIamUser(userId, { accessStatus })
   revalidatePath("/admin/engineering")
+  revalidatePath("/iam")
+}
+
+export async function setIamUserCsvExport(userId: string, allowed: boolean) {
+  await guard()
+  if (typeof allowed !== "boolean") throw new Error("Invalid CSV export value.")
+  await updateIamUser(userId, { csvExport: allowed })
+  revalidatePath("/admin/engineering")
+  revalidatePath("/iam")
+}
+
+export async function setIamUserMirrorPush(userId: string, allowed: boolean) {
+  await guard()
+  if (typeof allowed !== "boolean") throw new Error("Invalid push to mirror value.")
+  await updateIamUser(userId, { mirrorPush: allowed })
+  revalidatePath("/admin/engineering")
+  revalidatePath("/iam")
 }
 
 export async function setIamUserPassword(userId: string, password: string) {
@@ -57,10 +77,12 @@ export async function createIamUser(username: string, title: string, role: strin
   validPassword(password)
   await addIamUser(name, String(title).trim().slice(0, 80), role, password)
   revalidatePath("/admin/engineering")
+  revalidatePath("/iam")
 }
 
 export async function removeIamUser(userId: string) {
   await guard()
   await deleteIamUser(userId)
   revalidatePath("/admin/engineering")
+  revalidatePath("/iam")
 }
