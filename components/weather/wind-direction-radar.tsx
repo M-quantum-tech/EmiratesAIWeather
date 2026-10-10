@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { Navigation2, Send, Wind } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { fetchWindFrames } from "@/lib/wind-field"
@@ -54,6 +54,8 @@ type WindDirectionRadarProps = {
   sourceLabel?: string
   /** Live feed buttons shown under the radar (AWS wind · at site, COSMO-UAE wind · far site). */
   feeds?: { label: string; url: string }[]
+  /** Replaces the feed links under the radar (e.g. the station push-to-mirror controls). */
+  footer?: ReactNode
 }
 
 type NearbyStation = { name: string; kmh: number; ms: number; fromDeg: number; km: number }
@@ -84,6 +86,7 @@ export function WindDirectionRadar({
   sourceUrl = "https://ghaith.ncm.gov.ae/?lang=en#cosmo-uae-wind",
   sourceLabel = "NCM COSMO-UAE Wind",
   feeds,
+  footer,
 }: WindDirectionRadarProps) {
   const speed = windMs ?? 0
   const band = bandFor(speed)
@@ -285,7 +288,7 @@ export function WindDirectionRadar({
       </div>
 
       {/* live wind feeds the radar is connected to */}
-      <nav aria-label="Live wind feeds" className="flex flex-wrap items-center justify-center gap-2">
+      {footer ?? <nav aria-label="Live wind feeds" className="flex flex-wrap items-center justify-center gap-2">
         {(feeds ?? [{ label: sourceLabel, url: sourceUrl }]).map((f) => (
           <a
             key={`${f.label}-${f.url}`}
@@ -299,7 +302,7 @@ export function WindDirectionRadar({
             <span className="sr-only">(opens in a new tab)</span>
           </a>
         ))}
-      </nav>
+      </nav>}
     </div>
   )
 }

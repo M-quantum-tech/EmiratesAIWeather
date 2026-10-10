@@ -76,6 +76,7 @@ import { ForecastApproachPanel } from "@/components/weather/forecast-approach-pa
 import { useWeather } from "@/components/weather/weather-provider"
 import { useSimulatorMode } from "@/components/weather/use-simulator-mode"
 import { useGhaithMirror } from "@/components/weather/use-ghaith-mirror"
+import { StationMirrorPush } from "@/components/weather/station-mirror-push"
 import { BuzzerTriggerTable } from "@/components/weather/buzzer-trigger-table"
 import { cn } from "@/lib/utils"
 
@@ -394,7 +395,7 @@ export function AlertBanner() {
   // Safety Model tier = Live Wind Monitor tier (Tier 1 Green … Tier 4 Red). The escalation
   // ranges for that tier are then checked below as confirmation. A drill uses the range tier.
   // Live tier = the highest of three wired sources, so any one of them trips the buzzer:
-  //  1. Wind Event Monitor (at-site sustained wind, e.g. ≥ 14 m/s ��� Red)
+  //  1. Wind Event Monitor (at-site sustained wind, e.g. ≥ 14 m/s ���� Red)
   //  2. Escalation ranges — wind, gust, rainfall OR cloud at the At-site OR Far-site
   //  3. NCM / Al Bahar official warning issued for this station's emirate
   const ncmLevel: AlertLevel = ncmLocal?.level ?? "green"
@@ -894,10 +895,7 @@ export function AlertBanner() {
   lon={payload.location.longitude}
   sourceUrl={windSource.url}
               sourceLabel={windSource.label}
-              feeds={[
-                { label: "AWS Wind · At site", url: atSiteFeed.url },
-                { label: "COSMO Wind · Far site", url: farSiteFeed.url },
-              ]}
+              footer={<StationMirrorPush readings={liveSiteReadings} source={siteSource} />}
             />
         </div>
       </div>

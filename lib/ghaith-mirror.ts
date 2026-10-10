@@ -18,7 +18,7 @@ export const DEFAULT_MIRROR_TTL_MIN = 15
 
 export type MirrorSite = SiteReadings & {
   observedAt: string
-  via: "console" | "relay"
+  via: "console" | "relay" | "public"
 }
 
 export type GhaithMirror = {
@@ -45,7 +45,7 @@ export function parseMirrorSite(value: unknown, via: MirrorSite["via"]): MirrorS
   if (windMs == null || gustMs == null || rainMm == null || cloudPct == null) return null
   const t = typeof r.observedAt === "string" ? Date.parse(r.observedAt) : NaN
   const observedAt = Number.isFinite(t) && t <= Date.now() + 60_000 ? new Date(t).toISOString() : new Date().toISOString()
-  return { windMs, gustMs, rainMm, cloudPct, observedAt, via: r.via === "relay" || r.via === "console" ? r.via : via }
+  return { windMs, gustMs, rainMm, cloudPct, observedAt, via: r.via === "relay" || r.via === "console" || r.via === "public" ? r.via : via }
 }
 
 export function parseMirror(value: unknown): GhaithMirror {

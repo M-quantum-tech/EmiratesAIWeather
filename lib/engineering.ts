@@ -168,10 +168,14 @@ export async function getGhaithMirror(): Promise<GhaithMirror> {
  */
 export async function pushGhaithMirror(
   body: unknown,
-  via: "console" | "relay",
+  requested: "console" | "relay",
 ): Promise<GhaithMirror> {
-  if (via === "console" && !(await isAdmin())) throw new Error("Forbidden")
+  // Non-admin station visitors may push fresh readings, but not clear sites or change the window.
+  const via = requested === "console" && !(await isAdmin()) ? "public" : requested
   const r = (body && typeof body === "object" ? body : {}) as Record<string, unknown>
+  if (via === "public" && (r.atSite === null || r.farSite === null || r.ttlMin !== undefined)) {
+    throw new Error("Forbidden")
+  }
   const current = await getGhaithMirror()
   const atSite = r.atSite === null ? null : r.atSite !== undefined ? parseMirrorSite({ ...(r.atSite as object), via }, via) : current.atSite
   const farSite = r.farSite === null ? null : r.farSite !== undefined ? parseMirrorSite({ ...(r.farSite as object), via }, via) : current.farSite
