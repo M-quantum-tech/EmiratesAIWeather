@@ -1,5 +1,6 @@
 "use client"
 
+import { useSyncExternalStore } from "react"
 import Image from "next/image"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
@@ -13,10 +14,21 @@ const LINKS = [
   { href: "/company", label: "Company Profile" },
 ]
 
+const subscribeNoop = () => () => {}
+
 export function SiteNav() {
   const pathname = usePathname()
   const router = useRouter()
-  const { data: session, isPending } = useSession()
+  const { data: liveSession, isPending: livePending } = useSession()
+  // The session only exists client-side; rendering it before hydration
+  // produces markup the server never sent.
+  const hydrated = useSyncExternalStore(
+    subscribeNoop,
+    () => true,
+    () => false,
+  )
+  const session = hydrated ? liveSession : null
+  const isPending = !hydrated || livePending
   const role = (session?.user as { role?: string } | undefined)?.role
 
   async function handleSignOut() {
