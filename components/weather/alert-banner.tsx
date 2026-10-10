@@ -12,9 +12,11 @@ import {
   ExternalLink,
   FlaskConical,
   Gauge,
+  Link2,
   Navigation,
   Radar,
   Radio,
+  Satellite,
   ShieldCheck,
   Siren,
   SunDim,
@@ -74,7 +76,7 @@ import { ForecastApproachPanel } from "@/components/weather/forecast-approach-pa
 import { useWeather } from "@/components/weather/weather-provider"
 import { useSimulatorMode } from "@/components/weather/use-simulator-mode"
 import { useGhaithMirror } from "@/components/weather/use-ghaith-mirror"
-import { useWindMonitorTest } from "@/components/weather/use-wind-monitor-test"
+import { BuzzerTriggerTable } from "@/components/weather/buzzer-trigger-table"
 import { cn } from "@/lib/utils"
 
 /** Header auto-refresh cadence (seconds) surfaced as a live countdown. */
@@ -358,24 +360,6 @@ export function AlertBanner() {
   // Ghaith mirror is the primary source: fresh #aws-wind (at site) / #cosmo-uae-wind
   // (far site) readings override the model grid; stale sites fall back to the grid.
   const { readings: liveSiteReadings, source: siteSource } = useGhaithMirror(gridSiteReadings)
-  // Wind Event Monitor test from the Engineering Console: the test wind is the only
-  // at-site reading (everything else zeroed, NCM green) so exactly the Wind Event Monitor
-  // threshold is exercised through the live wiring and live 15 s buzzer.
-  const windTest = useWindMonitorTest()
-  const liveTestActive = !simulator.active && windTest.active && windTest.windMs !== null
-  const liveTest = useMemo<Record<SiteKey, SiteReadings> | null>(
-    () =>
-      liveTestActive
-        ? {
-            atSite: { windMs: windTest.windMs ?? 0, gustMs: 0, rainMm: 0, cloudPct: 0 },
-            farSite: { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 },
-          }
-        : null,
-    [liveTestActive, windTest.windMs],
-  )
-  useEffect(() => {
-    if (liveTestActive) setAcked(false)
-  }, [liveTestActive, windTest.windMs])
   // During a drill the At-site / Far-site indicators and the buzzer evaluate the operator's
   // per-site test readings instead of the live stations — so only the site whose values
   // actually meet the tier blinks and sounds, and a site edited back down returns to green.
@@ -386,13 +370,13 @@ export function AlertBanner() {
             atSite: { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 },
             farSite: { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 },
           }
-        : liveTest ?? liveSiteReadings,
-    [simulator.active, simulator.readings, liveTestActive, liveTest, liveSiteReadings],
+        : liveSiteReadings,
+    [simulator.active, simulator.readings, liveSiteReadings],
   )
   // Reset the dead-band latch when switching between drill, test and live data.
   useEffect(() => {
     rangeHeldRef.current = null
-  }, [simulator.active, liveTest])
+  }, [simulator.active])
   useEffect(() => {
     const next = drillLevelFromSites(siteReadings, rules, rangeHeldRef.current)
     rangeHeldRef.current = next
@@ -413,7 +397,7 @@ export function AlertBanner() {
   //  1. Wind Event Monitor (at-site sustained wind, e.g. ≥ 14 m/s → Red)
   //  2. Escalation ranges — wind, gust, rainfall OR cloud at the At-site OR Far-site
   //  3. NCM / Al Bahar official warning issued for this station's emirate
-  const ncmLevel: AlertLevel = liveTestActive ? "green" : ncmLocal?.level ?? "green"
+  const ncmLevel: AlertLevel = ncmLocal?.level ?? "green"
   const liveSources = useMemo(() => {
     const rank = (l: AlertLevel) => ESCALATION_LEVELS.indexOf(l)
     const candidates: { level: AlertLevel; source: "wind" | "range" | "ncm" }[] = [
@@ -955,9 +939,9 @@ export function AlertBanner() {
           ))}
         </div>
 
-        {/* Escalation rules table — the fixed NCM-style ladder, active tier highlighted */}
+        {/* Escalation rules — tier ladder with grouped source links, then the buzzer trigger table */}
         <div className="mt-4 overflow-hidden rounded-lg border border-border/70">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-background/40 px-3 py-1.5 label-caps text-muted-foreground">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-background/40 px-3 py-2 label-caps text-muted-foreground">
             <span className="flex items-center gap-1.5">
               <ShieldCheck className="h-3 w-3" aria-hidden="true" />
               Escalation rules · NCM + wind forecast + Open-Meteo
@@ -975,80 +959,114 @@ export function AlertBanner() {
               </a>
             ) : null}
           </div>
-          <table className="w-full border-collapse text-left">
-            <tbody>
-              {rules.map((rule) => (
-                <tr
+          <ol className="flex flex-col">
+            {rules.map((rule) => {
+              const isActive = alert.level === rule.level
+              const groups = groupSourceLinks(rule.sourceLinks)
+              return (
+                <li
                   key={rule.level}
+                  aria-current={isActive ? "true" : undefined}
                   className={cn(
-                    "border-t border-border/40 first:border-t-0",
-                    alert.level === rule.level && LEVEL_STYLES[rule.level].bar,
+                    "flex flex-col gap-3 border-t border-border/40 px-3 py-3 first:border-t-0 sm:flex-row sm:gap-4",
+                    isActive && LEVEL_STYLES[rule.level].bar,
                   )}
                 >
-                  <td className="whitespace-nowrap px-3 py-2 align-top">
+                  <div className="flex shrink-0 flex-row items-center gap-3 sm:w-32 sm:flex-col sm:items-start sm:gap-1">
                     <span className="flex items-center gap-1.5">
                       <span className={cn("h-2.5 w-2.5 rounded-full", LEVEL_STYLES[rule.level].solid)} aria-hidden="true" />
-                      <span className={cn("font-mono text-[0.625rem] font-bold uppercase tracking-wide", LEVEL_STYLES[rule.level].text)}>
+                      <span className={cn("font-mono text-[0.6875rem] font-bold uppercase tracking-wide", LEVEL_STYLES[rule.level].text)}>
                         {rule.label}
                       </span>
                     </span>
-                    <span className="mt-0.5 block font-mono text-[0.5rem] uppercase tracking-wide text-muted-foreground">
-                      {rule.km}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-xs leading-snug text-muted-foreground">
-                    {rule.triggers}
-                    <span className="mt-1 flex flex-wrap gap-1">
-                      <span className="inline-flex items-center gap-1 rounded border border-border/60 bg-background/40 px-1.5 py-0.5 font-mono text-[0.5rem] uppercase tracking-wider text-muted-foreground">
-                        <Wind className="h-2.5 w-2.5" aria-hidden="true" />
-                        ±{rule.deadbands.windMs} m/s
+                    <span className="font-mono text-[0.5625rem] uppercase tracking-wide text-muted-foreground">{rule.km}</span>
+                    {isActive ? (
+                      <span className={cn("rounded border px-1.5 py-0.5 font-mono text-[0.5rem] font-bold uppercase tracking-wider", LEVEL_STYLES[rule.level].chip)}>
+                        Active now
                       </span>
-                      <span className="inline-flex items-center gap-1 rounded border border-border/60 bg-background/40 px-1.5 py-0.5 font-mono text-[0.5rem] uppercase tracking-wider text-muted-foreground">
-                        <Gauge className="h-2.5 w-2.5" aria-hidden="true" />
-                        gust ±{rule.deadbands.gustMs} m/s
-                      </span>
-                      <span className="inline-flex items-center gap-1 rounded border border-border/60 bg-background/40 px-1.5 py-0.5 font-mono text-[0.5rem] uppercase tracking-wider text-muted-foreground">
-                        <Navigation className="h-2.5 w-2.5" aria-hidden="true" />
-                        dir ±{rule.deadbands.directionDeg}°
-                      </span>
-                      <span className="inline-flex items-center gap-1 rounded border border-border/60 bg-background/40 px-1.5 py-0.5 font-mono text-[0.5rem] uppercase tracking-wider text-muted-foreground">
-                        <CloudRain className="h-2.5 w-2.5" aria-hidden="true" />
-                        rain ±{rule.deadbands.rainMm} mm
-                      </span>
-                    </span>
-                  </td>
-                  <td className="hidden px-3 py-2 text-right align-top sm:table-cell">
-                    <span className="flex flex-wrap justify-end gap-1">
-                      {rule.sourceLinks.length > 0
-                        ? rule.sourceLinks.map((src, i) =>
-                            src.url ? (
-                              <a
-                                key={i}
-                                href={src.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-1.5 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider text-accent transition-colors hover:bg-accent/20"
-                              >
-                                {src.label}
-                                <ExternalLink className="h-2.5 w-2.5" aria-hidden="true" />
-                              </a>
-                            ) : (
-                              <span
-                                key={i}
-                                className="inline-flex items-center rounded border border-border/60 bg-background/40 px-1.5 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground"
-                              >
-                                {src.label}
-                              </span>
-                            ),
-                          )
-                        : <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">{rule.sources}</span>}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    ) : null}
+                  </div>
+
+                  <div className="flex min-w-0 flex-1 flex-col gap-2">
+                    <p className="text-pretty text-xs leading-relaxed text-foreground/85">{rule.triggers}</p>
+                    <div className="flex flex-wrap gap-1">
+                      {[
+                        { icon: Wind, text: `±${rule.deadbands.windMs} m/s` },
+                        { icon: Gauge, text: `gust ±${rule.deadbands.gustMs} m/s` },
+                        { icon: Navigation, text: `dir ±${rule.deadbands.directionDeg}°` },
+                        { icon: CloudRain, text: `rain ±${rule.deadbands.rainMm} mm` },
+                      ].map(({ icon: Icon, text }) => (
+                        <span
+                          key={text}
+                          className="inline-flex items-center gap-1 rounded border border-border/60 bg-background/40 px-1.5 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground"
+                        >
+                          <Icon className="h-2.5 w-2.5" aria-hidden="true" />
+                          {text}
+                        </span>
+                      ))}
+                    </div>
+
+                    {groups.length > 0 ? (
+                      <div className="flex flex-col gap-1.5 rounded-md border border-border/50 bg-background/30 px-2.5 py-2">
+                        <span className="font-mono text-[0.5rem] uppercase tracking-[0.14em] text-muted-foreground">
+                          Sources · {rule.label}
+                        </span>
+                        <dl className="grid gap-x-4 gap-y-1.5 sm:grid-cols-[auto_1fr]">
+                          {groups.map((g) => {
+                            const Icon = SOURCE_GROUP_META[g.group].icon
+                            return (
+                              <div key={g.group} className="contents">
+                                <dt className="flex items-center gap-1.5 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground sm:pt-0.5">
+                                  <Icon className="h-3 w-3" aria-hidden="true" />
+                                  {SOURCE_GROUP_META[g.group].name}
+                                </dt>
+                                <dd className="flex flex-wrap gap-1">
+                                  {g.links.map((src) =>
+                                    src.url ? (
+                                      <a
+                                        key={`${src.label}-${src.url}`}
+                                        href={src.url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="inline-flex items-center gap-1 rounded border border-accent/40 bg-accent/10 px-1.5 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider text-accent transition-colors hover:bg-accent/20"
+                                      >
+                                        {src.label}
+                                        <ExternalLink className="h-2.5 w-2.5" aria-hidden="true" />
+                                        <span className="sr-only">(opens in new tab)</span>
+                                      </a>
+                                    ) : (
+                                      <span
+                                        key={src.label}
+                                        className="inline-flex items-center rounded border border-border/60 bg-background/40 px-1.5 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground"
+                                      >
+                                        {src.label}
+                                      </span>
+                                    ),
+                                  )}
+                                </dd>
+                              </div>
+                            )
+                          })}
+                        </dl>
+                      </div>
+                    ) : rule.sources ? (
+                      <span className="font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">{rule.sources}</span>
+                    ) : null}
+                  </div>
+                </li>
+              )
+            })}
+          </ol>
         </div>
+
+        <BuzzerTriggerTable
+          className="mt-3"
+          thresholds={{ atSite: tierThresholds(rules, "atSite"), farSite: tierThresholds(rules, "farSite") }}
+          rules={rules}
+          activeLevel={alert.level}
+          title="Auto buzzer trigger table"
+          caption="Any one value ≥ entry buzzes (OR) at either site · releases below entry − dead band · edit in Engineering Console"
+        />
       </div>
 
       {/* Live parameter grid feeding the model — atmospheric + radar/optical channels */}
@@ -1082,6 +1100,43 @@ export function AlertBanner() {
       </div>
     </section>
   )
+}
+
+type SourceGroup = "satellite" | "radar" | "ncm" | "wind" | "openMeteo" | "other"
+
+const SOURCE_GROUP_META: Record<SourceGroup, { name: string; icon: typeof Wind }> = {
+  satellite: { name: "Satellite", icon: Satellite },
+  radar: { name: "Radar", icon: Radar },
+  ncm: { name: "NCM", icon: Siren },
+  wind: { name: "Wind feeds", icon: Wind },
+  openMeteo: { name: "Open-Meteo", icon: Cloud },
+  other: { name: "Other", icon: Link2 },
+}
+
+const SOURCE_GROUP_ORDER: SourceGroup[] = ["ncm", "wind", "satellite", "radar", "openMeteo", "other"]
+
+function sourceGroupOf(label: string): SourceGroup {
+  const l = label.toLowerCase()
+  if (/aws|cosmo|wind/.test(l)) return "wind"
+  if (/radar/.test(l)) return "radar"
+  if (/sat/.test(l)) return "satellite"
+  if (/meteo|mateo/.test(l)) return "openMeteo"
+  if (/ncm|bahar/.test(l)) return "ncm"
+  return "other"
+}
+
+/** Drops duplicate links (same label + URL) and groups the rest by source type. */
+function groupSourceLinks(links: SourceLink[]): { group: SourceGroup; links: SourceLink[] }[] {
+  const seen = new Set<string>()
+  const buckets = new Map<SourceGroup, SourceLink[]>()
+  for (const link of links) {
+    const key = `${link.label.trim().toLowerCase()}|${link.url ?? ""}`
+    if (!link.label.trim() || seen.has(key)) continue
+    seen.add(key)
+    const g = sourceGroupOf(link.label)
+    buckets.set(g, [...(buckets.get(g) ?? []), link])
+  }
+  return SOURCE_GROUP_ORDER.filter((g) => buckets.has(g)).map((g) => ({ group: g, links: buckets.get(g)! }))
 }
 
 const WIND_TIER_STYLES: Record<

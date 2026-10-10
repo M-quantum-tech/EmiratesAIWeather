@@ -1,6 +1,6 @@
 "use client"
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import useSWR from "swr"
 import { BellRing, Check, Cloud, Database, ExternalLink, FlaskConical, LineChart, Link2, Plus, Power, RotateCcw, Save, Square, Trash2, Volume2, Wind } from "lucide-react"
 import {
@@ -21,9 +21,6 @@ import {
   drillLevelFromSites,
   tierThresholds,
   tierPreset,
-  tierOverlaps,
-  BUZZER_METRIC_KEYS,
-  type BuzzerMetricKey,
   type TierThresholds,
   type AiPredictionSource,
   type CloudSourceConfig,
@@ -46,7 +43,7 @@ import { useGhaithMirror } from "@/components/weather/use-ghaith-mirror"
 import { GhaithMirrorPanel } from "@/components/admin/ghaith-mirror-panel"
 import { useWeather } from "@/components/weather/weather-provider"
 import { setSimulatorMode } from "@/components/weather/use-simulator-mode"
-import { clearWindMonitorTest, setWindMonitorTest, useWindMonitorTest } from "@/components/weather/use-wind-monitor-test"
+import { BuzzerTriggerTable } from "@/components/weather/buzzer-trigger-table"
 import { NcmWarningsEditor } from "@/components/admin/ncm-warnings-editor"
 import { cn } from "@/lib/utils"
 
@@ -585,7 +582,7 @@ export function EngineeringConsole({
               )
             })}
           </div>
-          <BuzzerThresholdTable thresholds={thresholds} rules={rules} />
+          <BuzzerTriggerTable className="mt-3" thresholds={thresholds} rules={rules} caption="Mirrors the Escalation rules below — edit ranges there · any one value ≥ entry buzzes (OR) · releases below entry − dead band" />
           <div className="mt-3 flex flex-col gap-3">
             <span className="label-caps text-muted-foreground">Test live values — set each site independently</span>
             {SITE_KEYS.map((siteKey) => (
@@ -942,110 +939,7 @@ function WindMonitorEditor({ initialTiers }: { initialTiers: WindMonitorTier[] }
         </button>
       </div>
 
-      <WindMonitorTestBar tiers={tiers} />
     </section>
-  )
-}
-
-function WindMonitorTestBar({ tiers }: { tiers: WindMonitorTier[] }) {
-  const test = useWindMonitorTest()
-  const [value, setValue] = useState("14")
-  const windMs = Number(value)
-  const valid = value.trim() !== "" && Number.isFinite(windMs) && windMs >= 0 && windMs <= 120
-  const preview = useMemo(() => (valid ? evaluateWindMonitor(windMs, tiers) : null), [valid, windMs, tiers])
-  const previewMeta = preview ? LEVEL_META[preview.level] : null
-  const sorted = useMemo(() => [...tiers].sort((a, b) => b.minSpeed - a.minSpeed), [tiers])
-
-  useEffect(() => () => clearWindMonitorTest(), [])
-
-  return (
-    <div className="mt-5 flex flex-col gap-3 rounded-lg border border-border bg-background/40 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <BellRing className="h-4 w-4 text-accent" aria-hidden="true" />
-          <h3 className="text-xs font-semibold uppercase tracking-[0.12em] text-foreground">Test Wind Event Monitor</h3>
-          {test.active ? (
-            <span className="rounded border border-accent/50 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-accent">
-              Testing · {test.windMs} m/s
-            </span>
-          ) : (
-            <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-              Live
-            </span>
-          )}
-        </div>
-      </div>
-      <p className="text-xs leading-relaxed text-muted-foreground">
-        Sends a test at-site sustained wind to the weather station through the live wiring and live buzzer (15 s or
-        until silenced). Uses the <span className="font-semibold text-foreground">saved</span> thresholds — save first
-        after editing. Reset to live returns the station to real readings.
-      </p>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <label htmlFor="wind-test-value" className="label-caps text-muted-foreground">
-          Test wind (m/s)
-        </label>
-        <input
-          id="wind-test-value"
-          type="number"
-          min={0}
-          max={120}
-          step={0.5}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          className="w-24 rounded-md border border-border bg-background px-3 py-2 text-sm tabular-nums text-foreground outline-none focus:border-accent"
-        />
-        {previewMeta && preview ? (
-          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className={cn("h-2.5 w-2.5 rounded-full", previewMeta.dot)} aria-hidden="true" />
-            <span className="font-semibold text-foreground">{previewMeta.name}</span>
-            {preview.met ? "· buzzer sounds" : "· below thresholds, no buzzer"}
-          </span>
-        ) : (
-          <span className="text-xs text-alert-red">Enter 0–120 m/s</span>
-        )}
-        <div className="ml-auto flex items-center gap-2">
-          <button
-            type="button"
-            disabled={!valid}
-            onClick={() => setWindMonitorTest({ active: true, windMs })}
-            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
-          >
-            <BellRing className="h-3 w-3" aria-hidden="true" />
-            Test
-          </button>
-          <button
-            type="button"
-            disabled={!test.active}
-            onClick={clearWindMonitorTest}
-            className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-background/60 disabled:opacity-50"
-          >
-            <RotateCcw className="h-3 w-3" aria-hidden="true" />
-            Reset to live
-          </button>
-        </div>
-      </div>
-
-      {sorted.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="label-caps text-muted-foreground">Quick test</span>
-          {sorted.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => {
-                setValue(String(t.minSpeed))
-                setWindMonitorTest({ active: true, windMs: t.minSpeed })
-              }}
-              className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs tabular-nums text-foreground transition-colors hover:bg-background/60"
-            >
-              <span className={cn("h-2 w-2 rounded-full", LEVEL_META[t.level].dot)} aria-hidden="true" />
-              {t.minSpeed} m/s · {LEVEL_META[t.level].name}
-            </button>
-          ))}
-        </div>
-      ) : null}
-    </div>
   )
 }
 
@@ -1862,171 +1756,4 @@ function Field({ label, value, onChange }: { label: string; value: string; onCha
   )
 }
 
-const BUZZER_METRIC_INFO: Record<BuzzerMetricKey, { name: string; unit: string }> = {
-  windMs: { name: "Wind speed", unit: "m/s" },
-  gustMs: { name: "Wind gust", unit: "m/s" },
-  rainMm: { name: "Rainfall", unit: "mm" },
-  cloudPct: { name: "Cloud cover", unit: "%" },
-}
 
-const fmtNum = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1))
-
-/**
- * Read-only view of what sounds the auto buzzer, derived from the Escalation rules. The
- * simulator only tests against these values — it never writes back to the ranges.
- */
-function BuzzerThresholdTable({
-  thresholds,
-  rules,
-}: {
-  thresholds: Record<SiteKey, TierThresholds>
-  rules: EscalationRule[]
-}) {
-  const overlaps = tierOverlaps(rules)
-
-  return (
-    <div className="mt-3 flex flex-col overflow-hidden rounded-lg border border-border/60 bg-background/40">
-      <div className="flex flex-col gap-1 border-b border-border/60 px-3 py-2.5 md:flex-row md:items-center md:justify-between">
-        <span className="label-caps text-foreground">Auto buzzer trigger table · read only</span>
-        <span className="text-xs leading-relaxed text-muted-foreground">
-          Mirrors the Escalation rules below — edit ranges there · any one value ≥ entry buzzes (OR) · releases below
-          entry − dead band
-        </span>
-      </div>
-      {overlaps.length > 0 ? (
-        <div role="alert" className="flex flex-col gap-1 border-b border-alert-orange/40 bg-alert-orange/10 px-3 py-2.5">
-          <span className="font-mono text-xs font-bold uppercase tracking-wide text-alert-orange">
-            Range conflict — lower tier starts at or above a higher tier
-          </span>
-          <ul className="flex flex-col gap-0.5 text-xs leading-relaxed text-foreground">
-            {overlaps.map((o) => (
-              <li key={`${o.siteKey}-${o.metric}-${o.lower}-${o.higher}`}>
-                {o.siteKey === "atSite" ? "At site" : "Far site"} · {BUZZER_METRIC_INFO[o.metric].name}:{" "}
-                {LEVEL_META[o.lower].name} {fmtNum(o.lowerEntry)} ≥ {LEVEL_META[o.higher].name} {fmtNum(o.higherEntry)}{" "}
-                <span className="text-muted-foreground">— this reading escalates straight to {LEVEL_META[o.higher].name}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[60rem] border-collapse text-left text-xs">
-          <thead>
-            <tr className="bg-muted/40">
-              <th
-                scope="col"
-                rowSpan={2}
-                className="sticky left-0 z-10 border-r border-border/60 bg-muted px-3 py-2 font-mono font-medium uppercase tracking-wide text-muted-foreground"
-              >
-                Tier
-              </th>
-              {BUZZER_METRIC_KEYS.map((key) => (
-                <th
-                  key={key}
-                  scope="colgroup"
-                  colSpan={3}
-                  className="border-r border-border/60 px-3 pt-2 pb-1 text-center font-mono font-semibold uppercase tracking-wide text-foreground last:border-r-0"
-                >
-                  {BUZZER_METRIC_INFO[key].name}
-                  <span className="ml-1 font-normal normal-case text-muted-foreground">
-                    ({BUZZER_METRIC_INFO[key].unit})
-                  </span>
-                </th>
-              ))}
-            </tr>
-            <tr className="border-b border-border/60 bg-muted/40 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
-              {BUZZER_METRIC_KEYS.map((key) => (
-                <Fragment key={key}>
-                  <th scope="col" className="px-2 pb-2 text-center font-medium">At site</th>
-                  <th scope="col" className="px-2 pb-2 text-center font-medium">Far site</th>
-                  <th scope="col" className="border-r border-border/60 px-2 pb-2 text-center font-medium last:border-r-0">
-                    Dead band
-                  </th>
-                </Fragment>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {ESCALATION_LEVELS.map((level) => {
-              const meta = LEVEL_META[level]
-              const isGreen = level === "green"
-              const db = rules.find((r) => r.level === level)?.deadbands
-              const yellowDb = rules.find((r) => r.level === "yellow")?.deadbands
-              return (
-                <tr key={level} className={cn("border-b border-border/40 last:border-b-0", meta.fill)}>
-                  <th
-                    scope="row"
-                    className="sticky left-0 z-10 border-r border-border/60 bg-card px-3 py-2.5 align-middle"
-                  >
-                    <span className="flex items-center gap-2">
-                      <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", meta.dot)} aria-hidden="true" />
-                      <span className={cn("font-mono text-xs font-bold uppercase tracking-wide", meta.text)}>
-                        {meta.name}
-                      </span>
-                    </span>
-                    <span className="mt-0.5 block text-[11px] font-normal text-muted-foreground">
-                      {isGreen ? "All clear · buzzer silent" : "Buzzer sounds"}
-                    </span>
-                  </th>
-                  {BUZZER_METRIC_KEYS.map((key) => {
-                    const band = db?.[key] ?? 0
-                    return (
-                      <Fragment key={key}>
-                        {SITE_KEYS.map((siteKey) => {
-                          if (isGreen) {
-                            const yEntry = thresholds[siteKey].yellow[key]
-                            const clears = yEntry == null ? null : Math.max(0, yEntry - (yellowDb?.[key] ?? 0))
-                            return (
-                              <td key={siteKey} className="px-2 py-2.5 text-center align-middle font-mono tabular-nums">
-                                {yEntry == null ? (
-                                  <span className="text-muted-foreground/60">—</span>
-                                ) : (
-                                  <span className="flex flex-col items-center leading-tight">
-                                    <span className="text-foreground">{"< "}{fmtNum(yEntry)}</span>
-                                    <span className="text-[10px] text-muted-foreground">clears ≤ {fmtNum(clears!)}</span>
-                                  </span>
-                                )}
-                              </td>
-                            )
-                          }
-                          const t = thresholds[siteKey][level][key]
-                          return (
-                            <td key={siteKey} className="px-2 py-2 text-center align-middle">
-                              <span className="flex flex-col items-center gap-0.5">
-                                <span
-                                  className={cn(
-                                    "font-mono text-sm font-semibold tabular-nums",
-                                    t == null ? "text-muted-foreground/60" : "text-foreground",
-                                  )}
-                                >
-                                  {t == null ? "off" : `≥ ${fmtNum(t)}`}
-                                </span>
-                                <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
-                                  {t == null ? "not driving" : `rel < ${fmtNum(Math.max(0, t - band))}`}
-                                </span>
-                              </span>
-                            </td>
-                          )
-                        })}
-                        <td className="border-r border-border/60 px-2 py-2 text-center align-middle last:border-r-0">
-                          {isGreen ? (
-                            <span className="font-mono text-muted-foreground/60">—</span>
-                          ) : (
-                            <span className="flex flex-col items-center gap-0.5">
-                              <span className="font-mono text-sm tabular-nums text-foreground">{fmtNum(band)}</span>
-                              <span className="font-mono text-[10px] text-muted-foreground">± both sites</span>
-                            </span>
-                          )}
-                        </td>
-                      </Fragment>
-                    )
-                  })}
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
