@@ -20,6 +20,7 @@ const fetcher = (url: string) =>
 export function useGhaithMirror(grid: Record<SiteKey, SiteReadings>) {
   const { data, mutate } = useSWR<MirrorResponse>("/api/ghaith-mirror", fetcher, {
     refreshInterval: 30_000,
+    refreshWhenHidden: true,
     keepPreviousData: true,
   })
   // Re-evaluate freshness each 30 s so a stale mirror hands over to the grid on time.

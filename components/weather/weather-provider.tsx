@@ -114,6 +114,7 @@ export function WeatherProvider({ children }: { children: ReactNode }) {
     : null
   const { data, error, isLoading, isValidating, mutate } = useSWR<Omit<WeatherPayload, "location">>(key, fetcher, {
     refreshInterval: REFRESH_MS,
+    refreshWhenHidden: true,
     keepPreviousData: true,
     revalidateOnFocus: true,
   })

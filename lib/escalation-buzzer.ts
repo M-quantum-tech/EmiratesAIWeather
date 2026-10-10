@@ -8,13 +8,46 @@ let liveTimer: ReturnType<typeof setInterval> | null = null
 let liveLevel: AlertLevel | null = null
 let unlockInstalled = false
 
+export type AudioState = "running" | "blocked" | "unsupported"
+const audioListeners = new Set<() => void>()
+const emitAudio = () => audioListeners.forEach((fn) => fn())
+
 function getCtx(): AudioContext | null {
   if (typeof window === "undefined") return null
   const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
   if (!Ctor) return null
-  if (!ctx) ctx = new Ctor()
-  if (ctx.state === "suspended") ctx.resume().catch(() => {})
+  if (!ctx) {
+    ctx = new Ctor()
+    ctx.onstatechange = emitAudio
+  }
+  if (ctx.state === "suspended") ctx.resume().then(emitAudio).catch(() => {})
   return ctx
+}
+
+/** "running" once the browser lets this page make sound without a fresh click. */
+export function getAudioState(): AudioState {
+  if (typeof window === "undefined") return "blocked"
+  const audio = getCtx()
+  if (!audio) return "unsupported"
+  return audio.state === "running" ? "running" : "blocked"
+}
+
+export function subscribeAudioState(fn: () => void) {
+  audioListeners.add(fn)
+  return () => {
+    audioListeners.delete(fn)
+  }
+}
+
+/** Resume audio from inside a click handler (the one gesture browsers require). */
+export async function armAudio(): Promise<AudioState> {
+  const audio = getCtx()
+  if (!audio) return "unsupported"
+  try {
+    await audio.resume()
+  } catch {}
+  emitAudio()
+  return audio.state === "running" ? "running" : "blocked"
 }
 
 /**

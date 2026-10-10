@@ -78,7 +78,9 @@ import { useSimulatorMode } from "@/components/weather/use-simulator-mode"
 import { useGhaithMirror } from "@/components/weather/use-ghaith-mirror"
 import { StationMirrorPush } from "@/components/weather/station-mirror-push"
 import { BuzzerTriggerTable } from "@/components/weather/buzzer-trigger-table"
-import { installAudioUnlock, startLiveBuzzer, stopLiveBuzzer } from "@/lib/escalation-buzzer"
+import { getAudioState, installAudioUnlock, startLiveBuzzer, stopLiveBuzzer } from "@/lib/escalation-buzzer"
+import { clearStationAlarm, notifyStationAlarm, startTitleFlash, stopTitleFlash } from "@/lib/alert-notify"
+import { AlertReadiness } from "@/components/weather/alert-readiness"
 import { cn } from "@/lib/utils"
 
 /** Header auto-refresh cadence (seconds) surfaced as a live countdown. */
@@ -162,7 +164,7 @@ type ParamCell = {
 }
 
 /** Looping level-tuned alarm through the shared buzzer player (same tones as the console). */
-function useBuzzer(active: boolean, level: AlertLevel) {
+function useBuzzer(active: boolean, level: AlertLevel, reason: string) {
   useEffect(() => {
     installAudioUnlock()
   }, [])
@@ -172,7 +174,32 @@ function useBuzzer(active: boolean, level: AlertLevel) {
     else stopLiveBuzzer()
   }, [active, level])
 
-  useEffect(() => () => stopLiveBuzzer(), [])
+  // OS notification + flashing tab title: these reach the operator with no click on the
+  // page and while the tab is hidden, so an alarm is never missed when sound is blocked.
+  const reasonRef = useRef(reason)
+  reasonRef.current = reason
+  useEffect(() => {
+    if (!active || level === "green") {
+      stopTitleFlash()
+      clearStationAlarm()
+      return
+    }
+    const label = level.toUpperCase()
+    notifyStationAlarm({
+      level,
+      title: `${label} alert · Weather station`,
+      body: reasonRef.current || `Station escalated to ${label}. Open the station to review and silence.`,
+    })
+    startTitleFlash(`(!) ${label} ALERT`)
+  }, [active, level])
+
+  useEffect(
+    () => () => {
+      stopLiveBuzzer()
+      stopTitleFlash()
+    },
+    [],
+  )
 }
 
 export function AlertBanner() {
@@ -182,6 +209,7 @@ export function AlertBanner() {
   // Escalation ladder — persisted overrides from the Engineering Console, defaults otherwise.
   const { data: rulesData } = useSWR<{ rules: EscalationRule[] }>("/api/escalation", farFetcher as never, {
     refreshInterval: 15_000,
+    refreshWhenHidden: true,
     revalidateOnFocus: true,
   })
   const rules = rulesData?.rules ?? DEFAULT_RULES
@@ -189,14 +217,14 @@ export function AlertBanner() {
   const { data: windMonitorData } = useSWR<{ tiers: WindMonitorTier[] }>(
     "/api/wind-monitor",
     farFetcher as never,
-    { refreshInterval: 15_000, revalidateOnFocus: true },
+    { refreshInterval: 15_000, refreshWhenHidden: true, revalidateOnFocus: true },
   )
   const windTiers = windMonitorData?.tiers ?? DEFAULT_WIND_MONITOR
   // Wind speed & gust source link — NCM COSMO-UAE by default, editable in the Engineering Console.
   const { data: windSourceData } = useSWR<{ source: WindSourceConfig }>(
     "/api/wind-source",
     farFetcher as never,
-    { refreshInterval: 15_000, revalidateOnFocus: true },
+    { refreshInterval: 15_000, refreshWhenHidden: true, revalidateOnFocus: true },
   )
   const windSource = windSourceData?.source ?? DEFAULT_WIND_SOURCE
   // Escalation panel + Wind Event Monitor share one pair of feeds: the at-site rule's
@@ -208,7 +236,7 @@ export function AlertBanner() {
   const { data: cloudSourceData } = useSWR<{ source: CloudSourceConfig }>(
     "/api/cloud-source",
     farFetcher as never,
-    { refreshInterval: 15_000, revalidateOnFocus: true },
+    { refreshInterval: 15_000, refreshWhenHidden: true, revalidateOnFocus: true },
   )
   const cloudSource = cloudSourceData?.source ?? DEFAULT_CLOUD_SOURCE
   const rawAlert = useMemo(() => (payload ? buildAlert(payload) : null), [payload])
@@ -396,12 +424,17 @@ export function AlertBanner() {
   // drill holds the buzzer on continuously until the values drop or it is acknowledged.
   useEffect(() => {
     if (!alarmActive || simulator.active) return
-    const timer = window.setTimeout(() => setAcked(true), 15_000)
+    // If the browser is still muting audio, keep the alarm armed so the first click
+    // anywhere on the page sounds it instead of it silently timing out unheard.
+    const timer = window.setTimeout(() => {
+      if (getAudioState() === "running") setAcked(true)
+    }, 15_000)
     return () => window.clearTimeout(timer)
   }, [alarmActive])
 
   const danger = alert?.danger ?? false
-  useBuzzer(alarmActive, level ?? "green")
+  const alarmReason = [siteEval.at.reason, siteEval.far.reason].filter(Boolean).join(" · ")
+  useBuzzer(alarmActive, level ?? "green", alarmReason)
 
   if (!payload || !alert) {
     return <div className="h-40 animate-pulse rounded-lg border border-border bg-panel" />
@@ -545,6 +578,8 @@ export function AlertBanner() {
     reason: siteReasonFor(s),
   }))
   return (
+    <>
+    <AlertReadiness />
     <section aria-label="Advance AI safety model" className={cn("station-rise rounded-xl border", styles.bar)}>
       {/* Header ribbon */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 px-4 py-2.5">
@@ -1100,6 +1135,7 @@ export function AlertBanner() {
         </div>
       </div>
     </section>
+    </>
   )
 }
 
