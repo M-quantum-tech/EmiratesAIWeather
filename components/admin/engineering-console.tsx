@@ -46,6 +46,7 @@ import { useGhaithMirror } from "@/components/weather/use-ghaith-mirror"
 import { GhaithMirrorPanel } from "@/components/admin/ghaith-mirror-panel"
 import { useWeather } from "@/components/weather/weather-provider"
 import { setSimulatorMode } from "@/components/weather/use-simulator-mode"
+import { clearWindMonitorTest, setWindMonitorTest, useWindMonitorTest } from "@/components/weather/use-wind-monitor-test"
 import { NcmWarningsEditor } from "@/components/admin/ncm-warnings-editor"
 import { cn } from "@/lib/utils"
 
@@ -940,7 +941,111 @@ function WindMonitorEditor({ initialTiers }: { initialTiers: WindMonitorTier[] }
           Add threshold
         </button>
       </div>
+
+      <WindMonitorTestBar tiers={tiers} />
     </section>
+  )
+}
+
+function WindMonitorTestBar({ tiers }: { tiers: WindMonitorTier[] }) {
+  const test = useWindMonitorTest()
+  const [value, setValue] = useState("14")
+  const windMs = Number(value)
+  const valid = value.trim() !== "" && Number.isFinite(windMs) && windMs >= 0 && windMs <= 120
+  const preview = useMemo(() => (valid ? evaluateWindMonitor(windMs, tiers) : null), [valid, windMs, tiers])
+  const previewMeta = preview ? LEVEL_META[preview.level] : null
+  const sorted = useMemo(() => [...tiers].sort((a, b) => b.minSpeed - a.minSpeed), [tiers])
+
+  useEffect(() => () => clearWindMonitorTest(), [])
+
+  return (
+    <div className="mt-5 flex flex-col gap-3 rounded-lg border border-border bg-background/40 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <BellRing className="h-4 w-4 text-accent" aria-hidden="true" />
+          <h3 className="text-xs font-semibold uppercase tracking-[0.12em] text-foreground">Test Wind Event Monitor</h3>
+          {test.active ? (
+            <span className="rounded border border-accent/50 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-accent">
+              Testing · {test.windMs} m/s
+            </span>
+          ) : (
+            <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              Live
+            </span>
+          )}
+        </div>
+      </div>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        Sends a test at-site sustained wind to the weather station through the live wiring and live buzzer (15 s or
+        until silenced). Uses the <span className="font-semibold text-foreground">saved</span> thresholds — save first
+        after editing. Reset to live returns the station to real readings.
+      </p>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <label htmlFor="wind-test-value" className="label-caps text-muted-foreground">
+          Test wind (m/s)
+        </label>
+        <input
+          id="wind-test-value"
+          type="number"
+          min={0}
+          max={120}
+          step={0.5}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          className="w-24 rounded-md border border-border bg-background px-3 py-2 text-sm tabular-nums text-foreground outline-none focus:border-accent"
+        />
+        {previewMeta && preview ? (
+          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className={cn("h-2.5 w-2.5 rounded-full", previewMeta.dot)} aria-hidden="true" />
+            <span className="font-semibold text-foreground">{previewMeta.name}</span>
+            {preview.met ? "· buzzer sounds" : "· below thresholds, no buzzer"}
+          </span>
+        ) : (
+          <span className="text-xs text-alert-red">Enter 0–120 m/s</span>
+        )}
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            disabled={!valid}
+            onClick={() => setWindMonitorTest({ active: true, windMs })}
+            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
+          >
+            <BellRing className="h-3 w-3" aria-hidden="true" />
+            Test
+          </button>
+          <button
+            type="button"
+            disabled={!test.active}
+            onClick={clearWindMonitorTest}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-background/60 disabled:opacity-50"
+          >
+            <RotateCcw className="h-3 w-3" aria-hidden="true" />
+            Reset to live
+          </button>
+        </div>
+      </div>
+
+      {sorted.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="label-caps text-muted-foreground">Quick test</span>
+          {sorted.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => {
+                setValue(String(t.minSpeed))
+                setWindMonitorTest({ active: true, windMs: t.minSpeed })
+              }}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs tabular-nums text-foreground transition-colors hover:bg-background/60"
+            >
+              <span className={cn("h-2 w-2 rounded-full", LEVEL_META[t.level].dot)} aria-hidden="true" />
+              {t.minSpeed} m/s · {LEVEL_META[t.level].name}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
   )
 }
 

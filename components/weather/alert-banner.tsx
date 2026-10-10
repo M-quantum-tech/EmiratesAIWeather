@@ -74,7 +74,7 @@ import { ForecastApproachPanel } from "@/components/weather/forecast-approach-pa
 import { useWeather } from "@/components/weather/weather-provider"
 import { useSimulatorMode } from "@/components/weather/use-simulator-mode"
 import { useGhaithMirror } from "@/components/weather/use-ghaith-mirror"
-import { LiveAlarmTest, type LiveAlarmTestValues } from "@/components/weather/live-alarm-test"
+import { useWindMonitorTest } from "@/components/weather/use-wind-monitor-test"
 import { cn } from "@/lib/utils"
 
 /** Header auto-refresh cadence (seconds) surfaced as a live countdown. */
@@ -358,10 +358,24 @@ export function AlertBanner() {
   // Ghaith mirror is the primary source: fresh #aws-wind (at site) / #cosmo-uae-wind
   // (far site) readings override the model grid; stale sites fall back to the grid.
   const { readings: liveSiteReadings, source: siteSource } = useGhaithMirror(gridSiteReadings)
-  // Live alarm test values: replace the live readings and NCM warning but keep the live
-  // wiring (three sources, 15 s auto-silence) so the real live alarm can be exercised.
-  const [liveTest, setLiveTest] = useState<LiveAlarmTestValues | null>(null)
-  const liveTestActive = !simulator.active && liveTest !== null
+  // Wind Event Monitor test from the Engineering Console: the test wind is the only
+  // at-site reading (everything else zeroed, NCM green) so exactly the Wind Event Monitor
+  // threshold is exercised through the live wiring and live 15 s buzzer.
+  const windTest = useWindMonitorTest()
+  const liveTestActive = !simulator.active && windTest.active && windTest.windMs !== null
+  const liveTest = useMemo<Record<SiteKey, SiteReadings> | null>(
+    () =>
+      liveTestActive
+        ? {
+            atSite: { windMs: windTest.windMs ?? 0, gustMs: 0, rainMm: 0, cloudPct: 0 },
+            farSite: { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 },
+          }
+        : null,
+    [liveTestActive, windTest.windMs],
+  )
+  useEffect(() => {
+    if (liveTestActive) setAcked(false)
+  }, [liveTestActive, windTest.windMs])
   // During a drill the At-site / Far-site indicators and the buzzer evaluate the operator's
   // per-site test readings instead of the live stations — so only the site whose values
   // actually meet the tier blinks and sounds, and a site edited back down returns to green.
@@ -372,9 +386,7 @@ export function AlertBanner() {
             atSite: { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 },
             farSite: { windMs: 0, gustMs: 0, rainMm: 0, cloudPct: 0 },
           }
-        : liveTestActive
-          ? liveTest.readings
-          : liveSiteReadings,
+        : liveTest ?? liveSiteReadings,
     [simulator.active, simulator.readings, liveTestActive, liveTest, liveSiteReadings],
   )
   // Reset the dead-band latch when switching between drill, test and live data.
@@ -401,7 +413,7 @@ export function AlertBanner() {
   //  1. Wind Event Monitor (at-site sustained wind, e.g. ≥ 14 m/s → Red)
   //  2. Escalation ranges — wind, gust, rainfall OR cloud at the At-site OR Far-site
   //  3. NCM / Al Bahar official warning issued for this station's emirate
-  const ncmLevel: AlertLevel = liveTestActive ? liveTest.ncm : ncmLocal?.level ?? "green"
+  const ncmLevel: AlertLevel = liveTestActive ? "green" : ncmLocal?.level ?? "green"
   const liveSources = useMemo(() => {
     const rank = (l: AlertLevel) => ESCALATION_LEVELS.indexOf(l)
     const candidates: { level: AlertLevel; source: "wind" | "range" | "ncm" }[] = [
@@ -680,21 +692,6 @@ export function AlertBanner() {
         </span>
       </div>
 
-      <LiveAlarmTest
-        liveReadings={liveSiteReadings}
-        liveNcm={ncmLocal?.level ?? "green"}
-        active={liveTestActive}
-        disabled={simulator.active}
-        onTest={(values) => {
-          setLiveTest(values)
-          setAcked(false)
-        }}
-        onReset={() => {
-          setLiveTest(null)
-          setAcked(true)
-        }}
-      />
-
       {/* Alarm strip — sounds ONLY while an at-site or far-site reading meets this tier's
           escalation range, until acknowledged; tinted to the active level. */}
       {alarmActive ? (
@@ -713,9 +710,7 @@ export function AlertBanner() {
                   ? `Far site in range · ${siteEval.far.reason}`
                   : windEval.met
                     ? `Wind event met · ${windEval.reason}`
-                    : liveTestActive && liveSources.source === "ncm"
-                      ? `NCM / Al Bahar ${liveTest.ncm} warning · test value`
-                      : !simulator.active && liveSources.source === "ncm" && ncmLocal
+                    : !simulator.active && liveSources.source === "ncm" && ncmLocal
                       ? `NCM / Al Bahar ${ncmLocal.level} warning · ${ncmLocal.name}${ncmLocal.headline ? ` · ${ncmLocal.headline}` : ""}`
                       : `Armed at ${alert.title}`}
             {danger ? ` · severe conditions within ${DANGER_RADIUS_KM} km` : ""} — sounding for 15 s or until reset.
