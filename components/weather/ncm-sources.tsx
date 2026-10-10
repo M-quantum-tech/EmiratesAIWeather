@@ -200,7 +200,7 @@ export function NcmSources() {
   const { data: ncmData } = useSWR<{ warnings: NcmWarning[] }>(
     "/api/ncm-warnings",
     (url: string) => fetch(url).then((r) => r.json()),
-    { refreshInterval: 60 * 1000, revalidateOnFocus: true },
+    { refreshInterval: 15 * 1000, revalidateOnFocus: true },
   )
   const ncmWarnings = ncmData?.warnings ?? DEFAULT_NCM_WARNINGS
   const [warnIdx, setWarnIdx] = useState(0)

@@ -229,22 +229,22 @@ export function AlertBanner() {
   const simulator = useSimulatorMode()
   // Escalation ladder — persisted overrides from the Engineering Console, defaults otherwise.
   const { data: rulesData } = useSWR<{ rules: EscalationRule[] }>("/api/escalation", farFetcher as never, {
-    refreshInterval: 60_000,
-    revalidateOnFocus: false,
+    refreshInterval: 15_000,
+    revalidateOnFocus: true,
   })
   const rules = rulesData?.rules ?? DEFAULT_RULES
   // Wind Event Monitor thresholds — persisted overrides from the Engineering Console.
   const { data: windMonitorData } = useSWR<{ tiers: WindMonitorTier[] }>(
     "/api/wind-monitor",
     farFetcher as never,
-    { refreshInterval: 60_000, revalidateOnFocus: false },
+    { refreshInterval: 15_000, revalidateOnFocus: true },
   )
   const windTiers = windMonitorData?.tiers ?? DEFAULT_WIND_MONITOR
   // Wind speed & gust source link — NCM COSMO-UAE by default, editable in the Engineering Console.
   const { data: windSourceData } = useSWR<{ source: WindSourceConfig }>(
     "/api/wind-source",
     farFetcher as never,
-    { refreshInterval: 300_000, revalidateOnFocus: false },
+    { refreshInterval: 15_000, revalidateOnFocus: true },
   )
   const windSource = windSourceData?.source ?? DEFAULT_WIND_SOURCE
   // Escalation panel + Wind Event Monitor share one pair of feeds: the at-site rule's
@@ -256,7 +256,7 @@ export function AlertBanner() {
   const { data: cloudSourceData } = useSWR<{ source: CloudSourceConfig }>(
     "/api/cloud-source",
     farFetcher as never,
-    { refreshInterval: 300_000, revalidateOnFocus: false },
+    { refreshInterval: 15_000, revalidateOnFocus: true },
   )
   const cloudSource = cloudSourceData?.source ?? DEFAULT_CLOUD_SOURCE
   const rawAlert = useMemo(() => (payload ? buildAlert(payload) : null), [payload])
