@@ -1,14 +1,19 @@
 "use client"
 
 import { useEffect, useState, useSyncExternalStore } from "react"
-import { BellRing, ChevronDown, MonitorSmartphone, Volume2, VolumeX } from "lucide-react"
-import { armAudio, getAudioState, subscribeAudioState } from "@/lib/escalation-buzzer"
+import { BellOff, BellRing, ChevronDown, MonitorSmartphone, Volume2, VolumeX } from "lucide-react"
+import { armAudio, getAudioState, stopLiveBuzzer, subscribeAudioState } from "@/lib/escalation-buzzer"
 import {
+  clearStationAlarm,
+  getAlertsEnabled,
   getNotifyPermission,
   keepStationAwake,
   notifyStationAlarm,
   registerAlertWorker,
   requestNotifyPermission,
+  setAlertsEnabled,
+  stopTitleFlash,
+  subscribeAlertsEnabled,
   type NotifyPermission,
 } from "@/lib/alert-notify"
 import { cn } from "@/lib/utils"
@@ -33,11 +38,12 @@ function useNotifyPermission(): [NotifyPermission, (p: NotifyPermission) => void
 }
 
 /**
- * Shows whether this station can actually deliver an alarm with nobody touching it:
- * OS notifications (work with no click, in background tabs) and buzzer sound (browsers
- * need one gesture per page load unless autoplay is allowed for the site).
+ * ON/OFF switch for this station display. ON arms the buzzer and asks for desktop alerts
+ * in the same click (browsers need one gesture); OFF silences buzzer, desktop alerts and
+ * the flashing tab title on this PC only.
  */
 export function AlertReadiness() {
+  const enabled = useSyncExternalStore(subscribeAlertsEnabled, getAlertsEnabled, () => true)
   const audio = useSyncExternalStore(subscribeAudioState, getAudioState, () => "blocked" as const)
   const [notify, setNotify] = useNotifyPermission()
   const [helpOpen, setHelpOpen] = useState(false)
@@ -49,61 +55,124 @@ export function AlertReadiness() {
 
   const soundReady = audio === "running"
   const notifyReady = notify === "granted"
-  const allReady = soundReady && notifyReady
+  const needsAttention = enabled && !(soundReady && notifyReady)
 
-  const arm = async () => {
-    await armAudio()
-    const next = await requestNotifyPermission()
-    setNotify(next)
-    if (next === "granted" && !notifyReady) {
-      notifyStationAlarm({
-        level: "yellow",
-        title: "Station alerts armed",
-        body: "This station will notify you on Yellow, Orange and Red even when the page is in the background.",
-      })
-    }
+  // Browser permission / audio-resume promises can stay pending indefinitely (embedded
+  // views, ignored prompts), so the switch flips immediately and never awaits them.
+  const armBrowser = (confirm: boolean) => {
+    void armAudio()
+    void requestNotifyPermission().then((next) => {
+      setNotify(next)
+      if (confirm && next === "granted") {
+        notifyStationAlarm({
+          level: "yellow",
+          title: "Station alerts ON",
+          body: "This station will alert on Yellow, Orange and Red even when the page is in the background.",
+        })
+      }
+    })
   }
+
+  const turnOn = () => {
+    setAlertsEnabled(true)
+    armBrowser(true)
+  }
+
+  const turnOff = () => {
+    setAlertsEnabled(false)
+    stopLiveBuzzer()
+    stopTitleFlash()
+    clearStationAlarm()
+  }
+
+  const toggle = () => (enabled ? turnOff() : turnOn())
+
+  const rearm = () => armBrowser(false)
 
   return (
     <div
-      role="status"
-      aria-live="polite"
+      role="region"
+      aria-label="Station alert delivery"
       className={cn(
         "flex flex-col gap-2 rounded-lg border px-3 py-2",
-        allReady ? "border-border bg-panel" : "border-alert-orange/60 bg-alert-orange/10",
+        !enabled
+          ? "border-alert-red/60 bg-alert-red/10"
+          : needsAttention
+            ? "border-alert-orange/60 bg-alert-orange/10"
+            : "border-border bg-panel",
       )}
     >
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <span className="flex items-center gap-1.5 font-mono text-[0.6875rem] font-semibold uppercase tracking-wider text-foreground">
-          <BellRing className="h-3.5 w-3.5" aria-hidden="true" />
-          Alert delivery
-        </span>
-        <StatusChip
-          ok={notifyReady}
-          icon={MonitorSmartphone}
-          label={
-            notifyReady
-              ? "Desktop alerts on"
-              : notify === "denied"
-                ? "Desktop alerts blocked"
-                : notify === "unsupported"
-                  ? "Desktop alerts unsupported"
-                  : "Desktop alerts off"
-          }
-        />
-        <StatusChip
-          ok={soundReady}
-          icon={soundReady ? Volume2 : VolumeX}
-          label={soundReady ? "Buzzer sound armed" : "Buzzer sound blocked by browser"}
-        />
-        <span className="ml-auto flex items-center gap-2">
-          {!allReady ? (
+        <div className="order-last ml-auto flex items-center gap-3">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={enabled}
+            aria-label="Station alerts"
+            onClick={toggle}
+            className={cn(
+              "relative inline-flex h-7 w-14 shrink-0 items-center rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              enabled ? "border-alert-green bg-alert-green" : "border-border bg-muted",
+            )}
+          >
+            <span
+              aria-hidden="true"
+              className={cn(
+                "absolute font-mono text-[0.5625rem] font-bold uppercase",
+                enabled ? "left-2 text-background" : "right-2 text-muted-foreground",
+              )}
+            >
+              {enabled ? "On" : "Off"}
+            </span>
+            <span
+              aria-hidden="true"
+              className={cn(
+                "inline-block h-5 w-5 rounded-full bg-background shadow transition-transform",
+                enabled ? "translate-x-8" : "translate-x-1",
+              )}
+            />
+          </button>
+          <span className="flex items-center gap-1.5 font-mono text-[0.6875rem] font-semibold uppercase tracking-wider text-foreground">
+            {enabled ? (
+              <BellRing className="h-3.5 w-3.5" aria-hidden="true" />
+            ) : (
+              <BellOff className="h-3.5 w-3.5" aria-hidden="true" />
+            )}
+            Station alerts {enabled ? "on" : "off"}
+          </span>
+        </div>
+
+        {enabled ? (
+          <>
+            <StatusChip
+              ok={notifyReady}
+              icon={MonitorSmartphone}
+              label={
+                notifyReady
+                  ? "Desktop alerts on"
+                  : notify === "denied"
+                    ? "Desktop alerts blocked"
+                    : notify === "unsupported"
+                      ? "Desktop alerts unsupported"
+                      : "Desktop alerts off"
+              }
+            />
+            <StatusChip
+              ok={soundReady}
+              icon={soundReady ? Volume2 : VolumeX}
+              label={soundReady ? "Buzzer sound ready" : "Buzzer needs one click"}
+            />
+          </>
+        ) : null}
+
+        <span className="flex items-center gap-3">
+          {needsAttention && notify !== "denied" && notify !== "unsupported" ? (
             <button
               type="button"
-              onClick={arm}
-              className="rounded-md bg-alert-orange px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-background hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={rearm}
+              className="rounded-md border border-alert-orange/60 px-2.5 py-1 text-xs font-semibold text-foreground hover:bg-alert-orange/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              Arm station alerts
+              Re-arm
             </button>
           ) : null}
           <button
@@ -117,13 +186,33 @@ export function AlertReadiness() {
           </button>
         </span>
       </div>
-      {!allReady ? (
-        <p className="text-pretty text-xs leading-relaxed text-muted-foreground">
-          Press <strong className="text-foreground">Arm station alerts</strong> once. Desktop alerts then pop up with the
-          system sound on every Yellow, Orange and Red trip, with no click needed, even when this tab is hidden or
-          minimised. Orange and Red stay on screen until dismissed.
-        </p>
-      ) : null}
+
+      <p role="status" aria-live="polite" className="text-pretty text-xs leading-relaxed text-muted-foreground">
+        {!enabled ? (
+          <>
+            Alerts are <strong className="text-foreground">OFF on this PC</strong>: no buzzer, desktop alert or tab flash
+            will fire here. Switch ON to resume.
+          </>
+        ) : notify === "denied" ? (
+          <>
+            The browser has blocked desktop alerts for this site. Open the padlock in the address bar, set Notifications
+            to Allow, then reload. The on-page buzzer still works.
+          </>
+        ) : notify === "unsupported" ? (
+          <>
+            This view cannot show desktop alerts (embedded preview or unsupported browser). Open the station in its own
+            browser tab for desktop alerts; the on-page buzzer still works.
+          </>
+        ) : needsAttention ? (
+          <>
+            Alerts are ON. Press <strong className="text-foreground">Re-arm</strong> (or click anywhere) once after a
+            reload so the browser lets the buzzer sound unattended.
+          </>
+        ) : (
+          <>Alerts are ON. Yellow, Orange and Red will sound and pop up with no click needed, even when this tab is hidden.</>
+        )}
+      </p>
+
       {helpOpen ? (
         <div className="flex flex-col gap-1.5 border-t border-border pt-2 text-xs leading-relaxed text-muted-foreground">
           <p className="text-pretty">

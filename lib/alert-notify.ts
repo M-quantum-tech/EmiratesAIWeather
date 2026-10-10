@@ -3,7 +3,33 @@ import type { AlertLevel } from "@/lib/weather"
 export type NotifyPermission = NotificationPermission | "unsupported"
 
 const ALARM_TAG = "station-alarm"
+const ENABLED_KEY = "station-alerts-enabled"
 let workerPromise: Promise<ServiceWorkerRegistration | null> | null = null
+
+// Per-device switch for this station display. Defaults to ON so a fresh PC never misses an alarm.
+const enabledListeners = new Set<() => void>()
+
+export function getAlertsEnabled(): boolean {
+  if (typeof window === "undefined") return true
+  return window.localStorage.getItem(ENABLED_KEY) !== "off"
+}
+
+export function setAlertsEnabled(on: boolean) {
+  window.localStorage.setItem(ENABLED_KEY, on ? "on" : "off")
+  enabledListeners.forEach((fn) => fn())
+}
+
+export function subscribeAlertsEnabled(fn: () => void) {
+  enabledListeners.add(fn)
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === ENABLED_KEY) fn()
+  }
+  window.addEventListener("storage", onStorage)
+  return () => {
+    enabledListeners.delete(fn)
+    window.removeEventListener("storage", onStorage)
+  }
+}
 
 function notifySupported() {
   return typeof window !== "undefined" && "Notification" in window
@@ -42,7 +68,7 @@ type AlarmNotification = { level: AlertLevel; title: string; body: string }
  * until someone dismisses them, so an unattended alarm cannot scroll away.
  */
 export async function notifyStationAlarm({ level, title, body }: AlarmNotification) {
-  if (getNotifyPermission() !== "granted") return
+  if (!getAlertsEnabled() || getNotifyPermission() !== "granted") return
   const critical = level === "orange" || level === "red"
   const options = {
     body,

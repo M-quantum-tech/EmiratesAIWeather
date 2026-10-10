@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import useSWR from "swr"
 import {
   Activity,
@@ -79,7 +79,14 @@ import { useGhaithMirror } from "@/components/weather/use-ghaith-mirror"
 import { StationMirrorPush } from "@/components/weather/station-mirror-push"
 import { BuzzerTriggerTable } from "@/components/weather/buzzer-trigger-table"
 import { getAudioState, installAudioUnlock, startLiveBuzzer, stopLiveBuzzer } from "@/lib/escalation-buzzer"
-import { clearStationAlarm, notifyStationAlarm, startTitleFlash, stopTitleFlash } from "@/lib/alert-notify"
+import {
+  clearStationAlarm,
+  getAlertsEnabled,
+  notifyStationAlarm,
+  startTitleFlash,
+  stopTitleFlash,
+  subscribeAlertsEnabled,
+} from "@/lib/alert-notify"
 import { AlertReadiness } from "@/components/weather/alert-readiness"
 import { cn } from "@/lib/utils"
 
@@ -164,7 +171,10 @@ type ParamCell = {
 }
 
 /** Looping level-tuned alarm through the shared buzzer player (same tones as the console). */
-function useBuzzer(active: boolean, level: AlertLevel, reason: string) {
+function useBuzzer(rawActive: boolean, level: AlertLevel, reason: string) {
+  const enabled = useSyncExternalStore(subscribeAlertsEnabled, getAlertsEnabled, () => true)
+  const active = rawActive && enabled
+
   useEffect(() => {
     installAudioUnlock()
   }, [])
