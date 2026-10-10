@@ -55,6 +55,14 @@ export async function setIamUserCsvExport(userId: string, allowed: boolean) {
   revalidatePath("/iam")
 }
 
+export async function setIamUserMirrorPush(userId: string, allowed: boolean) {
+  await guard()
+  if (typeof allowed !== "boolean") throw new Error("Invalid push to mirror value.")
+  await updateIamUser(userId, { mirrorPush: allowed })
+  revalidatePath("/admin/engineering")
+  revalidatePath("/iam")
+}
+
 export async function setIamUserPassword(userId: string, password: string) {
   await guard()
   validPassword(password)

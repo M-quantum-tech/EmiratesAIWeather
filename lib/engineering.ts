@@ -26,6 +26,7 @@ import type { AlertLevel } from "@/lib/weather"
 import { DEFAULT_NCM_WARNINGS, parseNcmWarnings, type NcmWarning } from "@/lib/ncm-warnings"
 import { getSessionUser, isAdmin } from "@/lib/admin"
 import { EMPTY_MIRROR, parseMirror, parseMirrorSite, type GhaithMirror } from "@/lib/ghaith-mirror"
+import { getMirrorPushPermission } from "@/lib/iam-server"
 
 const ESCALATION_KEY = "escalation_rules"
 const NCM_WARNINGS_KEY = "ncm_warnings"
@@ -170,9 +171,14 @@ export async function pushGhaithMirror(
   body: unknown,
   requested: "console" | "relay",
 ): Promise<GhaithMirror> {
-  // Station pushes require a signed-in account; non-admins may add readings but not clear sites or change the window.
-  if (requested === "console" && !(await getSessionUser())) throw new Error("Unauthorized")
-  const via = requested === "console" && !(await isAdmin()) ? "public" : requested
+  // Station pushes need a session plus the Plant IAM "Push to mirror" grant; non-admins may add readings but not clear sites or change the window.
+  let via: "console" | "relay" | "public" = requested
+  if (requested === "console") {
+    const permission = await getMirrorPushPermission()
+    if (!permission.signedIn) throw new Error("Unauthorized")
+    if (!permission.allowed) throw new Error("Forbidden")
+    if (!permission.isAdmin) via = "public"
+  }
   const r = (body && typeof body === "object" ? body : {}) as Record<string, unknown>
   if (via === "public" && (r.atSite === null || r.farSite === null || r.ttlMin !== undefined)) {
     throw new Error("Forbidden")

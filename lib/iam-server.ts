@@ -30,6 +30,7 @@ export function ensureIamColumns(): Promise<void> {
       await db.execute(sql`ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "iamUsername" text`)
       await db.execute(sql`ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "iamTitle" text`)
       await db.execute(sql`ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "iamCsvExport" boolean NOT NULL DEFAULT true`)
+      await db.execute(sql`ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "iamMirrorPush" boolean NOT NULL DEFAULT false`)
     })().catch((err) => {
       iamColumnsReady = null
       throw err
@@ -150,7 +151,28 @@ export interface IamUserRow {
   role: IamRoleCode
   accessStatus: AccessStatus
   csvExport: boolean
+  mirrorPush: boolean
   lastSignIn: Date | null
+}
+
+/**
+ * Station "Push to mirror" is IAM-managed: admins always may, enabled plant
+ * logins may only when an admin has set their Push to mirror flag to Allowed.
+ */
+export async function getMirrorPushPermission(): Promise<CsvPermission & { isAdmin: boolean }> {
+  const sessionUser = await getSessionUser()
+  if (!sessionUser) return { signedIn: false, allowed: false, isAdmin: false }
+  if (sessionUser.role === "admin" || isDesignatedAdmin(sessionUser.email)) {
+    return { signedIn: true, allowed: true, isAdmin: true }
+  }
+  await ensureIamColumns()
+  const [row] = await db
+    .select({ iamRole: user.iamRole, accessStatus: user.accessStatus, iamMirrorPush: user.iamMirrorPush })
+    .from(user)
+    .where(eq(user.id, sessionUser.id))
+    .limit(1)
+  const allowed = Boolean(row && isIamRoleCode(row.iamRole) && row.accessStatus !== "denied" && row.iamMirrorPush)
+  return { signedIn: true, allowed, isAdmin: false }
 }
 
 export interface CsvPermission {
@@ -187,6 +209,7 @@ export async function listIamUsers(): Promise<IamUserRow[]> {
       iamRole: user.iamRole,
       accessStatus: user.accessStatus,
       iamCsvExport: user.iamCsvExport,
+      iamMirrorPush: user.iamMirrorPush,
       lastSignIn: sql<Date | null>`(select max(s."createdAt") from "session" s where s."userId" = ${user.id})`,
     })
     .from(user)
@@ -202,6 +225,7 @@ export async function listIamUsers(): Promise<IamUserRow[]> {
       role: r.iamRole as IamRoleCode,
       accessStatus: (r.accessStatus ?? "allowed") as AccessStatus,
       csvExport: r.iamCsvExport !== false,
+      mirrorPush: r.iamMirrorPush === true,
       lastSignIn: r.lastSignIn ? new Date(r.lastSignIn) : null,
     }))
 }
@@ -223,6 +247,7 @@ export async function updateIamUser(
     accessStatus?: "allowed" | "denied"
     username?: string
     csvExport?: boolean
+    mirrorPush?: boolean
   },
 ) {
   await ensureIamColumns()
@@ -245,6 +270,7 @@ export async function updateIamUser(
       ...(patch.title !== undefined ? { iamTitle: patch.title } : {}),
       ...(patch.accessStatus ? { accessStatus: patch.accessStatus } : {}),
       ...(patch.csvExport !== undefined ? { iamCsvExport: patch.csvExport } : {}),
+      ...(patch.mirrorPush !== undefined ? { iamMirrorPush: patch.mirrorPush } : {}),
       updatedAt: new Date(),
     })
     .where(eq(user.id, userId))

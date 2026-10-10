@@ -38,6 +38,7 @@ export function IamRosterReadonly({ users }: { users: IamUserRow[] }) {
               <th scope="col" className="label-caps px-3 py-2 font-normal">Deep trends</th>
               <th scope="col" className="label-caps px-3 py-2 font-normal">Status</th>
               <th scope="col" className="label-caps px-3 py-2 font-normal">CSV export</th>
+              <th scope="col" className="label-caps px-3 py-2 font-normal">Push to mirror</th>
               <th scope="col" className="label-caps px-3 py-2 font-normal">Last sign in</th>
             </tr>
           </thead>
@@ -73,6 +74,13 @@ export function IamRosterReadonly({ users }: { users: IamUserRow[] }) {
                   </td>
                   <td className="px-3 py-2 font-mono text-xs uppercase">
                     {u.csvExport ? (
+                      <span className="text-alert-green">Allowed</span>
+                    ) : (
+                      <span className="text-muted-foreground">Not allowed</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 font-mono text-xs uppercase">
+                    {u.mirrorPush ? (
                       <span className="text-alert-green">Allowed</span>
                     ) : (
                       <span className="text-muted-foreground">Not allowed</span>

@@ -2,8 +2,8 @@
 
 import { useState } from "react"
 import { usePathname } from "next/navigation"
-import { useSWRConfig } from "swr"
-import { Check, ExternalLink, LogIn, Send, X } from "lucide-react"
+import useSWR, { useSWRConfig } from "swr"
+import { Check, ExternalLink, Lock, LogIn, Send, X } from "lucide-react"
 import { useSession } from "@/lib/auth-client"
 import { cn } from "@/lib/utils"
 import type { SiteKey, SiteReadings } from "@/lib/escalation"
@@ -42,6 +42,10 @@ export function StationMirrorPush({
   const { data: session, isPending } = useSession()
   const pathname = usePathname()
   const { mutate } = useSWRConfig()
+  const { data: permission } = useSWR<{ allowed: boolean }>(
+    session?.user ? `/api/iam/mirror-permission?u=${session.user.id}` : null,
+    (url: string) => fetch(url).then((r) => r.json()),
+  )
   const [open, setOpen] = useState<SiteKey | null>(null)
   const [draft, setDraft] = useState<Draft>(() => toDraft(undefined))
   const [busy, setBusy] = useState(false)
@@ -82,7 +86,16 @@ export function StationMirrorPush({
     }
   }
 
-  if (isPending) return null
+  if (isPending || (session?.user && permission === undefined)) return null
+
+  if (session?.user && !permission?.allowed) {
+    return (
+      <p className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground">
+        <Lock className="h-3 w-3" aria-hidden="true" />
+        Push to mirror not allowed · ask an admin in Plant IAM
+      </p>
+    )
+  }
 
   if (!session?.user) {
     return (
