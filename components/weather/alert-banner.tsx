@@ -78,7 +78,7 @@ import { useSimulatorMode } from "@/components/weather/use-simulator-mode"
 import { useGhaithMirror } from "@/components/weather/use-ghaith-mirror"
 import { StationMirrorPush } from "@/components/weather/station-mirror-push"
 import { BuzzerTriggerTable } from "@/components/weather/buzzer-trigger-table"
-import { playToneCycle, toneIsAudible } from "@/lib/escalation-buzzer"
+import { installAudioUnlock, startLiveBuzzer, stopLiveBuzzer } from "@/lib/escalation-buzzer"
 import { cn } from "@/lib/utils"
 
 /** Header auto-refresh cadence (seconds) surfaced as a live countdown. */
@@ -161,40 +161,18 @@ type ParamCell = {
   tone: ParamTone
 }
 
-/** Looping level-tuned alarm via the Web Audio API (no asset needed). */
+/** Looping level-tuned alarm through the shared buzzer player (same tones as the console). */
 function useBuzzer(active: boolean, level: AlertLevel) {
-  const ctxRef = useRef<AudioContext | null>(null)
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  useEffect(() => {
+    installAudioUnlock()
+  }, [])
 
   useEffect(() => {
-    if (!active) {
-      if (timerRef.current) clearInterval(timerRef.current)
-      timerRef.current = null
-      return
-    }
-    const tone = BUZZER_TONE[level]
-    if (!toneIsAudible(tone)) return
-    const AudioCtor = window.AudioContext ?? (window as any).webkitAudioContext
-    if (!AudioCtor) return
-    if (!ctxRef.current) ctxRef.current = new AudioCtor()
-    const ctx = ctxRef.current
-    if (ctx.state === "suspended") ctx.resume().catch(() => {})
-
-    const cycle = () => playToneCycle(ctx, tone)
-    cycle()
-    timerRef.current = setInterval(cycle, tone.interval)
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current)
-      timerRef.current = null
-    }
+    if (active) startLiveBuzzer(level)
+    else stopLiveBuzzer()
   }, [active, level])
 
-  useEffect(
-    () => () => {
-      ctxRef.current?.close().catch(() => {})
-    },
-    [],
-  )
+  useEffect(() => () => stopLiveBuzzer(), [])
 }
 
 export function AlertBanner() {
