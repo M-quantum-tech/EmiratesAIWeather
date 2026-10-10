@@ -394,7 +394,7 @@ export function AlertBanner() {
   // Safety Model tier = Live Wind Monitor tier (Tier 1 Green … Tier 4 Red). The escalation
   // ranges for that tier are then checked below as confirmation. A drill uses the range tier.
   // Live tier = the highest of three wired sources, so any one of them trips the buzzer:
-  //  1. Wind Event Monitor (at-site sustained wind, e.g. ≥ 14 m/s → Red)
+  //  1. Wind Event Monitor (at-site sustained wind, e.g. ≥ 14 m/s �� Red)
   //  2. Escalation ranges — wind, gust, rainfall OR cloud at the At-site OR Far-site
   //  3. NCM / Al Bahar official warning issued for this station's emirate
   const ncmLevel: AlertLevel = ncmLocal?.level ?? "green"
@@ -427,6 +427,7 @@ export function AlertBanner() {
   // Clearing the condition (all sites back to green) re-arms it for the next trip, and
   // escalating to a higher range tier re-sounds it even if the lower tier was silenced.
   const [acked, setAcked] = useState(false)
+  const [rulesTab, setRulesTab] = useState<"rules" | "buzzer">("rules")
   useEffect(() => {
     if (!siteAlarm) setAcked(false)
   }, [siteAlarm])
@@ -939,14 +940,52 @@ export function AlertBanner() {
           ))}
         </div>
 
-        {/* Escalation rules — tier ladder with grouped source links, then the buzzer trigger table */}
+        {/* Escalation rules and buzzer trigger table share one tabbed card to save space */}
         <div className="mt-4 overflow-hidden rounded-lg border border-border/70">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-background/40 px-3 py-2 label-caps text-muted-foreground">
-            <span className="flex items-center gap-1.5">
-              <ShieldCheck className="h-3 w-3" aria-hidden="true" />
-              Escalation rules · NCM + wind forecast + Open-Meteo
-            </span>
-            {cloudSource.url ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-background/40 px-2 py-1.5">
+            <div role="tablist" aria-label="Escalation views" className="flex items-center gap-1">
+              {(
+                [
+                  { id: "rules", label: "Escalation rules", icon: ShieldCheck },
+                  { id: "buzzer", label: "Auto buzzer trigger table", icon: BellRing },
+                ] as const
+              ).map(({ id, label, icon: Icon }) => {
+                const selected = rulesTab === id
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    role="tab"
+                    id={`esc-tab-${id}`}
+                    aria-selected={selected}
+                    aria-controls={`esc-panel-${id}`}
+                    tabIndex={selected ? 0 : -1}
+                    onClick={() => setRulesTab(id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+                        e.preventDefault()
+                        const next = id === "rules" ? "buzzer" : "rules"
+                        setRulesTab(next)
+                        document.getElementById(`esc-tab-${next}`)?.focus()
+                      }
+                    }}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 font-mono text-[0.625rem] font-semibold uppercase tracking-[0.12em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      selected
+                        ? "border-border bg-card text-foreground shadow-sm"
+                        : "border-transparent text-muted-foreground hover:bg-background/60 hover:text-foreground",
+                    )}
+                  >
+                    <Icon className="h-3 w-3" aria-hidden="true" />
+                    {label}
+                    {id === "buzzer" ? (
+                      <span className={cn("ml-0.5 h-1.5 w-1.5 rounded-full", LEVEL_STYLES[alert.level].solid)} aria-hidden="true" />
+                    ) : null}
+                  </button>
+                )
+              })}
+            </div>
+            {rulesTab === "rules" && cloudSource.url ? (
               <a
                 href={cloudSource.url}
                 target="_blank"
@@ -959,6 +998,11 @@ export function AlertBanner() {
               </a>
             ) : null}
           </div>
+          {rulesTab === "rules" ? (
+          <div role="tabpanel" id="esc-panel-rules" aria-labelledby="esc-tab-rules">
+          <span className="block border-b border-border/40 px-3 py-1.5 font-mono text-[0.5625rem] uppercase tracking-[0.14em] text-muted-foreground">
+            NCM + wind forecast + Open-Meteo
+          </span>
           <ol className="flex flex-col">
             {rules.map((rule) => {
               const isActive = alert.level === rule.level
@@ -1057,16 +1101,20 @@ export function AlertBanner() {
               )
             })}
           </ol>
+          </div>
+          ) : (
+            <div role="tabpanel" id="esc-panel-buzzer" aria-labelledby="esc-tab-buzzer">
+              <BuzzerTriggerTable
+                className="rounded-none border-0"
+                thresholds={{ atSite: tierThresholds(rules, "atSite"), farSite: tierThresholds(rules, "farSite") }}
+                rules={rules}
+                activeLevel={alert.level}
+                title=""
+                caption="Any one value ≥ entry buzzes (OR) at either site · releases below entry − dead band · edit in Engineering Console"
+              />
+            </div>
+          )}
         </div>
-
-        <BuzzerTriggerTable
-          className="mt-3"
-          thresholds={{ atSite: tierThresholds(rules, "atSite"), farSite: tierThresholds(rules, "farSite") }}
-          rules={rules}
-          activeLevel={alert.level}
-          title="Auto buzzer trigger table"
-          caption="Any one value ≥ entry buzzes (OR) at either site · releases below entry − dead band · edit in Engineering Console"
-        />
       </div>
 
       {/* Live parameter grid feeding the model — atmospheric + radar/optical channels */}
