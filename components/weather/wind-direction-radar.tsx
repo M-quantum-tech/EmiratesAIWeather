@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { ExternalLink, Navigation2, Wind } from "lucide-react"
+import { Navigation2, Send, Wind } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { fetchWindFrames } from "@/lib/wind-field"
 import { stationReadings } from "@/lib/stations"
@@ -294,9 +294,8 @@ export function WindDirectionRadar({
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-accent-foreground transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <Wind className="h-3 w-3" aria-hidden="true" />
+            <Send className="h-3 w-3" aria-hidden="true" />
             {f.label}
-            <ExternalLink className="h-3 w-3" aria-hidden="true" />
             <span className="sr-only">(opens in a new tab)</span>
           </a>
         ))}
